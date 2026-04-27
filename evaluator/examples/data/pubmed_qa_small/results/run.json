@@ -1,0 +1,547 @@
+{
+  "pipeline_mode": "asr_text_retrieval",
+  "phased": true,
+  "asr": "WhisperModel - openai/whisper-tiny",
+  "WER": 0.45662337662337665,
+  "CER": 0.1610057231779732,
+  "embedder": "LaBseModel - sentence-transformers/LaBSE",
+  "MRR": 1.0,
+  "MAP": 1.0,
+  "Recall@1": 1.0,
+  "NDCG@1": 1.0,
+  "Recall@5": 1.0,
+  "NDCG@5": 1.0,
+  "Recall@10": 1.0,
+  "NDCG@10": 1.0,
+  "query_traces": [
+    {
+      "query_id": "q_21645374",
+      "relevant": {
+        "21645374": 1
+      },
+      "retrieved": [
+        {
+          "doc_key": "21645374",
+          "score": 0.1616632491350174
+        },
+        {
+          "doc_key": "26037986",
+          "score": 0.06208791956305504
+        },
+        {
+          "doc_key": "11729377",
+          "score": 0.03331040218472481
+        },
+        {
+          "doc_key": "17096624",
+          "score": -0.005656194873154163
+        },
+        {
+          "doc_key": "25957366",
+          "score": -0.01102147065103054
+        }
+      ]
+    },
+    {
+      "query_id": "q_16418930",
+      "relevant": {
+        "16418930": 1
+      },
+      "retrieved": [
+        {
+          "doc_key": "16418930",
+          "score": 0.10043227672576904
+        },
+        {
+          "doc_key": "17113061",
+          "score": 0.057011839002370834
+        },
+        {
+          "doc_key": "21645374",
+          "score": 0.03538094088435173
+        },
+        {
+          "doc_key": "22694248",
+          "score": 0.028737211599946022
+        },
+        {
+          "doc_key": "25432938",
+          "score": 0.013856465928256512
+        }
+      ]
+    },
+    {
+      "query_id": "q_9488747",
+      "relevant": {
+        "9488747": 1
+      },
+      "retrieved": [
+        {
+          "doc_key": "9488747",
+          "score": 0.2785348892211914
+        },
+        {
+          "doc_key": "23831910",
+          "score": 0.09934543073177338
+        },
+        {
+          "doc_key": "10966337",
+          "score": 0.08802898228168488
+        },
+        {
+          "doc_key": "18847643",
+          "score": 0.03573555499315262
+        },
+        {
+          "doc_key": "22694248",
+          "score": 0.03221932053565979
+        }
+      ]
+    },
+    {
+      "query_id": "q_17208539",
+      "relevant": {
+        "17208539": 1
+      },
+      "retrieved": [
+        {
+          "doc_key": "17208539",
+          "score": 0.3204236328601837
+        },
+        {
+          "doc_key": "11729377",
+          "score": 0.21878314018249512
+        },
+        {
+          "doc_key": "10808977",
+          "score": 0.21851444244384766
+        },
+        {
+          "doc_key": "17113061",
+          "score": 0.1651531308889389
+        },
+        {
+          "doc_key": "25432938",
+          "score": 0.15784069895744324
+        }
+      ]
+    },
+    {
+      "query_id": "q_10808977",
+      "relevant": {
+        "10808977": 1
+      },
+      "retrieved": [
+        {
+          "doc_key": "10808977",
+          "score": 0.2544974386692047
+        },
+        {
+          "doc_key": "26578404",
+          "score": 0.15160295367240906
+        },
+        {
+          "doc_key": "11729377",
+          "score": 0.14269578456878662
+        },
+        {
+          "doc_key": "22990761",
+          "score": 0.12463430315256119
+        },
+        {
+          "doc_key": "17208539",
+          "score": 0.12278565019369125
+        }
+      ]
+    }
+  ],
+  "_metadata": {
+    "start_time": "2026-04-25T15:06:52.164983",
+    "end_time": "2026-04-25T15:07:04.545337",
+    "duration_seconds": 12.380354,
+    "pipeline_mode": "asr_text_retrieval",
+    "dataset_profile": {
+      "name": "admed_voice",
+      "dataset_type": "audio_transcription",
+      "requires_audio": true,
+      "requires_text": false,
+      "supports_generation": false,
+      "evaluation_mode": "transcription",
+      "recommended_pipeline_modes": [
+        "asr_only",
+        "asr_text_retrieval"
+      ],
+      "pipeline_mode_supported": true
+    },
+    "num_samples": 5,
+    "cache": {
+      "enabled": true,
+      "stats_before": {
+        "total_size_bytes": 2730001,
+        "total_size_human": "2.60 MB",
+        "by_category": {
+          "asr_features": {
+            "size_bytes": 0,
+            "size_human": "0.00 B",
+            "file_count": 0
+          },
+          "transcriptions": {
+            "size_bytes": 47293,
+            "size_human": "46.18 KB",
+            "file_count": 217
+          },
+          "embeddings": {
+            "size_bytes": 704000,
+            "size_human": "687.50 KB",
+            "file_count": 220
+          },
+          "audio_embeddings": {
+            "size_bytes": 1580800,
+            "size_human": "1.51 MB",
+            "file_count": 190
+          },
+          "vector_db": {
+            "size_bytes": 397908,
+            "size_human": "388.58 KB",
+            "file_count": 8
+          },
+          "checkpoints": {
+            "size_bytes": 0,
+            "size_human": "0.00 B",
+            "file_count": 0
+          }
+        },
+        "sizes_bytes": {
+          "asr_features": 0,
+          "transcriptions": 47293,
+          "embeddings": 704000,
+          "audio_embeddings": 1580800,
+          "vector_db": 397908,
+          "checkpoints": 0,
+          "total": 2730001
+        },
+        "sizes_human": {
+          "asr_features": "0.00 B",
+          "transcriptions": "46.18 KB",
+          "embeddings": "687.50 KB",
+          "audio_embeddings": "1.51 MB",
+          "vector_db": "388.58 KB",
+          "checkpoints": "0.00 B",
+          "total": "2.60 MB"
+        },
+        "file_counts": {
+          "asr_features": 0,
+          "transcriptions": 217,
+          "embeddings": 220,
+          "audio_embeddings": 190,
+          "vector_db": 8,
+          "checkpoints": 0,
+          "total": 635
+        }
+      },
+      "stats_after": {
+        "total_size_bytes": 2730001,
+        "total_size_human": "2.60 MB",
+        "by_category": {
+          "asr_features": {
+            "size_bytes": 0,
+            "size_human": "0.00 B",
+            "file_count": 0
+          },
+          "transcriptions": {
+            "size_bytes": 47293,
+            "size_human": "46.18 KB",
+            "file_count": 217
+          },
+          "embeddings": {
+            "size_bytes": 704000,
+            "size_human": "687.50 KB",
+            "file_count": 220
+          },
+          "audio_embeddings": {
+            "size_bytes": 1580800,
+            "size_human": "1.51 MB",
+            "file_count": 190
+          },
+          "vector_db": {
+            "size_bytes": 397908,
+            "size_human": "388.58 KB",
+            "file_count": 8
+          },
+          "checkpoints": {
+            "size_bytes": 0,
+            "size_human": "0.00 B",
+            "file_count": 0
+          }
+        },
+        "sizes_bytes": {
+          "asr_features": 0,
+          "transcriptions": 47293,
+          "embeddings": 704000,
+          "audio_embeddings": 1580800,
+          "vector_db": 397908,
+          "checkpoints": 0,
+          "total": 2730001
+        },
+        "sizes_human": {
+          "asr_features": "0.00 B",
+          "transcriptions": "46.18 KB",
+          "embeddings": "687.50 KB",
+          "audio_embeddings": "1.51 MB",
+          "vector_db": "388.58 KB",
+          "checkpoints": "0.00 B",
+          "total": "2.60 MB"
+        },
+        "file_counts": {
+          "asr_features": 0,
+          "transcriptions": 217,
+          "embeddings": 220,
+          "audio_embeddings": 190,
+          "vector_db": 8,
+          "checkpoints": 0,
+          "total": 635
+        }
+      },
+      "delta": {
+        "size_bytes_delta": {
+          "asr_features": 0,
+          "audio_embeddings": 0,
+          "checkpoints": 0,
+          "embeddings": 0,
+          "total": 0,
+          "transcriptions": 0,
+          "vector_db": 0
+        },
+        "file_count_delta": {
+          "asr_features": 0,
+          "audio_embeddings": 0,
+          "checkpoints": 0,
+          "embeddings": 0,
+          "total": 0,
+          "transcriptions": 0,
+          "vector_db": 0
+        }
+      },
+      "load": {
+        "vector_cache_hit": true,
+        "vector_cache_key": "52a477b25d464f9716db64f1764d926b",
+        "corpus_size": 20
+      }
+    },
+    "created_at": "2026-04-25T15:07:04.551070",
+    "leaderboard_run_id": 60
+  },
+  "_config": {
+    "experiment_name": "pubmed_qa_whisper_labse",
+    "output_dir": "data/pubmed_qa_small/results",
+    "checkpoint_enabled": true,
+    "checkpoint_interval": 50,
+    "parallel_enabled": false,
+    "num_parallel_workers": 0,
+    "model": {
+      "asr_model_type": "whisper",
+      "asr_size": null,
+      "asr_model_name": "openai/whisper-tiny",
+      "asr_adapter_path": null,
+      "asr_device": "cpu",
+      "asr_params": {},
+      "text_emb_model_type": "labse",
+      "text_emb_size": null,
+      "text_emb_model_name": "sentence-transformers/LaBSE",
+      "text_emb_adapter_path": null,
+      "text_emb_device": "cpu",
+      "text_emb_params": {},
+      "audio_emb_model_type": null,
+      "audio_emb_size": null,
+      "audio_emb_model_name": null,
+      "audio_emb_adapter_path": null,
+      "audio_emb_model_path": null,
+      "audio_emb_dim": 2048,
+      "audio_emb_dropout": 0.1,
+      "audio_emb_device": "cuda:0",
+      "audio_emb_params": {},
+      "pipeline_mode": "asr_text_retrieval"
+    },
+    "data": {
+      "dataset_name": "admed_voice",
+      "questions_path": "data/pubmed_qa_small/questions.json",
+      "corpus_path": "data/pubmed_qa_small/corpus.json",
+      "prepared_dataset_dir": null,
+      "strict_validation": false,
+      "trace_limit": 5,
+      "batch_size": 2,
+      "num_workers": 0,
+      "test_size": 0.0,
+      "dataset_source": "local",
+      "huggingface_dataset": null,
+      "huggingface_subset": null,
+      "huggingface_split": "test",
+      "audio_dir": null,
+      "transcripts_file": null,
+      "column_mapping": null,
+      "default_language": "en",
+      "max_samples": null,
+      "sample_rate": null,
+      "dataset_type": null
+    },
+    "cache": {
+      "enabled": true,
+      "cache_dir": "data/pubmed_qa_small/cache",
+      "max_size_gb": null,
+      "cache_asr_features": true,
+      "cache_transcriptions": true,
+      "cache_embeddings": true,
+      "cache_vector_db": true
+    },
+    "logging": {
+      "log_dir": "logs",
+      "console_level": "INFO",
+      "file_level": "DEBUG"
+    },
+    "vector_db": {
+      "type": "inmemory",
+      "k": 5,
+      "gpu_id": 0,
+      "retrieval_mode": "dense",
+      "hybrid_dense_weight": 0.5,
+      "hybrid_fusion_method": "weighted",
+      "rrf_k": 60,
+      "bm25_k1": 1.5,
+      "bm25_b": 0.75,
+      "reranker_mode": "none",
+      "reranker_top_k": 20,
+      "reranker_weight": 0.5,
+      "reranker_enabled": false,
+      "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "reranker_device": null,
+      "use_mmr": false,
+      "mmr_lambda": 0.5,
+      "min_similarity_threshold": null,
+      "max_similarity_threshold": null,
+      "distance_metric": "cosine",
+      "diversity_penalty": 0.0,
+      "multi_vector_enabled": false,
+      "vectors_per_doc": 3,
+      "multi_vector_strategy": "max_sim",
+      "query_expansion_enabled": false,
+      "query_expansion_method": "synonyms",
+      "expansion_terms": 5,
+      "pseudo_feedback_enabled": false,
+      "pseudo_feedback_top_k": 3,
+      "pseudo_feedback_weight": 0.3,
+      "adaptive_fusion_enabled": false,
+      "confidence_threshold": 0.7,
+      "chromadb_path": null,
+      "chromadb_collection_name": "documents",
+      "qdrant_url": null,
+      "qdrant_path": null,
+      "qdrant_collection_name": "documents",
+      "qdrant_api_key": null
+    },
+    "judge": {
+      "enabled": false,
+      "api_base": "https://api.openai.com/v1/chat/completions",
+      "model": "gpt-4o-mini",
+      "api_key_env": "OPENAI_API_KEY",
+      "temperature": 0.0,
+      "max_cases": 50,
+      "timeout_s": 60,
+      "judge_aspects": [
+        "relevance"
+      ],
+      "score_aggregation": "average",
+      "aspect_weights": null,
+      "output_format": "score",
+      "few_shot_examples": 0,
+      "chain_of_thought": false,
+      "local_model_path": null,
+      "batch_size": 1,
+      "use_local_server": false,
+      "local_server_url": null
+    },
+    "tracking": {
+      "enabled": false,
+      "backend": "mlflow",
+      "mlflow_tracking_uri": null,
+      "mlflow_experiment_name": null
+    },
+    "service_runtime": {
+      "startup_mode": "lazy",
+      "offload_policy": "on_finish"
+    },
+    "audio_synthesis": {
+      "enabled": true,
+      "provider": "mms",
+      "voice": "en_US-lessac-medium",
+      "sample_rate": 16000,
+      "speed": 1.0,
+      "pitch": 1.0,
+      "volume": 1.0,
+      "language": "en",
+      "seed": 42,
+      "output_dir": "data/pubmed_qa_small/audio",
+      "cache_dir": null,
+      "api_key": null
+    },
+    "augmentation": {
+      "enabled": false,
+      "add_noise": false,
+      "noise_type": "white",
+      "snr_db": 20.0,
+      "speed_perturbation": false,
+      "speed_range": [
+        0.9,
+        1.1
+      ],
+      "pitch_shift": false,
+      "pitch_semitones_range": [
+        -2,
+        2
+      ],
+      "volume_change": false,
+      "volume_range": [
+        0.8,
+        1.2
+      ],
+      "codec_simulation": false,
+      "codec": "mp3",
+      "bitrate": 64,
+      "n_variants": 1
+    },
+    "llm_server": {
+      "enabled": false,
+      "backend": "ollama",
+      "host": "localhost",
+      "port": 11434,
+      "model": "mistral:7b-instruct",
+      "auto_start": true,
+      "gpu_layers": -1,
+      "timeout_s": 60
+    },
+    "query_optimization": {
+      "enabled": false,
+      "method": "rewrite",
+      "llm_api_base": "https://api.openai.com/v1/chat/completions",
+      "llm_model": "gpt-4o-mini",
+      "llm_api_key_env": "OPENAI_API_KEY",
+      "llm_temperature": 0.3,
+      "max_iterations": 2,
+      "use_initial_context": true,
+      "context_top_k": 3,
+      "combine_strategy": "rrf",
+      "timeout_s": 30,
+      "use_local_server": false,
+      "local_server_url": null
+    },
+    "embedding_fusion": {
+      "enabled": false,
+      "audio_weight": 0.5,
+      "text_weight": 0.5,
+      "fusion_method": "weighted",
+      "normalize_before_fusion": true,
+      "dimension_reduction": null,
+      "target_dim": null,
+      "require_same_dimensions": false
+    }
+  }
+}

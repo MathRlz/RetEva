@@ -1,0 +1,9 @@
+*.pyc
+__pycache__/
+.cache/
+configs/
+evaluation_results/
+logs/
+docs/build/
+!*.py
+!evaluator/**/*.py

@@ -1,0 +1,60 @@
+Metadata-Version: 2.4
+Name: evaluator
+Version: 0.2.0
+Summary: Evaluation framework for medical speech retrieval
+Author: Krystian
+License: MIT
+Requires-Python: >=3.10
+Requires-Dist: torch<3,>=2.0
+Requires-Dist: transformers<5,>=4.30
+Requires-Dist: sentence-transformers<4,>=2.2
+Requires-Dist: faiss-cpu<2,>=1.7
+Requires-Dist: faster-whisper<2,>=0.9
+Requires-Dist: datasets>=2.14
+Requires-Dist: jiwer>=3.0
+Requires-Dist: numpy>=1.24
+Requires-Dist: scipy>=1.9
+Requires-Dist: scikit-learn>=1.2
+Requires-Dist: rank-bm25>=0.2
+Requires-Dist: rouge-score>=0.1
+Requires-Dist: pandas>=1.5
+Requires-Dist: matplotlib>=3.5
+Requires-Dist: seaborn>=0.12
+Requires-Dist: plotly>=5.14
+Requires-Dist: kaleido>=0.2
+Requires-Dist: tqdm>=4.64
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: webapi
+Requires-Dist: fastapi>=0.100; extra == "webapi"
+Requires-Dist: uvicorn[standard]>=0.20; extra == "webapi"
+Provides-Extra: notebooks
+Requires-Dist: jupyter; extra == "notebooks"
+Requires-Dist: notebook; extra == "notebooks"
+Requires-Dist: ipywidgets; extra == "notebooks"
+Provides-Extra: chromadb
+Requires-Dist: chromadb>=0.4; extra == "chromadb"
+Provides-Extra: qdrant
+Requires-Dist: qdrant-client>=1.6; extra == "qdrant"
+Provides-Extra: backends
+Requires-Dist: chromadb>=0.4; extra == "backends"
+Requires-Dist: qdrant-client>=1.6; extra == "backends"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Provides-Extra: all
+Requires-Dist: fastapi>=0.100; extra == "all"
+Requires-Dist: uvicorn[standard]>=0.20; extra == "all"
+Requires-Dist: jupyter; extra == "all"
+Requires-Dist: notebook; extra == "all"
+Requires-Dist: ipywidgets; extra == "all"
+Requires-Dist: chromadb>=0.4; extra == "all"
+Requires-Dist: qdrant-client>=1.6; extra == "all"
+Dynamic: author
+Dynamic: license
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

@@ -1,0 +1,282 @@
+[
+  {
+    "question_id": "q_21645374",
+    "question_text": "Do mitochondria play a role in remodelling lace plant leaves during programmed cell death?",
+    "groundtruth_doc_ids": [
+      "21645374"
+    ],
+    "relevance_grades": {
+      "21645374": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 21645374
+    }
+  },
+  {
+    "question_id": "q_16418930",
+    "question_text": "Landolt C and snellen e acuity: differences in strabismus amblyopia?",
+    "groundtruth_doc_ids": [
+      "16418930"
+    ],
+    "relevance_grades": {
+      "16418930": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 16418930
+    }
+  },
+  {
+    "question_id": "q_9488747",
+    "question_text": "Syncope during bathing in infants, a pediatric form of water-induced urticaria?",
+    "groundtruth_doc_ids": [
+      "9488747"
+    ],
+    "relevance_grades": {
+      "9488747": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 9488747
+    }
+  },
+  {
+    "question_id": "q_17208539",
+    "question_text": "Are the long-term results of the transanal pull-through equal to those of the transabdominal pull-through?",
+    "groundtruth_doc_ids": [
+      "17208539"
+    ],
+    "relevance_grades": {
+      "17208539": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 17208539
+    }
+  },
+  {
+    "question_id": "q_10808977",
+    "question_text": "Can tailored interventions increase mammography use among HMO women?",
+    "groundtruth_doc_ids": [
+      "10808977"
+    ],
+    "relevance_grades": {
+      "10808977": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 10808977
+    }
+  },
+  {
+    "question_id": "q_23831910",
+    "question_text": "Double balloon enteroscopy: is it efficacious and safe in a community setting?",
+    "groundtruth_doc_ids": [
+      "23831910"
+    ],
+    "relevance_grades": {
+      "23831910": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 23831910
+    }
+  },
+  {
+    "question_id": "q_26037986",
+    "question_text": "30-Day and 1-year mortality in emergency general surgery laparotomies: an area of concern and need for improvement?",
+    "groundtruth_doc_ids": [
+      "26037986"
+    ],
+    "relevance_grades": {
+      "26037986": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 26037986
+    }
+  },
+  {
+    "question_id": "q_26852225",
+    "question_text": "Is adjustment for reporting heterogeneity necessary in sleep disorders?",
+    "groundtruth_doc_ids": [
+      "26852225"
+    ],
+    "relevance_grades": {
+      "26852225": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 26852225
+    }
+  },
+  {
+    "question_id": "q_17113061",
+    "question_text": "Do mutations causing low HDL-C promote increased carotid intima-media thickness?",
+    "groundtruth_doc_ids": [
+      "17113061"
+    ],
+    "relevance_grades": {
+      "17113061": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 17113061
+    }
+  },
+  {
+    "question_id": "q_10966337",
+    "question_text": "A short stay or 23-hour ward in a general and academic children's hospital: are they effective?",
+    "groundtruth_doc_ids": [
+      "10966337"
+    ],
+    "relevance_grades": {
+      "10966337": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 10966337
+    }
+  },
+  {
+    "question_id": "q_25432938",
+    "question_text": "Did Chile's traffic law reform push police enforcement?",
+    "groundtruth_doc_ids": [
+      "25432938"
+    ],
+    "relevance_grades": {
+      "25432938": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 25432938
+    }
+  },
+  {
+    "question_id": "q_18847643",
+    "question_text": "Therapeutic anticoagulation in the trauma patient: is it safe?",
+    "groundtruth_doc_ids": [
+      "18847643"
+    ],
+    "relevance_grades": {
+      "18847643": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 18847643
+    }
+  },
+  {
+    "question_id": "q_18239988",
+    "question_text": "Differentiation of nonalcoholic from alcoholic steatohepatitis: are routine laboratory markers useful?",
+    "groundtruth_doc_ids": [
+      "18239988"
+    ],
+    "relevance_grades": {
+      "18239988": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 18239988
+    }
+  },
+  {
+    "question_id": "q_25957366",
+    "question_text": "Prompting Primary Care Providers about Increased Patient Risk As a Result of Family History: Does It Work?",
+    "groundtruth_doc_ids": [
+      "25957366"
+    ],
+    "relevance_grades": {
+      "25957366": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 25957366
+    }
+  },
+  {
+    "question_id": "q_24866606",
+    "question_text": "Do emergency ultrasound fellowship programs impact emergency medicine residents' ultrasound education?",
+    "groundtruth_doc_ids": [
+      "24866606"
+    ],
+    "relevance_grades": {
+      "24866606": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 24866606
+    }
+  },
+  {
+    "question_id": "q_26578404",
+    "question_text": "Patient-Controlled Therapy of Breathlessness in Palliative Care: A New Therapeutic Concept for Opioid Administration?",
+    "groundtruth_doc_ids": [
+      "26578404"
+    ],
+    "relevance_grades": {
+      "26578404": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 26578404
+    }
+  },
+  {
+    "question_id": "q_11729377",
+    "question_text": "Is there still a need for living-related liver transplantation in children?",
+    "groundtruth_doc_ids": [
+      "11729377"
+    ],
+    "relevance_grades": {
+      "11729377": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 11729377
+    }
+  },
+  {
+    "question_id": "q_17096624",
+    "question_text": "Do patterns of knowledge and attitudes exist among unvaccinated seniors?",
+    "groundtruth_doc_ids": [
+      "17096624"
+    ],
+    "relevance_grades": {
+      "17096624": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 17096624
+    }
+  },
+  {
+    "question_id": "q_22694248",
+    "question_text": "Is there a model to teach and practice retroperitoneoscopic nephrectomy?",
+    "groundtruth_doc_ids": [
+      "22694248"
+    ],
+    "relevance_grades": {
+      "22694248": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 22694248
+    }
+  },
+  {
+    "question_id": "q_22990761",
+    "question_text": "Cardiovascular risk in a rural adult West African population: is resting heart rate also relevant?",
+    "groundtruth_doc_ids": [
+      "22990761"
+    ],
+    "relevance_grades": {
+      "22990761": 1
+    },
+    "language": "en",
+    "metadata": {
+      "pubid": 22990761
+    }
+  }
+]

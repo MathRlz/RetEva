@@ -1,0 +1,652 @@
+[
+  {
+    "question_id": "q_21645374",
+    "question_text": "Do mitochondria play a role in remodelling lace plant leaves during programmed cell death?",
+    "groundtruth_doc_ids": [
+      "21645374"
+    ],
+    "relevance_grades": {
+      "21645374": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_16418930",
+    "question_text": "Landolt C and snellen e acuity: differences in strabismus amblyopia?",
+    "groundtruth_doc_ids": [
+      "16418930"
+    ],
+    "relevance_grades": {
+      "16418930": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_9488747",
+    "question_text": "Syncope during bathing in infants, a pediatric form of water-induced urticaria?",
+    "groundtruth_doc_ids": [
+      "9488747"
+    ],
+    "relevance_grades": {
+      "9488747": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_17208539",
+    "question_text": "Are the long-term results of the transanal pull-through equal to those of the transabdominal pull-through?",
+    "groundtruth_doc_ids": [
+      "17208539"
+    ],
+    "relevance_grades": {
+      "17208539": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_10808977",
+    "question_text": "Can tailored interventions increase mammography use among HMO women?",
+    "groundtruth_doc_ids": [
+      "10808977"
+    ],
+    "relevance_grades": {
+      "10808977": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_23831910",
+    "question_text": "Double balloon enteroscopy: is it efficacious and safe in a community setting?",
+    "groundtruth_doc_ids": [
+      "23831910"
+    ],
+    "relevance_grades": {
+      "23831910": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_26037986",
+    "question_text": "30-Day and 1-year mortality in emergency general surgery laparotomies: an area of concern and need for improvement?",
+    "groundtruth_doc_ids": [
+      "26037986"
+    ],
+    "relevance_grades": {
+      "26037986": 1
+    },
+    "metadata": {
+      "final_decision": "maybe"
+    }
+  },
+  {
+    "question_id": "q_26852225",
+    "question_text": "Is adjustment for reporting heterogeneity necessary in sleep disorders?",
+    "groundtruth_doc_ids": [
+      "26852225"
+    ],
+    "relevance_grades": {
+      "26852225": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_17113061",
+    "question_text": "Do mutations causing low HDL-C promote increased carotid intima-media thickness?",
+    "groundtruth_doc_ids": [
+      "17113061"
+    ],
+    "relevance_grades": {
+      "17113061": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_10966337",
+    "question_text": "A short stay or 23-hour ward in a general and academic children's hospital: are they effective?",
+    "groundtruth_doc_ids": [
+      "10966337"
+    ],
+    "relevance_grades": {
+      "10966337": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_25432938",
+    "question_text": "Did Chile's traffic law reform push police enforcement?",
+    "groundtruth_doc_ids": [
+      "25432938"
+    ],
+    "relevance_grades": {
+      "25432938": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_18847643",
+    "question_text": "Therapeutic anticoagulation in the trauma patient: is it safe?",
+    "groundtruth_doc_ids": [
+      "18847643"
+    ],
+    "relevance_grades": {
+      "18847643": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_18239988",
+    "question_text": "Differentiation of nonalcoholic from alcoholic steatohepatitis: are routine laboratory markers useful?",
+    "groundtruth_doc_ids": [
+      "18239988"
+    ],
+    "relevance_grades": {
+      "18239988": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_25957366",
+    "question_text": "Prompting Primary Care Providers about Increased Patient Risk As a Result of Family History: Does It Work?",
+    "groundtruth_doc_ids": [
+      "25957366"
+    ],
+    "relevance_grades": {
+      "25957366": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_24866606",
+    "question_text": "Do emergency ultrasound fellowship programs impact emergency medicine residents' ultrasound education?",
+    "groundtruth_doc_ids": [
+      "24866606"
+    ],
+    "relevance_grades": {
+      "24866606": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_26578404",
+    "question_text": "Patient-Controlled Therapy of Breathlessness in Palliative Care: A New Therapeutic Concept for Opioid Administration?",
+    "groundtruth_doc_ids": [
+      "26578404"
+    ],
+    "relevance_grades": {
+      "26578404": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_11729377",
+    "question_text": "Is there still a need for living-related liver transplantation in children?",
+    "groundtruth_doc_ids": [
+      "11729377"
+    ],
+    "relevance_grades": {
+      "11729377": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_17096624",
+    "question_text": "Do patterns of knowledge and attitudes exist among unvaccinated seniors?",
+    "groundtruth_doc_ids": [
+      "17096624"
+    ],
+    "relevance_grades": {
+      "17096624": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_22694248",
+    "question_text": "Is there a model to teach and practice retroperitoneoscopic nephrectomy?",
+    "groundtruth_doc_ids": [
+      "22694248"
+    ],
+    "relevance_grades": {
+      "22694248": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_22990761",
+    "question_text": "Cardiovascular risk in a rural adult West African population: is resting heart rate also relevant?",
+    "groundtruth_doc_ids": [
+      "22990761"
+    ],
+    "relevance_grades": {
+      "22990761": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_19394934",
+    "question_text": "Israeli hospital preparedness for terrorism-related multiple casualty incidents: can the surge capacity and injury severity distribution be better predicted?",
+    "groundtruth_doc_ids": [
+      "19394934"
+    ],
+    "relevance_grades": {
+      "19394934": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_11481599",
+    "question_text": "Acute respiratory distress syndrome in children with malignancy--can we predict outcome?",
+    "groundtruth_doc_ids": [
+      "11481599"
+    ],
+    "relevance_grades": {
+      "11481599": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_21669959",
+    "question_text": "Secondhand smoke risk in infants discharged from an NICU: potential for significant health disparities?",
+    "groundtruth_doc_ids": [
+      "21669959"
+    ],
+    "relevance_grades": {
+      "21669959": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_23806388",
+    "question_text": "Do nomograms designed to predict biochemical recurrence (BCR) do a better job of predicting more clinically relevant prostate cancer outcomes than BCR?",
+    "groundtruth_doc_ids": [
+      "23806388"
+    ],
+    "relevance_grades": {
+      "23806388": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_17919952",
+    "question_text": "Are reports of mechanical dysfunction in chronic oro-facial pain related to somatisation?",
+    "groundtruth_doc_ids": [
+      "17919952"
+    ],
+    "relevance_grades": {
+      "17919952": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_10966943",
+    "question_text": "Amblyopia: is visual loss permanent?",
+    "groundtruth_doc_ids": [
+      "10966943"
+    ],
+    "relevance_grades": {
+      "10966943": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_23690198",
+    "question_text": "Implementation of epidural analgesia for labor: is the standard of effective analgesia reachable in all women?",
+    "groundtruth_doc_ids": [
+      "23690198"
+    ],
+    "relevance_grades": {
+      "23690198": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_17940352",
+    "question_text": "Does HER2 immunoreactivity provide prognostic information in locally advanced urothelial carcinoma patients receiving adjuvant M-VEC chemotherapy?",
+    "groundtruth_doc_ids": [
+      "17940352"
+    ],
+    "relevance_grades": {
+      "17940352": 1
+    },
+    "metadata": {
+      "final_decision": "maybe"
+    }
+  },
+  {
+    "question_id": "q_20537205",
+    "question_text": "Is halofantrine ototoxic?",
+    "groundtruth_doc_ids": [
+      "20537205"
+    ],
+    "relevance_grades": {
+      "20537205": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_28707539",
+    "question_text": "Visceral adipose tissue area measurement at a single level: can it represent visceral adipose tissue volume?",
+    "groundtruth_doc_ids": [
+      "28707539"
+    ],
+    "relevance_grades": {
+      "28707539": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_7482275",
+    "question_text": "Necrotizing fasciitis: an indication for hyperbaric oxygenation therapy?",
+    "groundtruth_doc_ids": [
+      "7482275"
+    ],
+    "relevance_grades": {
+      "7482275": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_24183388",
+    "question_text": "Is the Hawkins sign able to predict necrosis in fractures of the neck of the astragalus?",
+    "groundtruth_doc_ids": [
+      "24183388"
+    ],
+    "relevance_grades": {
+      "24183388": 1
+    },
+    "metadata": {
+      "final_decision": "maybe"
+    }
+  },
+  {
+    "question_id": "q_9645785",
+    "question_text": "Is a mandatory general surgery rotation necessary in the surgical clerkship?",
+    "groundtruth_doc_ids": [
+      "9645785"
+    ],
+    "relevance_grades": {
+      "9645785": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_26298839",
+    "question_text": "Is Acupuncture Efficacious for Treating Phonotraumatic Vocal Pathologies?",
+    "groundtruth_doc_ids": [
+      "26298839"
+    ],
+    "relevance_grades": {
+      "26298839": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_24153338",
+    "question_text": "Is aneurysm repair justified for the patients aged 80 or older after aneurysmal subarachnoid hemorrhage?",
+    "groundtruth_doc_ids": [
+      "24153338"
+    ],
+    "relevance_grades": {
+      "24153338": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_18534072",
+    "question_text": "Do general practice characteristics influence uptake of an information technology (IT) innovation in primary care?",
+    "groundtruth_doc_ids": [
+      "18534072"
+    ],
+    "relevance_grades": {
+      "18534072": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_8847047",
+    "question_text": "Prognosis of well differentiated small hepatocellular carcinoma--is well differentiated hepatocellular carcinoma clinically early cancer?",
+    "groundtruth_doc_ids": [
+      "8847047"
+    ],
+    "relevance_grades": {
+      "8847047": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_10575390",
+    "question_text": "Do follow-up recommendations for abnormal Papanicolaou smears influence patient adherence?",
+    "groundtruth_doc_ids": [
+      "10575390"
+    ],
+    "relevance_grades": {
+      "10575390": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_20084845",
+    "question_text": "Biomolecular identification of allergenic pollen: a new perspective for aerobiological monitoring?",
+    "groundtruth_doc_ids": [
+      "20084845"
+    ],
+    "relevance_grades": {
+      "20084845": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_15703931",
+    "question_text": "Does diabetes mellitus influence the efficacy of FDG-PET in the diagnosis of cervical cancer?",
+    "groundtruth_doc_ids": [
+      "15703931"
+    ],
+    "relevance_grades": {
+      "15703931": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_18269157",
+    "question_text": "Biomechanical and wound healing characteristics of corneas after excimer laser keratorefractive surgery: is there a difference between advanced surface ablation and sub-Bowman's keratomileusis?",
+    "groundtruth_doc_ids": [
+      "18269157"
+    ],
+    "relevance_grades": {
+      "18269157": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_25489696",
+    "question_text": "Does radiotherapy of the primary rectal cancer affect prognosis after pelvic exenteration for recurrent rectal cancer?",
+    "groundtruth_doc_ids": [
+      "25489696"
+    ],
+    "relevance_grades": {
+      "25489696": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_14599616",
+    "question_text": "Can a practicing surgeon detect early lymphedema reliably?",
+    "groundtruth_doc_ids": [
+      "14599616"
+    ],
+    "relevance_grades": {
+      "14599616": 1
+    },
+    "metadata": {
+      "final_decision": "maybe"
+    }
+  },
+  {
+    "question_id": "q_22537902",
+    "question_text": "Colorectal cancer with synchronous liver metastases: does global management at the same centre improve results?",
+    "groundtruth_doc_ids": [
+      "22537902"
+    ],
+    "relevance_grades": {
+      "22537902": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  },
+  {
+    "question_id": "q_19054501",
+    "question_text": "Is motion perception deficit in schizophrenia a consequence of eye-tracking abnormality?",
+    "groundtruth_doc_ids": [
+      "19054501"
+    ],
+    "relevance_grades": {
+      "19054501": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_16432652",
+    "question_text": "Transgastric endoscopic splenectomy: is it possible?",
+    "groundtruth_doc_ids": [
+      "16432652"
+    ],
+    "relevance_grades": {
+      "16432652": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_19504993",
+    "question_text": "It's Fournier's gangrene still dangerous?",
+    "groundtruth_doc_ids": [
+      "19504993"
+    ],
+    "relevance_grades": {
+      "19504993": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_20571467",
+    "question_text": "Is it appropriate to implant kidneys from elderly donors in young recipients?",
+    "groundtruth_doc_ids": [
+      "20571467"
+    ],
+    "relevance_grades": {
+      "20571467": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_24237112",
+    "question_text": "Do provider service networks result in lower expenditures compared with HMOs or primary care case management in Florida's Medicaid program?",
+    "groundtruth_doc_ids": [
+      "24237112"
+    ],
+    "relevance_grades": {
+      "24237112": 1
+    },
+    "metadata": {
+      "final_decision": "yes"
+    }
+  },
+  {
+    "question_id": "q_21402341",
+    "question_text": "Assessment of carotid artery stenosis before coronary artery bypass surgery. Is it always necessary?",
+    "groundtruth_doc_ids": [
+      "21402341"
+    ],
+    "relevance_grades": {
+      "21402341": 1
+    },
+    "metadata": {
+      "final_decision": "no"
+    }
+  }
+]
