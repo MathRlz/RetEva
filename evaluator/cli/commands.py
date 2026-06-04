@@ -7,13 +7,15 @@ from typing import Any, List
 
 from evaluator.config import EvaluationConfig
 from evaluator.storage.cache import CacheManager
+from evaluator.services.evaluation_service import _vector_db_cache_key
+from evaluator.pipeline.audio.prepare import synthesize_missing_query_audio
 from evaluator.logging_config import setup_logging, get_logger, log_cache_stats
 from evaluator.pipeline import (
     create_pipeline_from_config,
     RetrievalPipeline,
     TextEmbeddingPipeline,
 )
-from evaluator.evaluation import evaluate_phased
+from evaluator.evaluation import evaluate_from_bundle
 from evaluator.evaluation.validation import validate_pubmed_dataset
 from evaluator.datasets import (
     AdmedQueryDataset,
@@ -61,26 +63,26 @@ def populate_db(
     text_emb_pipeline: TextEmbeddingPipeline,
     corpus_entries: List[Any],
     cache_manager: CacheManager,
-    model_name: str
+    config: EvaluationConfig,
 ) -> None:
     """Populate vector database with text embeddings.
-    
+
     Args:
         retrieval_pipeline: Retrieval pipeline with vector store.
         text_emb_pipeline: Text embedding pipeline.
         corpus_entries: List of corpus entries (dicts or strings).
         cache_manager: Cache manager for vector DB caching.
-        model_name: Model name for cache key generation.
+        config: Evaluation config (for the vector-DB cache key).
     """
     logger = get_logger(__name__)
 
     corpus_texts = [
-        entry["text"] if isinstance(entry, dict) else entry 
+        entry["text"] if isinstance(entry, dict) else entry
         for entry in corpus_entries
     ]
-    
-    # Check if we have cached vector DB
-    db_key = cache_manager._compute_hash(model_name, tuple(sorted(corpus_texts)))
+
+    # Vector-DB cache key — shared with the webapi service path so caches match.
+    db_key = _vector_db_cache_key(config, retrieval_pipeline, corpus_entries)
     logger.info(f"Vector DB cache key: {db_key}")
     cached_db = cache_manager.get_vector_db(db_key)
     
@@ -101,6 +103,19 @@ def populate_db(
     # Cache the vector DB
     cache_manager.set_vector_db(db_key, vectors, corpus_entries)
     logger.info("Vector database cached")
+
+
+def synthesize_missing_audio(dataset: Any, synth_config: Any, logger: Any) -> None:
+    """Synthesize query audio for a dataset whose questions lack ``audio_path``.
+
+    Thin wrapper over the shared ``synthesize_missing_query_audio`` helper so the
+    CLI and webapi service synthesize identically. No-op when the dataset has no
+    ``questions`` attribute.
+    """
+    questions = getattr(dataset, "questions", None)
+    if not questions:
+        return
+    synthesize_missing_query_audio(questions, synth_config, log=logger)
 
 
 def run_evaluation(args: argparse.Namespace) -> None:
@@ -155,23 +170,43 @@ def run_evaluation(args: argparse.Namespace) -> None:
     # Create pipelines
     logger.info("Creating pipelines...")
     bundle = create_pipeline_from_config(config, cache_manager)
-    asr_pipeline = bundle.asr_pipeline
-    text_emb_pipeline = bundle.text_embedding_pipeline
-    audio_emb_pipeline = bundle.audio_embedding_pipeline
-    retrieval_pipeline = bundle.retrieval_pipeline
-    
+
     # Generate output path
     output_filename = generate_output_filename(config)
     output_path = os.path.join(config.output_dir, output_filename)
-    
+
     # Check if results already exist
     if os.path.exists(output_path):
         logger.warning(f"Results file {output_path} already exists. Skipping evaluation.")
         return
-    
-    # Load dataset
-    logger.info(f"Loading dataset: {config.data.dataset_name}...")
 
+    dataset = _load_dataset_with_audio(config, logger)
+
+    corpus_entries = _build_corpus_entries(dataset, cache_manager, config, logger)
+    if not _populate_vector_db(config, bundle, corpus_entries, cache_manager, logger):
+        return
+
+    # Run evaluation
+    model_desc = generate_model_description(config)
+    config.experiment_name = f"{config.experiment_name}_{model_desc}"
+
+    logger.info("Starting evaluation...")
+    results = evaluate_from_bundle(
+        dataset,
+        bundle,
+        config,
+        cache_manager=cache_manager,
+    )
+
+    _save_results(results, output_path, config, logger)
+
+    if cache_manager.enabled:
+        log_cache_stats(cache_manager, logger)
+
+
+def _load_dataset_with_audio(config, logger):
+    """Load the dataset, running PubMed validation and audio synthesis as needed."""
+    logger.info(f"Loading dataset: {config.data.dataset_name}...")
     if config.data.dataset_name == "pubmed_qa" and config.data.strict_validation:
         logger.info("Running PubMed dataset validation...")
         q_count, c_count = validate_pubmed_dataset(
@@ -185,107 +220,77 @@ def run_evaluation(args: argparse.Namespace) -> None:
 
     dataset = load_dataset(config)
     logger.info(f"Dataset loaded: {len(dataset)} samples")
-    
-    # Build corpus entries for vector DB
+
+    if config.audio_synthesis.enabled:
+        synthesize_missing_audio(dataset, config.audio_synthesis, logger)
+    return dataset
+
+
+def _build_corpus_entries(dataset, cache_manager, config, logger):
+    """Return corpus entries: explicit from the dataset, or unique transcriptions."""
     if hasattr(dataset, "get_corpus_entries"):
         logger.info("Using explicit corpus entries from dataset...")
         corpus_entries = dataset.get_corpus_entries()
         logger.info(f"Corpus entries: {len(corpus_entries)}")
-    else:
-        logger.info("Getting unique transcriptions for vector DB...")
-        cached_texts = cache_manager.get_unique_texts(
-            config.data.dataset_name, len(dataset)
-        )
-        if cached_texts is not None:
-            logger.info(f"Loaded cached unique transcriptions: {len(cached_texts)}")
-            corpus_entries = cached_texts
-        else:
-            logger.info("Extracting unique transcriptions from dataset...")
-            cached_texts = list({item["transcription"] for item in dataset})
-            logger.info(f"Unique transcriptions: {len(cached_texts)}")
-            cache_manager.set_unique_texts(
-                config.data.dataset_name, len(dataset), cached_texts
-            )
-            corpus_entries = cached_texts
-    
-    # Populate vector database if retrieval is needed
-    if config.model.pipeline_mode in [
-        "asr_text_retrieval", "audio_emb_retrieval", "audio_text_retrieval"
-    ]:
-        if config.model.pipeline_mode == "asr_text_retrieval":
-            logger.info("Populating vector database with text embeddings...")
-            model_name = text_emb_pipeline.model.name()
-            populate_db(
-                retrieval_pipeline, text_emb_pipeline, corpus_entries, 
-                cache_manager, model_name
-            )
-        elif config.model.pipeline_mode == "audio_text_retrieval":
-            logger.info(
-                "Populating vector database with text embeddings for audio-text retrieval..."
-            )
-            if text_emb_pipeline is None:
-                logger.error(
-                    "Audio-text retrieval requires text embedding model to populate DB!"
-                )
-                logger.error(
-                    "Please provide text_emb_model_type in config for DB population"
-                )
-                return
-            model_name = text_emb_pipeline.model.name()
-            populate_db(
-                retrieval_pipeline, text_emb_pipeline, corpus_entries, 
-                cache_manager, model_name
-            )
-        else:  # audio_emb_retrieval
-            logger.info("Populating vector database for audio embedding retrieval...")
-            if text_emb_pipeline is None:
-                logger.error(
-                    "Audio embedding retrieval requires text embedding model to populate DB!"
-                )
-                logger.error(
-                    "Please provide text_emb_model_type in config for DB population"
-                )
-                return
-            model_name = text_emb_pipeline.model.name()
-            populate_db(
-                retrieval_pipeline, text_emb_pipeline, corpus_entries, 
-                cache_manager, model_name
-            )
-    
-    # Run evaluation
-    model_desc = generate_model_description(config)
-    experiment_id = f"{config.experiment_name}_{model_desc}"
-    
-    logger.info("Starting evaluation...")
-    results = evaluate_phased(
-        dataset=dataset,
-        asr_pipeline=asr_pipeline,
-        text_embedding_pipeline=text_emb_pipeline,
-        audio_embedding_pipeline=audio_emb_pipeline,
-        retrieval_pipeline=retrieval_pipeline,
-        cache_manager=cache_manager if config.checkpoint_enabled else None,
-        k=config.vector_db.k,
-        batch_size=config.data.batch_size,
-        trace_limit=config.data.trace_limit,
-        judge_config=config.judge,
-        checkpoint_interval=config.checkpoint_interval,
-        experiment_id=experiment_id,
-        resume_from_checkpoint=config.resume_from_checkpoint
+        return corpus_entries
+
+    logger.info("Getting unique transcriptions for vector DB...")
+    cached_texts = cache_manager.get_unique_texts(config.data.dataset_name, len(dataset))
+    if cached_texts is not None:
+        logger.info(f"Loaded cached unique transcriptions: {len(cached_texts)}")
+        return cached_texts
+
+    logger.info("Extracting unique transcriptions from dataset...")
+    cached_texts = list({item["transcription"] for item in dataset})
+    logger.info(f"Unique transcriptions: {len(cached_texts)}")
+    cache_manager.set_unique_texts(config.data.dataset_name, len(dataset), cached_texts)
+    return cached_texts
+
+
+# Per-mode log line for DB population (all three embed a text corpus on the CLI).
+_DB_POPULATE_MESSAGES = {
+    "asr_text_retrieval": "Populating vector database with text embeddings...",
+    "audio_text_retrieval": (
+        "Populating vector database with text embeddings for audio-text retrieval..."
+    ),
+    "audio_emb_retrieval": (
+        "Populating vector database for audio embedding retrieval "
+        "(CLI embeds a TEXT corpus — cross-modal query=audio vs corpus=text; "
+        "audio-corpus embedding is webapi-only)..."
+    ),
+}
+
+
+def _populate_vector_db(config, bundle, corpus_entries, cache_manager, logger) -> bool:
+    """Populate the vector DB for retrieval modes. Returns False to abort the run."""
+    mode = config.model.pipeline_mode
+    if mode not in _DB_POPULATE_MESSAGES:
+        return True
+
+    logger.info(_DB_POPULATE_MESSAGES[mode])
+    if bundle.text_embedding_pipeline is None:
+        logger.error(f"{mode} requires text embedding model to populate DB!")
+        logger.error("Please provide text_emb_model_type in config for DB population")
+        return False
+
+    populate_db(
+        bundle.retrieval_pipeline, bundle.text_embedding_pipeline, corpus_entries,
+        cache_manager, config,
     )
-    
-    # Save results
+    return True
+
+
+def _save_results(results, output_path, config, logger) -> None:
+    """Write results JSON to ``output_path`` and log completion."""
     logger.info(f"Saving results to {output_path}...")
     os.makedirs(config.output_dir, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(results, f, indent=4)
-    
+
     logger.info("=" * 60)
     logger.info("Evaluation Complete!")
     logger.info("=" * 60)
     logger.info(f"Results saved to: {output_path}")
-    
-    if cache_manager.enabled:
-        log_cache_stats(cache_manager, logger)
 
 
 def main() -> None:

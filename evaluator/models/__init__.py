@@ -24,10 +24,10 @@ from .registry import (
 )
 
 # ASR models
-from .asr import WhisperModel, Wav2Vec2Model, FasterWhisperModel
+from .asr import WhisperModel, Wav2Vec2Model, FasterWhisperModel, SeamlessM4TASRModel
 
 # Text embedding models (T2E)
-from .t2e import JinaV4Model, ClipModel, LabseModel, NemotronModel, BgeM3Model
+from .t2e import JinaV4Model, ClipModel, LabseModel, NemotronModel, BgeM3Model, SonarTextModel
 
 # Audio embedding models (A2E)
 from .a2e import (
@@ -37,10 +37,14 @@ from .a2e import (
     MultimodalClapStyleModel,
     HuBERTAudioModel,
     WavLMAudioModel,
+    SonarSpeechModel,
 )
 
 # TTS models
-from .tts import PiperTTS, XTTSv2TTS, MMSTTS
+from .tts import PiperTTS, XTTSv2TTS, MMSTTS, M4TTTS
+
+# Reranker models
+from .retrieval.rag.reranker import BaseReranker, CrossEncoderReranker
 
 # Factory functions
 from .factory import (
@@ -71,14 +75,16 @@ __all__ = [
     "WhisperModel",
     "Wav2Vec2Model",
     "FasterWhisperModel",
-    
+    "SeamlessM4TASRModel",
+
     # Text embedding models
     "JinaV4Model",
     "ClipModel",
     "LabseModel",
     "NemotronModel",
     "BgeM3Model",
-    
+    "SonarTextModel",
+
     # Audio embedding models
     "AttentionPoolAudioModel",
     "AttentionPooling",
@@ -86,10 +92,16 @@ __all__ = [
     "MultimodalClapStyleModel",
     "HuBERTAudioModel",
     "WavLMAudioModel",
+    "SonarSpeechModel",
     "PiperTTS",
     "XTTSv2TTS",
     "MMSTTS",
-    
+    "M4TTTS",
+
+    # Reranker models
+    "BaseReranker",
+    "CrossEncoderReranker",
+
     # Factory functions
     "create_asr_model",
     "create_text_embedding_model",

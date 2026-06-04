@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+{% endblock %}
+{% block body %}
+<div class="panel">
+  <h2>Leaderboard</h2>
+  <div class="row">
+    <label class="field" style="margin:0">
+      <span>Metric</span>
+      <input name="metric" value="{{ metric }}"
+             hx-get="/ui/leaderboard" hx-target="#leaderboard" hx-trigger="change, keyup changed delay:400ms" hx-include="this">
+    </label>
+  </div>
+  <div id="leaderboard"
+       hx-get="/ui/leaderboard?metric={{ metric }}" hx-trigger="load" hx-swap="innerHTML">
+    Loading…
+  </div>
+</div>
+{% endblock %}

@@ -51,10 +51,14 @@ class TextEmbeddingModel(ABC):
         """Return model name."""
         pass
 
-    @abstractmethod
     def to(self, device: torch.device):
-        """Move model to device."""
-        pass
+        """Move model to device.
+
+        Default implementation moves ``self.model``; subclasses with a different
+        layout (or that manage device internally) override this.
+        """
+        self.model.to(device)
+        return self
 
 
 class AudioEmbeddingModel(ABC):

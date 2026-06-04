@@ -42,23 +42,24 @@ class AudioSynthesizer:
         logger.info(f"Initialized TTS model: {config.provider}")
     
     def _create_provider(self):
-        """Factory method to create TTS model backend based on config."""
-        provider_name = self.config.provider.lower()
-        
-        if provider_name == "piper":
-            from evaluator.models.tts.piper_tts import PiperTTS
-            return PiperTTS(self.config)
-        if provider_name in {"xtts", "xtts_v2", "xtts-v2"}:
-            from evaluator.models.tts.xtts_v2_tts import XTTSv2TTS
-            return XTTSv2TTS(self.config)
-        if provider_name in {"mms", "mms_tts", "mms-tts"}:
-            from evaluator.models.tts.mms_tts import MMSTTS
-            return MMSTTS(self.config)
-        else:
+        """Factory method to create TTS model backend based on config.
+
+        Registry-driven: any provider registered via ``@register_tts_model``
+        (incl. aliases) is selectable — no hardcoded list here.
+        """
+        provider_name = (self.config.provider or "").lower()
+        # Importing the tts package triggers decorator registration.
+        import evaluator.models.tts  # noqa: F401
+        from evaluator.models.registry import tts_registry
+
+        try:
+            provider_cls = tts_registry.get(provider_name)
+        except ValueError as exc:
+            available = ", ".join(sorted(tts_registry.list_types()))
             raise ValueError(
-                f"Unknown TTS provider: {provider_name}. "
-                f"Supported providers: piper, xtts_v2, mms"
-            )
+                f"Unknown TTS provider: {provider_name}. Supported providers: {available}"
+            ) from exc
+        return provider_cls(self.config)
     
     def synthesize(self, text: str, output_path: Optional[str] = None) -> np.ndarray:
         """
@@ -195,6 +196,7 @@ class AudioSynthesizer:
         config_str = (
             f"{self.config.provider}_"
             f"{self.config.voice}_"
+            f"{self.config.language}_"
             f"{self.config.speed}_"
             f"{self.config.pitch}_"
             f"{self.config.sample_rate}"

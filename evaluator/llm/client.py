@@ -5,12 +5,14 @@ import hashlib
 import json
 import os
 import urllib.request
+from collections import OrderedDict
 from typing import Dict, List, Optional
 
 from ..config.llm_backend import LLMConfig
 
 
-_cache: Dict[str, str] = {}
+_CACHE_MAXSIZE = 1024
+_cache: "OrderedDict[str, str]" = OrderedDict()
 
 
 def _cache_key(messages: List[Dict[str, str]], model: str, temperature: float) -> str:
@@ -70,10 +72,18 @@ class LLMClient:
         try:
             with urllib.request.urlopen(req, timeout=cfg.timeout_s) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
-            content = body["choices"][0]["message"]["content"].strip()
         except Exception as exc:
-            raise RuntimeError(f"LLM call failed: {exc}") from exc
+            raise RuntimeError(f"LLM call failed ({cfg.get_api_base()}): {exc}") from exc
+
+        if "error" in body:
+            raise RuntimeError(f"LLM API returned error: {body['error']}")
+        try:
+            content = body["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError) as exc:
+            raise RuntimeError(f"Unexpected LLM response structure: {body}") from exc
 
         if use_cache:
             _cache[key] = content
+            if len(_cache) > _CACHE_MAXSIZE:
+                _cache.popitem(last=False)
         return content

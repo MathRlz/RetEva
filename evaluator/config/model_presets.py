@@ -103,12 +103,75 @@ FAST_DEV_PRESET: Dict[str, Any] = {
 }
 
 
+# SeamlessM4T-v2 ASR + LaBSE text embedding (asr_text_retrieval mode)
+M4T_ASR_PRESET: Dict[str, Any] = {
+    "experiment_name": "m4t_asr_eval",
+    "model": {
+        "pipeline_mode": "asr_text_retrieval",
+        "asr_model_type": "seamless_m4t",
+        "text_emb_model_type": "labse",
+    },
+    "data": {
+        "batch_size": 16,
+    },
+    "vector_db": {
+        "type": "inmemory",
+        "k": 5,
+        "retrieval_mode": "dense",
+    },
+}
+
+
+# SeamlessM4T-v2 speech->English translation as ASR (foreign audio -> EN text -> retrieve)
+M4T_TRANSLATE_PRESET: Dict[str, Any] = {
+    "experiment_name": "m4t_translate_eval",
+    "model": {
+        "pipeline_mode": "asr_text_retrieval",
+        "asr_model_type": "seamless_m4t",
+        "asr_params": {"tgt_lang": "eng"},
+        "text_emb_model_type": "labse",
+    },
+    "data": {
+        "batch_size": 16,
+    },
+    "vector_db": {
+        "type": "inmemory",
+        "k": 5,
+        "retrieval_mode": "dense",
+    },
+}
+
+
+# SONAR zero-shot cross-modal retrieval: audio query vs text corpus, shared 1024-d space
+SONAR_CROSSMODAL_PRESET: Dict[str, Any] = {
+    "experiment_name": "sonar_crossmodal_eval",
+    "model": {
+        "pipeline_mode": "audio_text_retrieval",
+        "asr_model_type": None,
+        "audio_emb_model_type": "sonar_speech",
+        "text_emb_model_type": "sonar",
+        "audio_emb_dim": 1024,
+    },
+    "data": {
+        "batch_size": 16,
+    },
+    "vector_db": {
+        "type": "inmemory",
+        "k": 5,
+        "retrieval_mode": "dense",
+    },
+}
+
+
 # Registry of all presets
 _PRESETS: Dict[str, Dict[str, Any]] = {
     "whisper_labse": WHISPER_LABSE_PRESET,
     "wav2vec_jina": WAV2VEC_JINA_PRESET,
     "audio_only": AUDIO_ONLY_PRESET,
     "fast_dev": FAST_DEV_PRESET,
+    "m4t_asr": M4T_ASR_PRESET,
+    "m4t_translate": M4T_TRANSLATE_PRESET,
+    "sonar_crossmodal": SONAR_CROSSMODAL_PRESET,
 }
 
 

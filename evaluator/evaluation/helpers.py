@@ -6,10 +6,50 @@ This module contains utility functions used across evaluation functions:
 - DataLoader collate functions
 - IR metric aggregation
 """
-from typing import Any, Dict, Iterable, List, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from ..pipeline import RetrievalPayload
 from ..models.retrieval.contracts import ScoredRetrievalResult, normalize_search_results
+
+
+# Human-readable label per pipeline mode (used for log messages).
+PIPELINE_MODE_LABELS: Dict[str, str] = {
+    "audio_text_retrieval": "Audio-to-Text Retrieval",
+    "audio_emb_retrieval": "Audio Embedding Retrieval",
+    "asr_text_retrieval": "ASR + Text Retrieval",
+    "asr_only": "ASR Only",
+}
+
+
+def detect_pipeline_mode(
+    retrieval_pipeline: Optional[Any],
+    asr_pipeline: Optional[Any],
+    text_embedding_pipeline: Optional[Any],
+    audio_embedding_pipeline: Optional[Any],
+) -> str:
+    """Resolve the pipeline mode string from the set of provided pipelines.
+
+    Single source of truth for mode detection shared by every evaluation engine.
+    Pure — performs no logging — so callers control their own log output.
+
+    Raises:
+        ValueError: If neither an audio embedding nor an ASR pipeline is provided.
+    """
+    if audio_embedding_pipeline is not None and text_embedding_pipeline is not None:
+        return "audio_text_retrieval"
+    if audio_embedding_pipeline is not None:
+        return "audio_emb_retrieval"
+    if asr_pipeline is not None and text_embedding_pipeline is not None:
+        if retrieval_pipeline is not None:
+            return "asr_text_retrieval"
+        return "asr_only"
+    if asr_pipeline is not None:
+        return "asr_only"
+    raise ValueError(
+        "Must provide either audio_embedding_pipeline OR asr_pipeline. "
+        "Tip: provide (asr_pipeline + text_embedding_pipeline + retrieval_pipeline), "
+        "(audio_embedding_pipeline + retrieval_pipeline), or asr_pipeline only."
+    )
 
 
 def _payload_to_key(payload: Union[RetrievalPayload, str]) -> str:
@@ -86,6 +126,8 @@ def asr_collate_fn(batch):
 
 
 __all__ = [
+    "PIPELINE_MODE_LABELS",
+    "detect_pipeline_mode",
     "_payload_to_key",
     "_search_results_to_keys",
     "_build_relevant_from_item",

@@ -23,6 +23,9 @@ except ImportError:
 
 from ..vector_store import VectorStore
 from ...constants import MIN_NORM_THRESHOLD
+from ...logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class QdrantVectorStore(VectorStore):
@@ -193,7 +196,8 @@ class QdrantVectorStore(VectorStore):
             collection_info = self.client.get_collection(self.collection_name)
             if collection_info.points_count == 0:
                 return []
-        except Exception:
+        except Exception as exc:
+            logger.warning("Cannot query %s (collection unavailable): %s", self.collection_name, exc)
             return []
         
         # Normalize query
@@ -316,7 +320,8 @@ class QdrantVectorStore(VectorStore):
         try:
             collection_info = self.client.get_collection(self.collection_name)
             count = collection_info.points_count
-        except Exception:
+        except Exception as exc:
+            logger.debug("get_collection %s failed, reporting 0: %s", self.collection_name, exc)
             count = 0
         
         # Save metadata

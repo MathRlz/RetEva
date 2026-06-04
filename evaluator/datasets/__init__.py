@@ -26,8 +26,17 @@ from .loaders import (
     create_dataset_loader,
 )
 from .profiles import DatasetCapabilityProfile, register_dataset_profile, resolve_dataset_profile, list_known_dataset_names
+from .descriptor import (
+    DatasetDescriptor,
+    METRICS_BY_MODE,
+    register_dataset,
+    get_descriptor,
+    list_registered_datasets,
+    resolve_dataset_descriptor,
+)
 from .runtime import (
     AudioSamplesQueryDataset,
+    LazyAudioQueryDataset,
     DatasetRuntimeSpec,
     list_dataset_runtime_specs,
     resolve_dataset_runtime_spec,
@@ -51,11 +60,21 @@ __all__ = [
     "HuggingFaceDatasetLoader",
     "LocalAudioDatasetLoader",
     "create_dataset_loader",
+    # Profiles (backward compat)
     "DatasetCapabilityProfile",
     "register_dataset_profile",
     "resolve_dataset_profile",
     "list_known_dataset_names",
+    # Unified descriptor registry (new API)
+    "DatasetDescriptor",
+    "METRICS_BY_MODE",
+    "register_dataset",
+    "get_descriptor",
+    "list_registered_datasets",
+    "resolve_dataset_descriptor",
+    # Runtime
     "AudioSamplesQueryDataset",
+    "LazyAudioQueryDataset",
     "DatasetRuntimeSpec",
     "list_dataset_runtime_specs",
     "resolve_dataset_runtime_spec",

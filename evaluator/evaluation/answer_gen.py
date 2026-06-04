@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..llm.client import LLMClient
@@ -130,6 +131,23 @@ def generate_single_answer(
     return {"generated_answer": answer, "method": method, "context_doc_ids": doc_ids}
 
 
+def _tokenize(text: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _compute_hallucination_rate(answer: str, retrieved_payloads: List[Dict[str, Any]]) -> float:
+    """Fraction of answer tokens not present in retrieved context (simple token-overlap heuristic)."""
+    context_text = " ".join(
+        p.get("text", p.get("content", "")) for p in retrieved_payloads
+    )
+    context_tokens = _tokenize(context_text)
+    answer_tokens = _tokenize(answer)
+    if not answer_tokens:
+        return 0.0
+    coverage = len(answer_tokens & context_tokens) / len(answer_tokens)
+    return 1.0 - coverage
+
+
 def _compute_rouge(hypothesis: str, reference: str) -> Dict[str, float]:
     """Compute ROUGE-1/2/L F1 scores."""
     try:
@@ -180,6 +198,8 @@ def generate_answers(
     rouge1_list: List[float] = []
     rouge2_list: List[float] = []
     rougeL_list: List[float] = []
+    hallucination_list: List[float] = []
+    failed = 0
 
     for i in tqdm(range(n), desc="Generating answers"):
         query_id = all_query_ids[i] if i < len(all_query_ids) else str(i)
@@ -195,6 +215,10 @@ def generate_answers(
         except Exception as exc:
             logger.warning("Answer generation failed for query %s: %s", query_id, exc)
             gen = {"generated_answer": "", "method": config.method, "context_doc_ids": []}
+            failed += 1
+
+        hal_rate = _compute_hallucination_rate(gen["generated_answer"], retrieved_payloads)
+        hallucination_list.append(hal_rate)
 
         detail: Dict[str, Any] = {
             "query_id": query_id,
@@ -205,6 +229,7 @@ def generate_answers(
             "rouge2": None,
             "rougeL": None,
             "context_doc_ids": gen["context_doc_ids"],
+            "hallucination_rate": hal_rate,
         }
 
         if config.compute_rouge and config.reference_metadata_field:
@@ -227,14 +252,18 @@ def generate_answers(
     def _mean(xs: List[float]) -> Optional[float]:
         return sum(xs) / len(xs) if xs else None
 
+    if failed > 0:
+        logger.warning("Answer generation: %d/%d queries failed (empty answers included in metrics)", failed, n)
     return {
         "model": config.model,
         "method": config.method,
         "cases": len(details),
+        "failed_cases": failed,
         "details": details,
         "mean_rouge1": _mean(rouge1_list),
         "mean_rouge2": _mean(rouge2_list),
         "mean_rougeL": _mean(rougeL_list),
+        "mean_hallucination_rate": _mean(hallucination_list),
     }
 
 

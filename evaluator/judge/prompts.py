@@ -4,7 +4,7 @@ This module provides prompt templates for multi-aspect judging of
 retrieval results in medical domain contexts.
 """
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # Base system prompt for judging
 JUDGE_SYSTEM_PROMPT = """You are an expert medical information specialist evaluating the quality of document retrieval for medical queries.
@@ -84,7 +84,7 @@ def get_judge_prompt(
     retrieved_text: str,
     aspect: str = "relevance",
     chain_of_thought: bool = False,
-    few_shot_examples: List[Dict] = None
+    few_shot_examples: Optional[List[Dict]] = None
 ) -> tuple[str, str]:
     """Get system and user prompts for judging.
     
@@ -200,7 +200,7 @@ Retrieved Document:
 def get_structured_judge_prompt(
     query: str,
     retrieved_text: str,
-    reference_answer: str = None
+    reference_answer: Optional[str] = None
 ) -> tuple[str, str]:
     """Get prompt for structured evaluation with detailed output.
     

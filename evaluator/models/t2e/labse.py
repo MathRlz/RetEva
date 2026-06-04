@@ -24,10 +24,6 @@ class LabseModel(TextEmbeddingModel):
         self.model_name = model_name
         self.model = SentenceTransformer(model_name)
 
-    def to(self, device: torch.device):
-        self.model.to(device)
-        return self
-
     def encode(self, texts: List[str], show_progress: bool = False, desc: str = "Embedding") -> np.ndarray:
         with torch.no_grad():
             embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=show_progress, tqdm_kwargs={"desc": desc} if show_progress else {})

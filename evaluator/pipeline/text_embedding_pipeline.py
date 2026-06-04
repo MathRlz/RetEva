@@ -76,33 +76,22 @@ class TextEmbeddingPipeline(CacheMixin):
         model_name = self.model.name()
         memory_manager = get_memory_manager()
         
-        # Try to get full batch from cache
-        if self.cache is not None:
-            cached_batch = self.cache.get_embeddings_batch(texts, model_name)
-            if cached_batch is not None:
-                self._record_hit('embeddings', len(texts))
-                logger.debug(f"Full batch cache hit for {len(texts)} texts")
-                return cached_batch
-        
-        # Pre-allocate output array instead of using list
+        # Get per-item cache results (partial hits supported)
         embeddings: List[np.ndarray | None] = [None] * len(texts)
         uncached_texts: List[str] = []
         uncached_indices: List[int] = []
-        
-        # Hoist cache check outside loop for performance
+
         cache_enabled = self.cache is not None
-        
-        for idx, text in enumerate(texts):
-            if cache_enabled:
-                cached_emb = self.cache.get_embedding(text, model_name)
-                if cached_emb is not None:
-                    embeddings[idx] = cached_emb
-                    self._record_hit('embeddings')
-                    continue
-            uncached_texts.append(text)
-            uncached_indices.append(idx)
-            if cache_enabled:
-                self._record_miss('embeddings')
+        cached_results = self.cache.get_embeddings_batch(texts, model_name) if cache_enabled else [None] * len(texts)
+        for idx, (text, cached_emb) in enumerate(zip(texts, cached_results)):
+            if cached_emb is not None:
+                embeddings[idx] = cached_emb
+                self._record_hit('embeddings')
+            else:
+                uncached_texts.append(text)
+                uncached_indices.append(idx)
+                if cache_enabled:
+                    self._record_miss('embeddings')
         
         if uncached_texts:
             with TimingContext(f"{desc} ({len(uncached_texts)} texts)", logger):

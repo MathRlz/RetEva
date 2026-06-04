@@ -21,6 +21,23 @@ import torchaudio
 from pathlib import Path
 
 
+def load_audio_file(path: str):
+    """Load an audio file as (waveform_tensor[channels, samples], sample_rate).
+
+    Prefers soundfile (no TorchCodec/ffmpeg dependency); falls back to
+    torchaudio when soundfile is unavailable.
+    """
+    import torch
+
+    try:
+        import soundfile as sf
+        data, sample_rate = sf.read(path, dtype="float32", always_2d=True)
+        # soundfile returns (frames, channels); transpose to (channels, frames).
+        return torch.from_numpy(data.T), sample_rate
+    except ImportError:
+        return torchaudio.load(path)
+
+
 def get_data_dir() -> Path:
     """Get base directory for datasets.
     
@@ -42,7 +59,16 @@ class QueryDataset(ABC):
         pass
 
 class AdmedQueryDataset(QueryDataset, Dataset):
+    """Deprecated: use the descriptor registry (datasets.descriptor) to load ADMED data."""
+
     def __init__(self, corpus_df: pd.DataFrame):
+        import warnings
+        warnings.warn(
+            "AdmedQueryDataset is deprecated. Use the DatasetDescriptor registry "
+            "(evaluator.datasets.descriptor) to load datasets.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.corpus = corpus_df.reset_index(drop=True)
 
     def __len__(self):
@@ -52,7 +78,7 @@ class AdmedQueryDataset(QueryDataset, Dataset):
         item = self.corpus.iloc[idx]
 
         file_path = item["file_path"]
-        waveform, sample_rate = torchaudio.load(file_path)
+        waveform, sample_rate = load_audio_file(file_path)
 
         transcription = item['phrase']
 
@@ -65,9 +91,21 @@ class AdmedQueryDataset(QueryDataset, Dataset):
 
 
 class PubMedQADataset(QueryDataset, Dataset):
-    """Benchmark dataset: text questions mapped to expected PubMed document ids."""
+    """Deprecated: use the descriptor registry (datasets.descriptor) to load PubMed QA data.
+
+    ``_load_pubmed_qa`` in the descriptor now returns a ``LazyAudioQueryDataset``
+    backed by the same parsed questions/corpus.  This class is kept only for
+    direct backward-compatible instantiation.
+    """
 
     def __init__(self, questions_path: str, corpus_path: str, trace_limit: int = 0):
+        import warnings
+        warnings.warn(
+            "PubMedQADataset is deprecated. Use the DatasetDescriptor registry "
+            "(evaluator.datasets.descriptor) to load datasets.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.questions_path = Path(questions_path)
         self.corpus_path = Path(corpus_path)
         self.questions = self._load_questions(self.questions_path)
@@ -97,8 +135,9 @@ class PubMedQADataset(QueryDataset, Dataset):
 
         raise ValueError(f"Unsupported data type for {path}. Expected list or dict.")
 
-    def _load_questions(self, path: Path) -> List[BenchmarkQuestion]:
-        rows = self._load_json_or_jsonl(path)
+    @staticmethod
+    def _load_questions(path: Path) -> List[BenchmarkQuestion]:
+        rows = PubMedQADataset._load_json_or_jsonl(path)
         questions: List[BenchmarkQuestion] = []
         for row in rows:
             question_id = str(row.get("question_id") or row.get("id") or "")
@@ -128,8 +167,9 @@ class PubMedQADataset(QueryDataset, Dataset):
             )
         return questions
 
-    def _load_corpus(self, path: Path) -> List[CorpusDocument]:
-        rows = self._load_json_or_jsonl(path)
+    @staticmethod
+    def _load_corpus(path: Path) -> List[CorpusDocument]:
+        rows = PubMedQADataset._load_json_or_jsonl(path)
         corpus: List[CorpusDocument] = []
         for row in rows:
             doc_id = str(row.get("doc_id") or row.get("pmid") or row.get("id") or "")
@@ -165,7 +205,7 @@ class PubMedQADataset(QueryDataset, Dataset):
                 "Enable audio_synthesis in config or provide pre-recorded audio."
             )
 
-        waveform, sample_rate = torchaudio.load(question.audio_path)
+        waveform, sample_rate = load_audio_file(question.audio_path)
 
         return {
             "audio_array": waveform.squeeze().numpy(),

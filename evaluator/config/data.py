@@ -79,3 +79,11 @@ class DataConfig:
         """Normalize dataset_type to enum if provided."""
         if self.dataset_type is not None and isinstance(self.dataset_type, str):
             self.dataset_type = to_enum(self.dataset_type, DatasetType)
+
+    def get_descriptor(self):
+        """Return the DatasetDescriptor for this config, or None if unresolvable."""
+        try:
+            from evaluator.datasets.descriptor import resolve_dataset_descriptor
+            return resolve_dataset_descriptor(self)
+        except Exception:
+            return None

@@ -59,8 +59,8 @@ FUSION_CONCATENATE_PCA = {
 QUERY_REWRITE_ENABLED = {
     "enabled": True,
     "method": "rewrite",
-    "llm_model": "gpt-4o-mini",
-    "llm_temperature": 0.3,
+    "model": "gpt-4o-mini",
+    "temperature": 0.3,
     "max_iterations": 2,
     "use_initial_context": True,
     "context_top_k": 3,
@@ -69,24 +69,24 @@ QUERY_REWRITE_ENABLED = {
 QUERY_HYDE = {
     "enabled": True,
     "method": "hyde",
-    "llm_model": "gpt-4o-mini",
-    "llm_temperature": 0.7,
+    "model": "gpt-4o-mini",
+    "temperature": 0.7,
     "max_iterations": 1,
 }
 
 QUERY_DECOMPOSE = {
     "enabled": True,
     "method": "decompose",
-    "llm_model": "gpt-4o-mini",
-    "llm_temperature": 0.3,
+    "model": "gpt-4o-mini",
+    "temperature": 0.3,
     "combine_strategy": "rrf",
 }
 
 QUERY_MULTI_QUERY = {
     "enabled": True,
     "method": "multi_query",
-    "llm_model": "gpt-4o-mini",
-    "llm_temperature": 0.5,
+    "model": "gpt-4o-mini",
+    "temperature": 0.5,
     "combine_strategy": "rrf",
 }
 
@@ -374,6 +374,11 @@ def apply_preset(config: EvaluationConfig, preset_name: str) -> EvaluationConfig
         >>> config = apply_preset(config, "hybrid_balanced")
     """
     from dataclasses import replace
-    
-    preset = get_preset(preset_name)
-    return replace(config, **preset)
+    from .evaluation import _FEATURE_SUBCONFIGS
+
+    preset = dict(get_preset(preset_name))
+    # Feature sub-configs now live under config.features; route them there
+    # instead of passing them as (no-longer-existent) top-level fields.
+    feature_overrides = {k: preset.pop(k) for k in list(preset) if k in _FEATURE_SUBCONFIGS}
+    new_features = replace(config.features, **feature_overrides) if feature_overrides else config.features
+    return replace(config, features=new_features, **preset)

@@ -1,0 +1,24 @@
+{% for sec in model_sections %}
+<label class="field">
+  <span>{{ sec.family }}</span>
+  <select name="{{ sec.type_field }}">
+    <option value="">— select —</option>
+    {% for opt in sec.options %}
+    <option value="{{ opt.type }}" {{ 'selected' if opt.type == sec.selected_type else '' }}>{{ opt.type }} ({{ opt.name }})</option>
+    {% endfor %}
+  </select>
+</label>
+{% if sec.sizes %}
+<label class="field">
+  <span>{{ sec.family }} size</span>
+  <select name="{{ sec.size_field }}">
+    <option value="">— default —</option>
+    {% for sz in sec.sizes %}
+    <option value="{{ sz }}" {{ 'selected' if sz == sec.selected_size else '' }}>{{ sz }}</option>
+    {% endfor %}
+  </select>
+</label>
+{% endif %}
+{% else %}
+<p class="muted">No models required for this mode.</p>
+{% endfor %}

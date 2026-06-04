@@ -30,6 +30,7 @@ class ModelRegistry:
         self._default_names: Dict[str, str] = {}
         self._metadata: Dict[str, Dict[str, Any]] = {}
         self._params_classes: Dict[str, Type] = {}
+        self._aliases: Dict[str, str] = {}  # alias -> canonical model_type
     
     def register(
         self,
@@ -58,6 +59,8 @@ class ModelRegistry:
             self._default_names[model_type] = default_name
         if metadata:
             self._metadata[model_type] = metadata
+            for alias in metadata.get("aliases", []) or []:
+                self._aliases[alias] = model_type
 
         # Auto-detect inner Params dataclass
         params_cls = getattr(model_class, "Params", None)
@@ -79,6 +82,7 @@ class ModelRegistry:
         Raises:
             ValueError: If model type is not registered
         """
+        model_type = self._aliases.get(model_type, model_type)
         if model_type not in self._registry:
             available = ', '.join(self._registry.keys())
             raise ValueError(
@@ -126,7 +130,7 @@ class ModelRegistry:
         Returns:
             True if registered, False otherwise
         """
-        return model_type in self._registry
+        return model_type in self._registry or model_type in self._aliases
     
     def get_params_class(self, model_type: str) -> Optional[Type]:
         """Return the Params dataclass for *model_type*, or None."""
@@ -229,77 +233,47 @@ asr_registry = ModelRegistry("ASR")
 text_embedding_registry = ModelRegistry("TextEmbedding")
 audio_embedding_registry = ModelRegistry("AudioEmbedding")
 reranker_registry = ModelRegistry("Reranker")
+tts_registry = ModelRegistry("TTS")
 
 
-def register_asr_model(
-    model_type: str,
-    default_name: Optional[str] = None,
-    **metadata
-):
-    """Decorator for registering ASR models.
-    
-    Example:
-        @register_asr_model('whisper', default_name='openai/whisper-medium')
-        class WhisperModel(ASRModel):
-            ...
-    """
-    return asr_registry.decorator(model_type, default_name, **metadata)
+def _make_register(registry: "ModelRegistry", label: str):
+    """Build a ``register_<family>_model`` decorator bound to ``registry``."""
+    def register(model_type: str, default_name: Optional[str] = None, **metadata):
+        return registry.decorator(model_type, default_name, **metadata)
+
+    register.__name__ = f"register_{label}_model"
+    register.__doc__ = (
+        f"Decorator for registering {label} models.\n\n"
+        f"    Example:\n"
+        f"        @register_{label}_model('my_type', default_name='...')\n"
+        f"        class MyModel(...):\n"
+        f"            ...\n"
+    )
+    return register
 
 
-def register_text_embedding_model(
-    model_type: str,
-    default_name: Optional[str] = None,
-    **metadata
-):
-    """Decorator for registering text embedding models.
-    
-    Example:
-        @register_text_embedding_model('labse', default_name='sentence-transformers/LaBSE')
-        class LabseModel(TextEmbeddingModel):
-            ...
-    """
-    return text_embedding_registry.decorator(model_type, default_name, **metadata)
+register_asr_model = _make_register(asr_registry, "asr")
+register_text_embedding_model = _make_register(text_embedding_registry, "text_embedding")
+register_audio_embedding_model = _make_register(audio_embedding_registry, "audio_embedding")
+register_reranker_model = _make_register(reranker_registry, "reranker")
+register_tts_model = _make_register(tts_registry, "tts")
 
 
-def register_audio_embedding_model(
-    model_type: str,
-    default_name: Optional[str] = None,
-    **metadata
-):
-    """Decorator for registering audio embedding models.
-    
-    Example:
-        @register_audio_embedding_model('attention_pool')
-        class AttentionPoolAudioModel(AudioEmbeddingModel):
-            ...
-    """
-    return audio_embedding_registry.decorator(model_type, default_name, **metadata)
-
-
-def register_reranker_model(
-    model_type: str,
-    default_name: Optional[str] = None,
-    **metadata
-):
-    """Decorator for registering reranker models.
-    
-    Example:
-        @register_reranker_model('cross_encoder', default_name='cross-encoder/ms-marco-MiniLM-L-6-v2')
-        class CrossEncoderReranker(BaseReranker):
-            ...
-    """
-    return reranker_registry.decorator(model_type, default_name, **metadata)
+# Family -> registry map. Single source for "all model families"; iterate this
+# rather than hardcoding family lists elsewhere.
+FAMILY_REGISTRIES: Dict[str, ModelRegistry] = {
+    "asr": asr_registry,
+    "text_embedding": text_embedding_registry,
+    "audio_embedding": audio_embedding_registry,
+    "reranker": reranker_registry,
+    "tts": tts_registry,
+}
 
 
 def get_all_registered_models() -> Dict[str, list[str]]:
     """Get all registered models across all registries.
-    
+
     Returns:
-        Dictionary mapping registry name to list of model types
+        Dictionary mapping family name to list of registered model types.
     """
-    return {
-        "asr": asr_registry.list_types(),
-        "text_embedding": text_embedding_registry.list_types(),
-        "audio_embedding": audio_embedding_registry.list_types(),
-        "reranker": reranker_registry.list_types(),
-    }
+    return {family: reg.list_types() for family, reg in FAMILY_REGISTRIES.items()}

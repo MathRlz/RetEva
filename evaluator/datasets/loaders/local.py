@@ -178,8 +178,9 @@ class LocalAudioDatasetLoader:
                     "Install with: pip install torchaudio or pip install librosa"
                 ) from e
         
-        waveform, sr = torchaudio.load(str(path))
-        
+        from ..core import load_audio_file
+        waveform, sr = load_audio_file(str(path))
+
         # Resample if needed
         if self.sample_rate is not None and sr != self.sample_rate:
             resampler = torchaudio.transforms.Resample(sr, self.sample_rate)

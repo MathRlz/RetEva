@@ -70,7 +70,7 @@ def plot_metric_comparison(
 
 def plot_multi_metric_comparison(
     results: List[Dict[str, Any]],
-    metrics: List[str] = None,
+    metrics: Optional[List[str]] = None,
     title: Optional[str] = None,
     figsize: Tuple[int, int] = (14, 6),
     save_path: Optional[Path] = None
@@ -131,7 +131,7 @@ def plot_multi_metric_comparison(
 
 def plot_metric_heatmap(
     results: List[Dict[str, Any]],
-    metrics: List[str] = None,
+    metrics: Optional[List[str]] = None,
     title: Optional[str] = None,
     figsize: Tuple[int, int] = (10, 8),
     save_path: Optional[Path] = None
@@ -210,7 +210,12 @@ def plot_metric_distribution(
     
     fig, ax = plt.subplots(figsize=figsize)
     
-    bp = ax.boxplot([values], labels=[metric], patch_artist=True)
+    # `tick_labels` replaced `labels` in Matplotlib 3.9 (removed in 3.11); fall back
+    # for older Matplotlib without fragile version-string parsing.
+    try:
+        bp = ax.boxplot([values], tick_labels=[metric], patch_artist=True)
+    except TypeError:
+        bp = ax.boxplot([values], labels=[metric], patch_artist=True)
     bp['boxes'][0].set_facecolor('lightblue')
     
     # Add individual points
@@ -231,7 +236,7 @@ def plot_metric_distribution(
 
 def plot_correlation_matrix(
     results: List[Dict[str, Any]],
-    metrics: List[str] = None,
+    metrics: Optional[List[str]] = None,
     title: Optional[str] = None,
     figsize: Tuple[int, int] = (10, 8),
     save_path: Optional[Path] = None

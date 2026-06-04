@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,7 +34,7 @@ class ExperimentStore:
         return sqlite3.connect(self.db_path)
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS runs (
@@ -75,7 +76,7 @@ class ExperimentStore:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         """Insert a run from raw parameters (useful for tests and external ingestion)."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """
                 INSERT INTO runs(
@@ -102,7 +103,7 @@ class ExperimentStore:
     def ingest_result(self, result: Any) -> int:
         config = result.config
         metadata = result.metadata or {}
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """
                 INSERT INTO runs(
@@ -149,10 +150,13 @@ class ExperimentStore:
             params.append(pipeline_mode)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC"
+        # Fetch a generous pre-limit so Python filtering by metric presence
+        # doesn't scan the full archive; actual top-N slice applied after sort.
+        pre_limit = max(limit * 10, 500)
+        sql += f" ORDER BY created_at DESC LIMIT {pre_limit}"
 
         rows: List[LeaderboardRow] = []
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             result_rows = conn.execute(sql, params).fetchall()
         for run_id, exp_name, ds_name, mode, metrics_json, duration, created_at in result_rows:
             metrics = json.loads(metrics_json)
@@ -203,7 +207,7 @@ class ExperimentStore:
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
 
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(sql, params).fetchall()
         return [
             {
@@ -221,7 +225,7 @@ class ExperimentStore:
         ]
 
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 """
                 SELECT id, experiment_name, dataset_name, pipeline_mode, start_time, end_time,

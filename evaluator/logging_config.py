@@ -53,10 +53,14 @@ def setup_logging(
     log_file = log_path / f"{timestamp}_{experiment_name}.log"
     
     logger = logging.getLogger("evaluator")
+
+    # Idempotent: if a FileHandler is already attached, the logger is configured
+    if any(isinstance(h, logging.FileHandler) for h in logger.handlers):
+        return logger
+
     logger.setLevel(logging.DEBUG)
-    logger.handlers.clear()
     logger.propagate = False
-    
+
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(console_level)
     console_format = ColoredFormatter(
@@ -142,18 +146,8 @@ def log_cache_stats(cache_manager, logger: Optional[logging.Logger] = None):
     stats = cache_manager.get_cache_stats()
     logger.info("=" * 60)
     logger.info("Cache Statistics:")
-
-    if "sizes_human" in stats:
-        logger.info(f"  Total size: {stats['sizes_human']['total']}")
-        logger.info("  Breakdown:")
-        for cache_type, size in stats['sizes_human'].items():
-            if cache_type != 'total':
-                count = stats.get('file_counts', {}).get(cache_type, 0)
-                logger.info(f"    {cache_type}: {size} ({count} files)")
-    else:
-        logger.info(f"  Total size: {stats.get('total_size_human', '0 B')}")
-        logger.info("  Breakdown:")
-        for cache_type, info in stats.get('by_category', {}).items():
-            logger.info(f"    {cache_type}: {info.get('size_human', '0 B')} ({info.get('file_count', 0)} files)")
-
+    logger.info(f"  Total size: {stats.get('total_size_human', '0 B')}")
+    logger.info("  Breakdown:")
+    for cache_type, info in stats.get('by_category', {}).items():
+        logger.info(f"    {cache_type}: {info.get('size_human', '0 B')} ({info.get('file_count', 0)} files)")
     logger.info("=" * 60)

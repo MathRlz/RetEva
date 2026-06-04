@@ -73,7 +73,7 @@ def create_interactive_bar_chart(
 
 def create_multi_metric_bar_chart(
     results: List[Dict[str, Any]],
-    metrics: List[str] = None,
+    metrics: Optional[List[str]] = None,
     title: Optional[str] = None,
     height: int = 600,
     width: int = 1000
@@ -199,7 +199,7 @@ def create_scatter_plot(
 
 def create_radar_chart(
     results: List[Dict[str, Any]],
-    metrics: List[str] = None,
+    metrics: Optional[List[str]] = None,
     max_models: int = 5,
     title: Optional[str] = None,
     height: int = 600,
@@ -268,7 +268,7 @@ def create_radar_chart(
 
 def create_heatmap(
     results: List[Dict[str, Any]],
-    metrics: List[str] = None,
+    metrics: Optional[List[str]] = None,
     title: Optional[str] = None,
     height: int = 600,
     width: int = 900

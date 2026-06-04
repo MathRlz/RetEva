@@ -64,13 +64,14 @@ def _worker_process(
         from ..config import EvaluationConfig
         from ..pipeline import create_pipeline_from_config
         from ..storage.cache import CacheManager
-        from ..evaluation.phased import evaluate_phased
-        
+        from ..evaluation.phased import evaluate_from_bundle
+
         # Reconstruct config with worker-specific device
         config = EvaluationConfig.from_dict(config_dict)
         config.model.asr_device = device
         config.model.text_emb_device = device
         config.model.audio_emb_device = device
+        config.data.num_workers = 0  # no nested parallelism
         
         # Create cache manager for this worker
         cache_config = config.cache
@@ -91,19 +92,8 @@ def _worker_process(
         bundle = create_pipeline_from_config(config, cache_manager)
         
         # Run evaluation
-        results = evaluate_phased(
-            dataset=subset,
-            retrieval_pipeline=bundle.retrieval_pipeline,
-            asr_pipeline=bundle.asr_pipeline,
-            text_embedding_pipeline=bundle.text_embedding_pipeline,
-            audio_embedding_pipeline=bundle.audio_embedding_pipeline,
-            cache_manager=cache_manager,
-            k=k,
-            batch_size=batch_size,
-            trace_limit=trace_limit,
-            num_workers=0,  # No nested parallelism
-        )
-        
+        results = evaluate_from_bundle(subset, bundle, config, cache_manager=cache_manager)
+
         return {
             "worker_id": worker_id,
             "device": device,
@@ -350,13 +340,14 @@ class ParallelEvaluator:
         from torch.utils.data import Subset
         from ..pipeline import create_pipeline_from_config
         from ..storage.cache import CacheManager
-        from ..evaluation.phased import evaluate_phased
-        
+        from ..evaluation.phased import evaluate_from_bundle
+
         try:
             # Update config devices
             self.config.model.asr_device = device
             self.config.model.text_emb_device = device
             self.config.model.audio_emb_device = device
+            self.config.data.num_workers = 0  # no nested parallelism
             
             # Create cache manager
             cache_config = self.config.cache
@@ -372,18 +363,7 @@ class ParallelEvaluator:
             bundle = create_pipeline_from_config(self.config, cache_manager)
             
             # Run evaluation
-            results = evaluate_phased(
-                dataset=subset,
-                retrieval_pipeline=bundle.retrieval_pipeline,
-                asr_pipeline=bundle.asr_pipeline,
-                text_embedding_pipeline=bundle.text_embedding_pipeline,
-                audio_embedding_pipeline=bundle.audio_embedding_pipeline,
-                cache_manager=cache_manager,
-                k=k,
-                batch_size=batch_size,
-                trace_limit=trace_limit,
-                num_workers=0,
-            )
+            results = evaluate_from_bundle(subset, bundle, self.config, cache_manager=cache_manager)
             
             return WorkerResult(
                 worker_id=worker_id,

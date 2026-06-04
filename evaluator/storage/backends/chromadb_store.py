@@ -14,6 +14,9 @@ except ImportError:
 
 from ..vector_store import VectorStore
 from ...constants import MIN_NORM_THRESHOLD
+from ...logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ChromaDBVectorStore(VectorStore):
@@ -82,9 +85,9 @@ class ChromaDBVectorStore(VectorStore):
         # Clear existing collection data
         try:
             self.client.delete_collection(self.collection_name)
-        except Exception:
-            pass
-        
+        except Exception as exc:
+            logger.debug("delete_collection %s skipped: %s", self.collection_name, exc)
+
         self.collection = self.client.create_collection(
             name=self.collection_name,
             metadata={"hnsw:space": self.distance_fn}
@@ -317,8 +320,8 @@ class ChromaDBVectorStore(VectorStore):
             # Clear and recreate collection
             try:
                 self.client.delete_collection(self.collection_name)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("delete_collection %s skipped: %s", self.collection_name, exc)
             
             self.collection = self.client.create_collection(
                 name=self.collection_name,

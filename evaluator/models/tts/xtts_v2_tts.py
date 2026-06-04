@@ -5,10 +5,21 @@ import logging
 
 import numpy as np
 
+from ..registry import register_tts_model
+from .base_tts import BaseTTSModel
+
 logger = logging.getLogger(__name__)
 
 
-class XTTSv2TTS:
+@register_tts_model(
+    'xtts_v2',
+    aliases=['xtts', 'xtts-v2'],
+    default_name='tts_models/multilingual/multi-dataset/xtts_v2',
+    capabilities=['speech_synthesis'],
+    requires_path=False,
+    description='Coqui XTTS-v2 — multilingual, voice-cloning capable',
+)
+class XTTSv2TTS(BaseTTSModel):
     """Coqui XTTS-v2 wrapper.
 
     Notes:
@@ -20,7 +31,7 @@ class XTTSv2TTS:
     DEFAULT_MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
 
     def __init__(self, config):
-        self.config = config
+        super().__init__(config)
         try:
             from TTS.api import TTS
         except ImportError as exc:

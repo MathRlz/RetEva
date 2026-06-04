@@ -3,7 +3,7 @@
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -72,6 +72,26 @@ def _corpus_signature(corpus: List[Any]) -> str:
     return manifest_fingerprint({"corpus": normalized})
 
 
+def _retrieval_strategy_dict(vector_db) -> Dict[str, Any]:
+    """Retrieval-strategy fields that affect the vector-DB cache fingerprint."""
+    return {
+        "mode": vector_db.retrieval_mode,
+        "hybrid_dense_weight": vector_db.hybrid_dense_weight,
+        "hybrid_fusion_method": vector_db.hybrid_fusion_method,
+        "rrf_k": vector_db.rrf_k,
+        "bm25_k1": vector_db.bm25_k1,
+        "bm25_b": vector_db.bm25_b,
+        "reranker_mode": vector_db.reranker_mode,
+        "reranker_enabled": vector_db.reranker_enabled,
+        "reranker_model": vector_db.reranker_model,
+        "reranker_weight": vector_db.reranker_weight,
+        "use_mmr": vector_db.use_mmr,
+        "mmr_lambda": vector_db.mmr_lambda,
+        "min_similarity_threshold": vector_db.min_similarity_threshold,
+        "distance_metric": vector_db.distance_metric,
+    }
+
+
 def _vector_db_cache_key(config: EvaluationConfig, retrieval_pipeline: Any, corpus: List[Any]) -> str:
     dataset_identity, source = _resolve_dataset_identity(config)
     dataset_fp = dataset_fingerprint(
@@ -88,25 +108,9 @@ def _vector_db_cache_key(config: EvaluationConfig, retrieval_pipeline: Any, corp
         model_type=config.model.text_emb_model_type,
         inference={"device": config.model.text_emb_device},
     )
-    strategy = {
-        "mode": config.vector_db.retrieval_mode,
-        "hybrid_dense_weight": config.vector_db.hybrid_dense_weight,
-        "hybrid_fusion_method": config.vector_db.hybrid_fusion_method,
-        "rrf_k": config.vector_db.rrf_k,
-        "bm25_k1": config.vector_db.bm25_k1,
-        "bm25_b": config.vector_db.bm25_b,
-        "reranker_mode": config.vector_db.reranker_mode,
-        "reranker_enabled": config.vector_db.reranker_enabled,
-        "reranker_model": config.vector_db.reranker_model,
-        "reranker_weight": config.vector_db.reranker_weight,
-        "use_mmr": config.vector_db.use_mmr,
-        "mmr_lambda": config.vector_db.mmr_lambda,
-        "min_similarity_threshold": config.vector_db.min_similarity_threshold,
-        "distance_metric": config.vector_db.distance_metric,
-    }
     retrieval_fp = retrieval_fingerprint(
         vector_store_type=enum_to_str(config.vector_db.type),
-        retrieval_strategy=strategy,
+        retrieval_strategy=_retrieval_strategy_dict(config.vector_db),
     )
     preprocess_fp = preprocessing_fingerprint(
         {
@@ -141,7 +145,7 @@ def _resolve_profile_snapshot(config: EvaluationConfig) -> Dict[str, Any]:
     }
 
 
-def _evaluate_metrics(config: EvaluationConfig, dataset, bundle, cache_manager, tracker):
+def _evaluate_metrics(config: EvaluationConfig, dataset, bundle, cache_manager, tracker, progress_callback=None):
     from ..evaluation.phased import evaluate_from_bundle
 
     with tracker:
@@ -171,10 +175,12 @@ def _evaluate_metrics(config: EvaluationConfig, dataset, bundle, cache_manager, 
             else:
                 metrics = evaluate_from_bundle(
                     dataset, bundle, config, cache_manager=cache_manager,
+                    progress_callback=progress_callback,
                 )
         else:
             metrics = evaluate_from_bundle(
                 dataset, bundle, config, cache_manager=cache_manager,
+                progress_callback=progress_callback,
             )
         tracker.log_metrics(metrics)
         return metrics
@@ -238,7 +244,7 @@ def _configure_local_llm_runtime(
         config.query_optimization.llm_api_base = local_api_url
 
 
-def run_evaluation(config: EvaluationConfig) -> EvaluationResults:
+def run_evaluation(config: EvaluationConfig, progress_callback=None) -> EvaluationResults:
     """Run complete evaluation lifecycle for a validated config."""
     start_time = datetime.now()
     service_provider = ModelServiceProvider()
@@ -293,7 +299,7 @@ def run_evaluation(config: EvaluationConfig) -> EvaluationResults:
             raise RuntimeError(f"Failed to load dataset: {e}") from e
 
         try:
-            metrics = _evaluate_metrics(config, dataset, bundle, cache_manager, tracker)
+            metrics = _evaluate_metrics(config, dataset, bundle, cache_manager, tracker, progress_callback=progress_callback)
         except Exception as e:
             raise RuntimeError(f"Evaluation failed: {e}") from e
 
@@ -352,6 +358,8 @@ def _apply_setup_overrides(config: EvaluationConfig, overrides: Dict[str, Any]) 
         "tracking",
         "device_pool",
         "service_runtime",
+        "answer_generation",
+        "llm",
     }
     section_aliases = {"vector": "vector_db"}
     top_level_fields = {
@@ -365,6 +373,18 @@ def _apply_setup_overrides(config: EvaluationConfig, overrides: Dict[str, Any]) 
     }
 
     for key, value in overrides.items():
+        # Dotted-path format: "model.asr_device" → config.model.asr_device
+        if "." in key:
+            section_name, _, sub_key = key.partition(".")
+            if section_name in nested_sections or section_name in section_aliases:
+                target = section_aliases.get(section_name, section_name)
+                section = getattr(config, target)
+                setattr(section, sub_key, value)
+                continue
+            if section_name in top_level_fields or not sub_key:
+                raise ConfigurationError(f"Unsupported dotted override key: {key}")
+            raise ConfigurationError(f"Unknown section in dotted override: {section_name!r}")
+
         if key in top_level_fields:
             setattr(config, key, value)
             continue
@@ -373,6 +393,7 @@ def _apply_setup_overrides(config: EvaluationConfig, overrides: Dict[str, Any]) 
             for sub_key, sub_value in value.items():
                 setattr(section, sub_key, sub_value)
             continue
+        # Legacy underscore-prefix format (kept for backward compatibility)
         matched_section = None
         sub_key = None
         for candidate in sorted(nested_sections, key=len, reverse=True):
@@ -400,8 +421,16 @@ def _apply_setup_overrides(config: EvaluationConfig, overrides: Dict[str, Any]) 
 def run_evaluation_matrix(
     base_config: EvaluationConfig,
     test_setups: Sequence[Dict[str, Any]],
+    baseline_setup_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run multiple test setups on the same dataset and return aggregated outputs."""
+    """Run multiple test setups on the same dataset and return aggregated outputs.
+
+    Args:
+        base_config: Base configuration shared across all setups.
+        test_setups: List of setup dicts with optional ``setup_id`` and ``overrides``.
+        baseline_setup_id: ``setup_id`` of the setup to use as the comparison
+            baseline.  Defaults to the first setup in ``test_setups``.
+    """
     runs: List[Dict[str, Any]] = []
 
     for idx, setup in enumerate(test_setups):
@@ -425,7 +454,7 @@ def run_evaluation_matrix(
             }
         )
 
-    comparison = _build_comparison_bundle(runs)
+    comparison = _build_comparison_bundle(runs, baseline_setup_id=baseline_setup_id)
 
     return {
         "base_experiment_name": base_config.experiment_name,
@@ -435,13 +464,20 @@ def run_evaluation_matrix(
     }
 
 
-def _build_comparison_bundle(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_comparison_bundle(
+    runs: Sequence[Dict[str, Any]],
+    baseline_setup_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Build a stable comparison artifact (baseline deltas + leaderboard)."""
     if not runs:
         return {"baseline_setup_id": None, "metric_deltas": [], "leaderboard": []}
 
-    baseline_setup_id = str(runs[0]["setup_id"])
-    baseline_metrics = runs[0]["result"]
+    baseline_run = next(
+        (r for r in runs if str(r["setup_id"]) == baseline_setup_id),
+        runs[0],
+    ) if baseline_setup_id else runs[0]
+    baseline_setup_id = str(baseline_run["setup_id"])
+    baseline_metrics = baseline_run["result"]
 
     def numeric_metrics(result_dict: Dict[str, Any]) -> Dict[str, float]:
         values: Dict[str, float] = {}
@@ -500,8 +536,8 @@ def _build_comparison_bundle(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 def load_dataset(
     config: EvaluationConfig,
-    retrieval_pipeline,
-    text_emb_pipeline,
+    retrieval_pipeline=None,
+    text_emb_pipeline=None,
     audio_emb_pipeline=None,
     cache_manager: CacheManager | None = None,
     load_info: Dict[str, Any] | None = None,
@@ -528,44 +564,8 @@ def load_dataset(
         else:
             logger.info("Audio synthesis enabled - checking for questions needing synthesis")
         if hasattr(dataset, "questions") and dataset.questions:
-            synthesizer = AudioSynthesizer(config.audio_synthesis)
-            questions_to_synthesize = [
-                q for q in dataset.questions if not hasattr(q, "audio_path") or q.audio_path is None
-            ]
-            if questions_to_synthesize:
-                logger.info(f"Synthesizing audio for {len(questions_to_synthesize)} questions...")
-                for i, question in enumerate(questions_to_synthesize):
-                    if not hasattr(question, "question_text") or not question.question_text:
-                        logger.warning(
-                            f"Question {question.question_id} has no text, skipping synthesis"
-                        )
-                        continue
-                    output_path = None
-                    if config.audio_synthesis.output_dir:
-                        import os
-
-                        os.makedirs(config.audio_synthesis.output_dir, exist_ok=True)
-                        output_path = os.path.join(
-                            config.audio_synthesis.output_dir,
-                            f"{question.question_id}.wav",
-                        )
-                    try:
-                        synthesizer.synthesize(question.question_text, output_path=output_path)
-                        question.audio_path = output_path
-                        if (i + 1) % 10 == 0:
-                            logger.info(
-                                f"Synthesized {i + 1}/{len(questions_to_synthesize)} questions"
-                            )
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to synthesize audio for question {question.question_id}: {e}"
-                        )
-                logger.info(
-                    f"Audio synthesis complete for {len(questions_to_synthesize)} questions"
-                )
-                synthesizer.log_cache_stats()
-            else:
-                logger.info("All questions already have audio, no synthesis needed")
+            from ..pipeline.audio.prepare import synthesize_missing_query_audio
+            synthesize_missing_query_audio(dataset.questions, config.audio_synthesis, log=logger)
         else:
             logger.warning("Dataset does not have 'questions' attribute, TTS synthesis skipped")
 
@@ -620,7 +620,7 @@ def load_dataset(
                 load_info["corpus_size"] = len(corpus)
         elif corpus and audio_emb_pipeline is not None:
             # audio_emb_retrieval: synthesize TTS audio for corpus docs, then embed via audio model
-            import torchaudio
+            from ..datasets.core import load_audio_file
             synthesizer = AudioSynthesizer(config.audio_synthesis)
             corpus_audio_dir = (
                 config.audio_synthesis.output_dir + "/corpus"
@@ -650,7 +650,7 @@ def load_dataset(
                             continue
                 if audio_path:
                     try:
-                        waveform, sr = torchaudio.load(audio_path)
+                        waveform, sr = load_audio_file(audio_path)
                         audio_arrays.append(waveform.squeeze().numpy())
                         sampling_rates.append(sr)
                     except Exception as e:

@@ -1,6 +1,12 @@
 from typing import Optional, TYPE_CHECKING
 from ..storage.cache import CacheManager
-from ..models import MultimodalClapStyleModel
+from ..models import (
+    MultimodalClapStyleModel,
+    create_asr_model,
+    create_text_embedding_model,
+    create_audio_embedding_model,
+    create_reranker,
+)
 from ..models.retrieval import RetrievalStrategyConfig
 from .asr_pipeline import ASRPipeline
 from .text_embedding_pipeline import TextEmbeddingPipeline
@@ -12,29 +18,6 @@ from .stage_graph import list_pipeline_mode_specs, resolve_pipeline_mode_spec
 if TYPE_CHECKING:
     from ..devices import GPUPool
     from ..services import ModelServiceProvider
-
-
-def create_asr_model(model_type: str, model_name: Optional[str], adapter_path: Optional[str],
-                     device: str, *, size: Optional[str] = None, **extra_params):
-    from ..models import create_asr_model as factory_create_asr_model
-    return factory_create_asr_model(model_type, model_name=model_name, size=size,
-                                    adapter_path=adapter_path, device=device, **extra_params)
-
-
-def create_text_embedding_model(model_type: str, model_name: Optional[str], device: str,
-                                *, size: Optional[str] = None, **extra_params):
-    from ..models import create_text_embedding_model as factory_create_text_embedding_model
-    return factory_create_text_embedding_model(model_type, model_name=model_name, size=size,
-                                               device=device, **extra_params)
-
-
-def create_audio_embedding_model(model_type: str, model_name: Optional[str], model_path: Optional[str],
-                                  emb_dim: int, dropout: float, device: str,
-                                  *, size: Optional[str] = None, **extra_params):
-    from ..models import create_audio_embedding_model as factory_create_audio_embedding_model
-    return factory_create_audio_embedding_model(model_type, model_name=model_name, size=size,
-                                                model_path=model_path, emb_dim=emb_dim,
-                                                dropout=dropout, device=device, **extra_params)
 
 
 def create_reranker_from_config(vector_db_config, service_provider: Optional["ModelServiceProvider"] = None):
@@ -55,7 +38,6 @@ def create_reranker_from_config(vector_db_config, service_provider: Optional["Mo
             model_name=vector_db_config.reranker_model,
             device=vector_db_config.reranker_device,
         )
-    from ..models import create_reranker
     return create_reranker(
         model_type="cross_encoder",
         model_name=vector_db_config.reranker_model,
@@ -259,9 +241,12 @@ def create_pipeline_from_config(
                 mcfg.asr_adapter_path, dev,
             )
         return create_asr_model(
-            mcfg.asr_model_type, mcfg.asr_model_name,
-            mcfg.asr_adapter_path, dev,
-            size=mcfg.asr_size, **mcfg.asr_params,
+            mcfg.asr_model_type,
+            model_name=mcfg.asr_model_name,
+            adapter_path=mcfg.asr_adapter_path,
+            device=dev,
+            size=mcfg.asr_size,
+            **mcfg.asr_params,
         )
 
     def _make_text_emb():
@@ -271,8 +256,11 @@ def create_pipeline_from_config(
                 mcfg.text_emb_model_type, mcfg.text_emb_model_name, dev,
             )
         return create_text_embedding_model(
-            mcfg.text_emb_model_type, mcfg.text_emb_model_name, dev,
-            size=mcfg.text_emb_size, **mcfg.text_emb_params,
+            mcfg.text_emb_model_type,
+            model_name=mcfg.text_emb_model_name,
+            device=dev,
+            size=mcfg.text_emb_size,
+            **mcfg.text_emb_params,
         )
 
     def _make_audio_emb():
@@ -284,10 +272,14 @@ def create_pipeline_from_config(
                 mcfg.audio_emb_dropout, dev,
             )
         return create_audio_embedding_model(
-            mcfg.audio_emb_model_type, mcfg.audio_emb_model_name,
-            mcfg.audio_emb_model_path, mcfg.audio_emb_dim,
-            mcfg.audio_emb_dropout, dev,
-            size=mcfg.audio_emb_size, **mcfg.audio_emb_params,
+            mcfg.audio_emb_model_type,
+            model_name=mcfg.audio_emb_model_name,
+            model_path=mcfg.audio_emb_model_path,
+            emb_dim=mcfg.audio_emb_dim,
+            dropout=mcfg.audio_emb_dropout,
+            device=dev,
+            size=mcfg.audio_emb_size,
+            **mcfg.audio_emb_params,
         )
 
     # Create models based on mode

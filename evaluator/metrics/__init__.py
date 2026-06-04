@@ -40,11 +40,21 @@ from .ir_vectorized import (
 from .stt import (
     word_error_rate,
     character_error_rate,
+    term_weighted_wer,
 )
 
 from .aggregate import (
     compute_ir_metrics,
     log_ir_metrics,
+)
+
+from .diagnostics import (
+    first_relevant_rank_distribution,
+    wer_recall_correlation,
+    categorize_failures,
+    embedding_alignment,
+    per_speaker_breakdown,
+    judge_calibration,
 )
 
 __all__ = [
@@ -61,7 +71,15 @@ __all__ = [
     # STT metrics
     "word_error_rate",
     "character_error_rate",
+    "term_weighted_wer",
     # Aggregate helpers
     "compute_ir_metrics",
     "log_ir_metrics",
+    # Diagnostic metrics
+    "first_relevant_rank_distribution",
+    "wer_recall_correlation",
+    "categorize_failures",
+    "embedding_alignment",
+    "per_speaker_breakdown",
+    "judge_calibration",
 ]

@@ -5,6 +5,7 @@ from .clip import ClipModel
 from .labse import LabseModel
 from .nemotron import NemotronModel
 from .bgem3 import BgeM3Model
+from .sonar import SonarTextModel
 
 __all__ = [
     "JinaV4Model",
@@ -12,4 +13,5 @@ __all__ = [
     "LabseModel",
     "NemotronModel",
     "BgeM3Model",
+    "SonarTextModel",
 ]

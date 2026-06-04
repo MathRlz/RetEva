@@ -349,36 +349,24 @@ def quick_evaluate(
     if not audio_path.exists():
         raise ConfigurationError(f"Audio directory not found: {audio_dir}")
     
-    # Normalize aliases to registry model_type keys
-    asr_aliases = {
-        "whisper": "whisper",
-        "wav2vec2": "wav2vec2",
-        "wav2vec": "wav2vec2",
-        "faster_whisper": "faster_whisper",
-    }
-    emb_aliases = {
-        "labse": "labse",
-        "jina": "jina_v4",
-        "jina_v4": "jina_v4",
-        "bge": "bge_m3",
-        "bge_m3": "bge_m3",
-        "clip": "clip",
-        "nemotron": "nemotron",
-    }
+    # Resolve model types via registry + convenience shortcuts for abbreviated names.
+    # Importing models here triggers @register_* decorators so the registry is populated.
+    from .models import asr_registry, text_embedding_registry
 
-    asr_type = asr_aliases.get(model.lower())
+    _ASR_SHORTCUTS: Dict[str, str] = {"wav2vec": "wav2vec2"}
+    _EMB_SHORTCUTS: Dict[str, str] = {"jina": "jina_v4", "bge": "bge_m3"}
+
+    asr_name = model.lower()
+    asr_type = _ASR_SHORTCUTS.get(asr_name) or (asr_name if asr_registry.is_registered(asr_name) else None)
     if asr_type is None:
-        raise ConfigurationError(
-            f"Unknown ASR model '{model}'. "
-            f"Available: {', '.join(asr_aliases.keys())}"
-        )
+        available = sorted(set(asr_registry.list_types()) | set(_ASR_SHORTCUTS))
+        raise ConfigurationError(f"Unknown ASR model '{model}'. Available: {', '.join(available)}")
 
-    emb_type = emb_aliases.get(embedding.lower())
+    emb_name = embedding.lower()
+    emb_type = _EMB_SHORTCUTS.get(emb_name) or (emb_name if text_embedding_registry.is_registered(emb_name) else None)
     if emb_type is None:
-        raise ConfigurationError(
-            f"Unknown embedding model '{embedding}'. "
-            f"Available: {', '.join(emb_aliases.keys())}"
-        )
+        available = sorted(set(text_embedding_registry.list_types()) | set(_EMB_SHORTCUTS))
+        raise ConfigurationError(f"Unknown embedding model '{embedding}'. Available: {', '.join(available)}")
 
     # Build config — size-based, no hardcoded HF names
     model_section: Dict[str, Any] = {
@@ -441,14 +429,14 @@ def quick_evaluate(
     return run_evaluation(config)
 
 
-def run_evaluation(config: EvaluationConfig) -> EvaluationResults:
+def run_evaluation(config: EvaluationConfig, progress_callback=None) -> EvaluationResults:
     """Run evaluation using a prepared configuration.
-    
+
     This is the lowest-level stable API entrypoint for users who construct
     `EvaluationConfig` directly and want explicit control over execution.
     """
     try:
-        return _service_run_evaluation(config)
+        return _service_run_evaluation(config, progress_callback=progress_callback)
     except RuntimeError as e:
         raise EvaluationError(str(e)) from e
 

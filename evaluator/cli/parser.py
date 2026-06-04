@@ -119,8 +119,83 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Mapping from CLI argument name to config nested path (tuple of attr names)
+_CLI_ARG_MAP = {
+    # Model overrides (model.*)
+    "asr_model_type": ("model", "asr_model_type"),
+    "asr_model_name": ("model", "asr_model_name"),
+    "asr_adapter_path": ("model", "asr_adapter_path"),
+    "text_emb_model_type": ("model", "text_emb_model_type"),
+    "text_emb_model_name": ("model", "text_emb_model_name"),
+    "text_emb_adapter_path": ("model", "text_emb_adapter_path"),
+    "audio_emb_model_type": ("model", "audio_emb_model_type"),
+    "audio_emb_model_name": ("model", "audio_emb_model_name"),
+    "audio_emb_adapter_path": ("model", "audio_emb_adapter_path"),
+    "pipeline_mode": ("model", "pipeline_mode"),
+    # Device overrides (model.*)
+    "asr_device": ("model", "asr_device"),
+    "text_emb_device": ("model", "text_emb_device"),
+    "audio_emb_device": ("model", "audio_emb_device"),
+    # Service runtime (service_runtime.*)
+    "service_startup_mode": ("service_runtime", "startup_mode"),
+    "service_offload_policy": ("service_runtime", "offload_policy"),
+    # Dataset overrides (data.*)
+    "dataset_name": ("data", "dataset_name"),
+    "batch_size": ("data", "batch_size"),
+    "trace_limit": ("data", "trace_limit"),
+    "questions_path": ("data", "questions_path"),
+    "corpus_path": ("data", "corpus_path"),
+    # Vector DB overrides (vector_db.*)
+    "db_type": ("vector_db", "type"),
+    "k": ("vector_db", "k"),
+    "retrieval_mode": ("vector_db", "retrieval_mode"),
+    "hybrid_dense_weight": ("vector_db", "hybrid_dense_weight"),
+    "reranker_mode": ("vector_db", "reranker_mode"),
+    "reranker_top_k": ("vector_db", "reranker_top_k"),
+    "reranker_weight": ("vector_db", "reranker_weight"),
+    # Cache overrides (cache.*)
+    "cache_dir": ("cache", "cache_dir"),
+    # Logging overrides (logging.*)
+    "log_level": ("logging", "console_level"),
+    # Output overrides (top-level config)
+    "experiment_name": ("experiment_name",),
+    "output_dir": ("output_dir",),
+    # Checkpoint overrides (top-level config)
+    "checkpoint_interval": ("checkpoint_interval",),
+    # Judge overrides (judge.*)
+    "judge_model": ("judge", "model"),
+    "judge_api_base": ("judge", "api_base"),
+    "judge_api_key_env": ("judge", "api_key_env"),
+    "judge_max_cases": ("judge", "max_cases"),
+    "judge_timeout_s": ("judge", "timeout_s"),
+    "judge_temperature": ("judge", "temperature"),
+}
+
+
+def _set_nested_attr(obj, path: tuple, value) -> None:
+    """Set a nested attribute via tuple path (e.g., ('model', 'asr_model_type')).
+
+    Raises a clear AttributeError naming the full path if any segment is missing,
+    rather than failing opaquely deep in the traversal.
+    """
+    *prefix, final = path
+    for attr in prefix:
+        if not hasattr(obj, attr):
+            raise AttributeError(
+                f"_CLI_ARG_MAP path {path!r} is invalid: '{attr}' not found on "
+                f"{type(obj).__name__}."
+            )
+        obj = getattr(obj, attr)
+    if not hasattr(obj, final):
+        raise AttributeError(
+            f"_CLI_ARG_MAP path {path!r} is invalid: '{final}' not found on "
+            f"{type(obj).__name__}."
+        )
+    setattr(obj, final, value)
+
+
 def apply_args_to_config(args: argparse.Namespace, config) -> None:
-    """Apply command-line arguments to configuration object.
+    """Apply command-line arguments to configuration object using mapping.
     
     Args:
         args: Parsed command-line arguments.
@@ -128,119 +203,38 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
     """
     from ..config import DevicePoolConfig
     
-    # Model overrides
-    if args.asr_model_type is not None:
-        config.model.asr_model_type = args.asr_model_type
-    if args.asr_model_name is not None:
-        config.model.asr_model_name = args.asr_model_name
-    if args.asr_adapter_path is not None:
-        config.model.asr_adapter_path = args.asr_adapter_path
-    if args.text_emb_model_type is not None:
-        config.model.text_emb_model_type = args.text_emb_model_type
-    if args.text_emb_model_name is not None:
-        config.model.text_emb_model_name = args.text_emb_model_name
-    if args.text_emb_adapter_path is not None:
-        config.model.text_emb_adapter_path = args.text_emb_adapter_path
-    if args.audio_emb_model_type is not None:
-        config.model.audio_emb_model_type = args.audio_emb_model_type
-    if args.audio_emb_model_name is not None:
-        config.model.audio_emb_model_name = args.audio_emb_model_name
-    if args.audio_emb_adapter_path is not None:
-        config.model.audio_emb_adapter_path = args.audio_emb_adapter_path
-    if args.pipeline_mode is not None:
-        config.model.pipeline_mode = args.pipeline_mode
+    # Apply all mapped CLI arguments
+    for arg_name, config_path in _CLI_ARG_MAP.items():
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            _set_nested_attr(config, config_path, value)
     
-    # Device overrides
-    if args.asr_device is not None:
-        config.model.asr_device = args.asr_device
-    if args.text_emb_device is not None:
-        config.model.text_emb_device = args.text_emb_device
-    if args.audio_emb_device is not None:
-        config.model.audio_emb_device = args.audio_emb_device
+    # Handle special cases with custom logic
     
-    # GPU pool configuration from CLI
+    # Device pool configuration
     if args.devices is not None or args.allocation_strategy is not None:
-        # Create or update device pool config
         if config.device_pool is None:
             config.device_pool = DevicePoolConfig()
         
         if args.devices is not None:
-            config.device_pool.available_devices = [d.strip() for d in args.devices.split(",")]
-        
-    if args.allocation_strategy is not None:
-        config.device_pool.allocation_strategy = args.allocation_strategy
-
-    service_startup_mode = getattr(args, "service_startup_mode", None)
-    service_offload_policy = getattr(args, "service_offload_policy", None)
-    if service_startup_mode is not None:
-        config.service_runtime.startup_mode = service_startup_mode
-    if service_offload_policy is not None:
-        config.service_runtime.offload_policy = service_offload_policy
+            config.device_pool.available_devices = [
+                d.strip() for d in args.devices.split(",")
+            ]
+        if args.allocation_strategy is not None:
+            config.device_pool.allocation_strategy = args.allocation_strategy
     
-    # Dataset overrides
-    if args.dataset_name is not None:
-        config.data.dataset_name = args.dataset_name
-    if args.batch_size is not None:
-        config.data.batch_size = args.batch_size
-    if args.trace_limit is not None:
-        config.data.trace_limit = args.trace_limit
-    if args.questions_path is not None:
-        config.data.questions_path = args.questions_path
-    if args.corpus_path is not None:
-        config.data.corpus_path = args.corpus_path
+    # Dataset validation flag (inverted logic)
     if args.skip_dataset_validation:
         config.data.strict_validation = False
     
-    # Vector DB overrides
-    if args.db_type is not None:
-        config.vector_db.type = args.db_type
-    if args.k is not None:
-        config.vector_db.k = args.k
-    if args.retrieval_mode is not None:
-        config.vector_db.retrieval_mode = args.retrieval_mode
-    if args.hybrid_dense_weight is not None:
-        config.vector_db.hybrid_dense_weight = args.hybrid_dense_weight
-    if args.reranker_mode is not None:
-        config.vector_db.reranker_mode = args.reranker_mode
-    if args.reranker_top_k is not None:
-        config.vector_db.reranker_top_k = args.reranker_top_k
-    if args.reranker_weight is not None:
-        config.vector_db.reranker_weight = args.reranker_weight
-    
-    # Cache overrides
+    # Cache disabled flag (inverted logic)
     if args.no_cache:
         config.cache.enabled = False
-    if args.cache_dir is not None:
-        config.cache.cache_dir = args.cache_dir
     
-    # Logging overrides
-    if args.log_level is not None:
-        config.logging.console_level = args.log_level
-    
-    # Output overrides
-    if args.experiment_name is not None:
-        config.experiment_name = args.experiment_name
-    if args.output_dir is not None:
-        config.output_dir = args.output_dir
-    
-    # Checkpoint overrides
+    # Checkpoint disabled flag (inverted logic)
     if args.no_checkpoint:
         config.checkpoint_enabled = False
-    if args.checkpoint_interval is not None:
-        config.checkpoint_interval = args.checkpoint_interval
     
-    # Judge overrides
+    # Judge enabled flag (explicit)
     if args.judge_enabled:
         config.judge.enabled = True
-    if args.judge_model is not None:
-        config.judge.model = args.judge_model
-    if args.judge_api_base is not None:
-        config.judge.api_base = args.judge_api_base
-    if args.judge_api_key_env is not None:
-        config.judge.api_key_env = args.judge_api_key_env
-    if args.judge_max_cases is not None:
-        config.judge.max_cases = args.judge_max_cases
-    if args.judge_timeout_s is not None:
-        config.judge.timeout_s = args.judge_timeout_s
-    if args.judge_temperature is not None:
-        config.judge.temperature = args.judge_temperature

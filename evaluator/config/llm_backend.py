@@ -21,6 +21,11 @@ class LLMConfig:
     local_server_url: Optional[str] = None
 
     def get_api_base(self) -> str:
-        if self.use_local_server and self.local_server_url:
+        if self.use_local_server:
+            if not self.local_server_url:
+                raise ValueError(
+                    "use_local_server=True but local_server_url is not set. "
+                    "Set local_server_url in your LLM config."
+                )
             return self.local_server_url
         return self.api_base

@@ -1,9 +1,12 @@
 """Dataset capability profiles for pipeline planning."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from ..config.types import DatasetType
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -102,15 +105,47 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
 }
 
 
+def _descriptor_to_profile(desc: Any) -> DatasetCapabilityProfile:
+    """Convert a DatasetDescriptor to a DatasetCapabilityProfile."""
+    return DatasetCapabilityProfile(
+        name=desc.id,
+        dataset_type=desc.dataset_type,
+        requires_audio=desc.requires_audio,
+        requires_text=desc.requires_text,
+        supports_generation=desc.supports_generation,
+        evaluation_mode=desc.evaluation_mode,
+        recommended_pipeline_modes=tuple(desc.compatible_pipeline_modes),
+    )
+
+
 def resolve_dataset_profile(
     dataset_name: str,
     dataset_type: Optional[DatasetType] = None,
 ) -> DatasetCapabilityProfile:
-    """Resolve dataset profile by concrete dataset name, fallback to dataset_type."""
+    """Resolve dataset profile by name with fallback to dataset_type.
+
+    Checks the descriptor registry first (so descriptors registered via
+    :func:`register_dataset` are visible here too), then the local profile
+    registry, then type-based defaults, then a generic fallback.
+    """
+    # Descriptor registry has priority (single source of truth for known datasets)
+    try:
+        from .descriptor import get_descriptor
+        desc = get_descriptor(dataset_name)
+        if desc is not None:
+            return _descriptor_to_profile(desc)
+    except Exception as exc:
+        logger.debug("descriptor lookup failed for %r: %s", dataset_name, exc)
+
+    # Local profile registry (populated via register_dataset_profile)
     if dataset_name in _PROFILE_REGISTRY:
         return _PROFILE_REGISTRY[dataset_name]
+
+    # Type-based fallback
     if dataset_type is not None and dataset_type in _DATASET_TYPE_DEFAULTS:
         return _DATASET_TYPE_DEFAULTS[dataset_type]
+
+    # Generic fallback — preserves "generic:name" for unknown datasets
     return DatasetCapabilityProfile(
         name=f"generic:{dataset_name}",
         dataset_type=dataset_type or DatasetType.AUDIO_QUERY_RETRIEVAL,
@@ -123,10 +158,34 @@ def resolve_dataset_profile(
 
 
 def register_dataset_profile(profile: DatasetCapabilityProfile) -> None:
-    """Register a new dataset capability profile."""
+    """Register a dataset capability profile.
+
+    Also mirrors the registration into the descriptor registry so that
+    :func:`~evaluator.datasets.descriptor.resolve_dataset_descriptor` can find it.
+    """
     _PROFILE_REGISTRY[profile.name] = profile
+    try:
+        from .descriptor import register_dataset, DatasetDescriptor
+        register_dataset(DatasetDescriptor(
+            id=profile.name,
+            description=profile.name,
+            dataset_type=profile.dataset_type,
+            requires_audio=profile.requires_audio,
+            requires_text=profile.requires_text,
+            supports_generation=profile.supports_generation,
+            evaluation_mode=profile.evaluation_mode,
+            compatible_pipeline_modes=tuple(profile.recommended_pipeline_modes),
+        ))
+    except Exception as exc:
+        logger.debug("descriptor mirror registration failed for %r: %s", profile.name, exc)
 
 
 def list_known_dataset_names() -> List[str]:
-    """Return known concrete dataset names registered in capability profiles."""
-    return sorted(_PROFILE_REGISTRY.keys())
+    """Return known dataset names from both registries."""
+    try:
+        from .descriptor import list_registered_datasets
+        names = set(list_registered_datasets())
+    except Exception:
+        names = set()
+    names.update(_PROFILE_REGISTRY.keys())
+    return sorted(names)

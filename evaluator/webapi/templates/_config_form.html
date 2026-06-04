@@ -1,0 +1,105 @@
+{% set p = preset|default({}) %}
+<form id="config-form">
+  <section class="step">
+    <h3>Preset</h3>
+    <label class="field">
+      <span>Start from preset</span>
+      <select name="name"
+              hx-get="/ui/preset" hx-target="#config-form-wrap" hx-include="this" hx-trigger="change">
+        <option value="">— none —</option>
+        {% for name in options.presets %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </section>
+
+  <section class="step">
+    <h3>Pipeline mode</h3>
+    <label class="field">
+      <span>Mode</span>
+      <select name="pipeline_mode"
+              hx-get="/ui/models" hx-target="#model-fields" hx-include="this" hx-trigger="change">
+        {% for m in options.pipeline_modes %}
+        <option value="{{ m }}" {{ 'selected' if m == mode else '' }}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </section>
+
+  <section class="step">
+    <h3>Models</h3>
+    <div id="model-fields" class="grid">
+      {% include "_models.html" %}
+    </div>
+  </section>
+
+  <section class="step">
+    <h3>Dataset</h3>
+    <div class="grid">
+      <label class="field">
+        <span>Dataset</span>
+        <select name="dataset_name">
+          <option value="">— select —</option>
+          {% for d in options.dataset_names %}
+          <option value="{{ d }}" {{ 'selected' if d == p.get('dataset_name') else '' }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field"><span>Questions path</span><input name="questions_path" value="{{ p.get('questions_path','') }}"></label>
+      <label class="field"><span>Corpus path</span><input name="corpus_path" value="{{ p.get('corpus_path','') }}"></label>
+      <label class="field"><span>Batch size</span><input type="number" name="batch_size" value="{{ p.get('batch_size', 8) }}"></label>
+      <label class="field"><span>Trace limit</span><input type="number" name="trace_limit" value="{{ p.get('trace_limit', 0) }}"></label>
+    </div>
+  </section>
+
+  <section class="step">
+    <h3>Retrieval &amp; output</h3>
+    <div class="grid">
+      <label class="field">
+        <span>Vector DB</span>
+        <select name="vector_db_type">
+          {% for t in options.vector_db_types %}
+          <option value="{{ t }}" {{ 'selected' if t == p.get('vector_db_type','inmemory') else '' }}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span>Retrieval mode</span>
+        <select name="retrieval_mode">
+          {% for r in options.retrieval_modes %}
+          <option value="{{ r }}" {{ 'selected' if r == p.get('retrieval_mode','dense') else '' }}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field"><span>k</span><input type="number" name="k" value="{{ p.get('k', 10) }}"></label>
+      <label class="field"><span>Experiment name</span><input name="experiment_name" value="{{ p.get('experiment_name','webui_experiment') }}"></label>
+      <label class="field"><span>Output dir</span><input name="output_dir" value="{{ p.get('output_dir','evaluation_results/webui') }}"></label>
+    </div>
+  </section>
+
+  <section class="step">
+    <h3>TTS audio synthesis</h3>
+    <div class="grid">
+      <label class="field"><span><input type="checkbox" name="audio_synthesis_enabled"> Enable TTS</span></label>
+      <label class="field">
+        <span>TTS provider</span>
+        <select name="tts_provider">
+          {% for t in options.tts_providers %}
+          <option value="{{ t }}">{{ t }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+  </section>
+</form>
+
+<div class="row">
+  <button hx-post="/ui/validate" hx-include="#config-form" hx-target="#status" class="secondary">Validate</button>
+  <button hx-post="/ui/graph" hx-include="#config-form" hx-target="#graph" class="secondary">Preview DAG</button>
+  <button hx-post="/ui/run" hx-include="#config-form" hx-target="#run-area">Run experiment</button>
+  <span class="htmx-indicator muted">working…</span>
+</div>
+<div id="status"></div>
+<div id="graph"></div>
+<div id="run-area"></div>

@@ -5,21 +5,29 @@ import tempfile
 import os
 from pathlib import Path
 import logging
+from ..registry import register_tts_model
+from .base_tts import BaseTTSModel
 
 logger = logging.getLogger(__name__)
 
 
-class PiperTTS:
+@register_tts_model(
+    'piper',
+    default_name='en_US-lessac-medium',
+    capabilities=['speech_synthesis'],
+    description='Piper TTS — fast, local, multi-language',
+)
+class PiperTTS(BaseTTSModel):
     """Piper TTS provider - fast, local, multi-language."""
-    
+
     def __init__(self, config):
         """
         Initialize Piper TTS provider.
-        
+
         Args:
             config: AudioSynthesisConfig instance.
         """
-        self.config = config
+        super().__init__(config)
         self._check_installation()
         self.voice_path = self._get_voice_path()
         logger.info(f"Piper TTS initialized with voice: {config.voice}")

@@ -19,73 +19,66 @@ def get_adapter_suffix(adapter_path: Optional[str]) -> str:
     return f"_adapter_{adapter_name}"
 
 
-def generate_output_filename(config) -> str:
-    """Generate output filename based on configuration.
-    
-    Args:
-        config: EvaluationConfig object.
-        
-    Returns:
-        Sanitized output filename for results JSON.
-    """
-    if config.model.pipeline_mode == "audio_emb_retrieval":
-        model_desc = f"{config.model.audio_emb_model_type}"
-        if config.model.audio_emb_model_name:
-            model_desc += f"_{config.model.audio_emb_model_name}"
-        model_desc += get_adapter_suffix(config.model.audio_emb_adapter_path)
-    elif config.model.pipeline_mode == "asr_only":
-        model_desc = f"{config.model.asr_model_type}"
-        if config.model.asr_model_name:
-            model_desc += f"_{config.model.asr_model_name}"
-        model_desc += get_adapter_suffix(config.model.asr_adapter_path)
-    else:  # asr_text_retrieval
-        asr_desc = f"{config.model.asr_model_type}"
-        if config.model.asr_model_name:
-            asr_desc += f"_{config.model.asr_model_name}"
-        asr_desc += get_adapter_suffix(config.model.asr_adapter_path)
-        emb_desc = f"{config.model.text_emb_model_type}"
-        if config.model.text_emb_model_name:
-            emb_desc += f"_{config.model.text_emb_model_name}"
-        emb_desc += get_adapter_suffix(config.model.text_emb_adapter_path)
-        model_desc = f"{asr_desc}_{emb_desc}"
-    
-    output_filename = f"results_{config.data.dataset_name}_{model_desc}.json"
-    # Sanitize filename
-    output_filename = "".join(
-        c for c in output_filename if c.isalnum() or c in (' ', '_', '.')
-    ).rstrip()
-    
-    return output_filename
+def _describe_model(model_type, model_name, adapter_path) -> str:
+    """Build a `type[_name][_adapter_suffix]` descriptor for one model."""
+    desc = f"{model_type}"
+    if model_name:
+        desc += f"_{model_name}"
+    desc += get_adapter_suffix(adapter_path)
+    return desc
 
 
 def generate_model_description(config) -> str:
     """Generate model description string for experiment ID.
-    
+
     Args:
         config: EvaluationConfig object.
-        
+
     Returns:
         Model description string.
     """
-    if config.model.pipeline_mode == "audio_emb_retrieval":
-        model_desc = f"{config.model.audio_emb_model_type}"
-        if config.model.audio_emb_model_name:
-            model_desc += f"_{config.model.audio_emb_model_name}"
-        model_desc += get_adapter_suffix(config.model.audio_emb_adapter_path)
-    elif config.model.pipeline_mode == "asr_only":
-        model_desc = f"{config.model.asr_model_type}"
-        if config.model.asr_model_name:
-            model_desc += f"_{config.model.asr_model_name}"
-        model_desc += get_adapter_suffix(config.model.asr_adapter_path)
-    else:  # asr_text_retrieval
-        asr_desc = f"{config.model.asr_model_type}"
-        if config.model.asr_model_name:
-            asr_desc += f"_{config.model.asr_model_name}"
-        asr_desc += get_adapter_suffix(config.model.asr_adapter_path)
-        emb_desc = f"{config.model.text_emb_model_type}"
-        if config.model.text_emb_model_name:
-            emb_desc += f"_{config.model.text_emb_model_name}"
-        emb_desc += get_adapter_suffix(config.model.text_emb_adapter_path)
-        model_desc = f"{asr_desc}_{emb_desc}"
-    
-    return model_desc
+    model = config.model
+    if model.pipeline_mode == "audio_emb_retrieval":
+        return _describe_model(
+            model.audio_emb_model_type,
+            model.audio_emb_model_name,
+            model.audio_emb_adapter_path,
+        )
+    if model.pipeline_mode == "asr_only":
+        return _describe_model(
+            model.asr_model_type, model.asr_model_name, model.asr_adapter_path
+        )
+    # asr_text_retrieval
+    asr_desc = _describe_model(
+        model.asr_model_type, model.asr_model_name, model.asr_adapter_path
+    )
+    emb_desc = _describe_model(
+        model.text_emb_model_type,
+        model.text_emb_model_name,
+        model.text_emb_adapter_path,
+    )
+    return f"{asr_desc}_{emb_desc}"
+
+
+def generate_output_filename(config) -> str:
+    """Generate output filename based on configuration.
+
+    Args:
+        config: EvaluationConfig object.
+
+    Returns:
+        Sanitized output filename for results JSON.
+    """
+    model_desc = generate_model_description(config)
+    # Prefix with experiment name so the same models evaluated under different
+    # configurations don't overwrite each other's results.
+    exp_name = (config.experiment_name or "evaluation").strip()
+    output_filename = (
+        f"results_{exp_name}_{config.data.dataset_name}_{model_desc}.json"
+    )
+    # Sanitize filename
+    output_filename = "".join(
+        c for c in output_filename if c.isalnum() or c in (' ', '_', '.')
+    ).rstrip()
+
+    return output_filename

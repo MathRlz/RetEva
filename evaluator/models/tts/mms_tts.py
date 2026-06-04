@@ -5,10 +5,20 @@ from typing import Dict
 
 import numpy as np
 
+from ..registry import register_tts_model
+from .base_tts import BaseTTSModel, require_torch_transformers, model_sampling_rate
+
 logger = logging.getLogger(__name__)
 
 
-class MMSTTS:
+@register_tts_model(
+    'mms',
+    aliases=['mms_tts', 'mms-tts'],
+    default_name='facebook/mms-tts-eng',
+    capabilities=['speech_synthesis'],
+    description='Meta MMS TTS — multilingual (HF transformers)',
+)
+class MMSTTS(BaseTTSModel):
     """Meta MMS TTS wrapper.
 
     Notes:
@@ -31,22 +41,15 @@ class MMSTTS:
     }
 
     def __init__(self, config):
-        self.config = config
-        try:
-            import torch
-            from transformers import AutoTokenizer, VitsModel
-        except ImportError as exc:
-            raise RuntimeError(
-                "MMS provider requires transformers + torch. "
-                "Install with: pip install transformers torch"
-            ) from exc
+        super().__init__(config)
+        self._torch = require_torch_transformers("MMS provider")
+        from transformers import AutoTokenizer, VitsModel
 
         model_id = self._resolve_model_id()
-        self._torch = torch
         self._tokenizer = AutoTokenizer.from_pretrained(model_id)
         self._model = VitsModel.from_pretrained(model_id)
         self._model.eval()
-        self.output_sample_rate = int(getattr(self._model.config, "sampling_rate", 16000))
+        self.output_sample_rate = model_sampling_rate(self._model)
         logger.info(f"MMS TTS initialized with model: {model_id}")
 
     def _resolve_model_id(self) -> str:

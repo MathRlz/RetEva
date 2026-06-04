@@ -51,6 +51,7 @@ MODEL_EMBEDDING_DIMS: Dict[str, int] = {
     "bge_m3": 1024,
     "nemotron": 1024,
     "clip": 768,
+    "sonar": 1024,
 }
 
 

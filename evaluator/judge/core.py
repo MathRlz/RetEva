@@ -191,7 +191,7 @@ def judge_multi_aspect(
     client: LLMClient,
     chain_of_thought: bool = False,
     score_aggregation: str = "average",
-    aspect_weights: Dict[str, float] = None,
+    aspect_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Judge a retrieved document across multiple aspects."""
     import re
@@ -234,7 +234,7 @@ def judge_single_aspect(
     *,
     client: LLMClient,
     chain_of_thought: bool = False,
-    few_shot_examples: List[Dict] = None,
+    few_shot_examples: Optional[List[Dict]] = None,
 ) -> Dict[str, Any]:
     """Judge a retrieved document on a single aspect."""
     import re

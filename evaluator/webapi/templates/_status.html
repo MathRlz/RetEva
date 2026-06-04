@@ -1,0 +1,44 @@
+{% set status = job.get('status') %}
+{% set terminal = status in ['completed', 'failed', 'cancelled'] %}
+<div {% if not terminal %}hx-get="/ui/jobs/{{ job_id }}/status" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  <section class="step">
+    <h3>Job {{ job_id[:8] }} — {{ status }}</h3>
+    {% set prog = job.get('last_progress') %}
+    {% if prog and not terminal %}
+      {% set total = prog.get('total') or 0 %}
+      {% set cur = prog.get('current') or 0 %}
+      <div class="row"><strong>{{ prog.get('phase','') }}</strong>
+        {% if total %}<span class="muted">{{ cur }} / {{ total }}</span>{% endif %}
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" style="width: {{ ((cur / total * 100) | round) if total else 0 }}%"></div>
+      </div>
+      {% if prog.get('message') %}<div class="muted">{{ prog.get('message') }}</div>{% endif %}
+    {% endif %}
+
+    {% if status == 'failed' %}<p class="error">{{ job.get('error') }}</p>{% endif %}
+
+    {% if result %}
+      <div>
+        {% for k in ['MRR','MAP','Recall@1','Recall@5','WER','CER'] %}
+          {% if result.get(k) is number %}<span class="chip">{{ k }}: {{ '%.4f'|format(result.get(k)) }}</span>{% endif %}
+        {% endfor %}
+      </div>
+      {% set traces = result.get('query_traces') or [] %}
+      {% if traces %}
+        <h4>Per-query traces</h4>
+        {% for t in traces[:20] %}
+        <details>
+          <summary>{{ t.get('question') or t.get('query_id') }}</summary>
+          {% if t.get('per_query_wer') is number %}<p class="muted">WER {{ '%.3f'|format(t.get('per_query_wer')) }}</p>{% endif %}
+          <ol>
+            {% for d in (t.get('retrieved') or [])[:5] %}
+            <li>{{ d.get('doc_key') }} — {{ '%.4f'|format(d.get('score') or 0) }}</li>
+            {% endfor %}
+          </ol>
+        </details>
+        {% endfor %}
+      {% endif %}
+    {% endif %}
+  </section>
+</div>

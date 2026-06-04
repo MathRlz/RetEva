@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from ....logging_config import get_logger
+from ...registry import register_reranker_model
 
 logger = get_logger(__name__)
 
@@ -63,6 +64,11 @@ def _extract_text(payload: Any) -> str:
     return str(payload)
 
 
+@register_reranker_model(
+    'cross_encoder',
+    default_name='cross-encoder/ms-marco-MiniLM-L-6-v2',
+    description='Cross-encoder reranker using sentence-transformers',
+)
 class CrossEncoderReranker(BaseReranker):
     """Cross-encoder reranker using sentence-transformers.
 

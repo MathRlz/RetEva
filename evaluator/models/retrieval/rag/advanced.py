@@ -300,7 +300,7 @@ def adaptive_fusion_weights(
 def apply_diversity_penalty(
     results: List[Tuple[Any, float]],
     penalty: float = 0.1,
-    k: int = None
+    k: Optional[int] = None
 ) -> List[Tuple[Any, float]]:
     """Apply diversity penalty to reduce redundancy in results.
     

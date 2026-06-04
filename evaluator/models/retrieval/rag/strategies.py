@@ -267,156 +267,91 @@ def threshold_filter_with_fallback(
     
     if len(filtered) >= min_results:
         return filtered
-    
+
     # Return top min_results if threshold filtering is too aggressive
     return results[:min_results]
 
 
 def borda_count_fusion(
     rankings: List[List[Tuple[Any, float]]],
-    k: int = None
+    k: int = 10,
 ) -> List[Tuple[Any, float]]:
-    """Combine rankings using Borda count voting.
-    
-    Each document gets points based on its rank in each list:
-    top document gets n points, second gets n-1, etc.
-    
+    """Fuse multiple ranked result lists via Borda count.
+
+    Each ranking awards a doc points equal to (len(ranking) - position): the top
+    item gets the most points. Points are summed across rankings and the top-k
+    documents by total points are returned. Scores in the input are ignored —
+    only rank order matters — which makes this robust to incomparable score
+    scales across retrievers.
+
     Args:
-        rankings: List of ranked result lists.
-        k: Number of top results to return (None = all).
-        
+        rankings: List of ranked lists, each a list of (doc, score) in rank order.
+        k: Number of fused results to return.
+
     Returns:
-        Combined ranking with Borda scores.
+        Top-k (doc, borda_points) tuples sorted by descending points.
     """
-    from collections import defaultdict
-    
-    borda_scores = defaultdict(float)
-    item_lookup = {}
-    
+    points: dict = {}
     for ranking in rankings:
         n = len(ranking)
-        for rank, (item, _) in enumerate(ranking):
-            # Higher rank = more points
-            points = n - rank
-            
-            # Use string representation as key
-            key = str(item)
-            borda_scores[key] += points
-            item_lookup[key] = item
-    
-    # Sort by Borda score descending
-    sorted_items = sorted(
-        borda_scores.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-    
-    if k is not None:
-        sorted_items = sorted_items[:k]
-    
-    return [(item_lookup[key], score) for key, score in sorted_items]
+        for position, (doc, _score) in enumerate(ranking):
+            points[doc] = points.get(doc, 0.0) + (n - position)
+    fused = sorted(points.items(), key=lambda item: item[1], reverse=True)
+    return fused[:k]
 
 
 def distribution_based_fusion(
-    dense_results: List[Tuple[Any, float]],
-    sparse_results: List[Tuple[Any, float]],
+    dense: List[Tuple[Any, float]],
+    sparse: List[Tuple[Any, float]],
     method: str = "z_score",
-    k: int = None
+    k: int = 10,
 ) -> List[Tuple[Any, float]]:
-    """Combine dense and sparse results using score normalization.
-    
-    Normalizes scores from different systems before combining them,
-    handling different score distributions appropriately.
-    
+    """Fuse dense and sparse result lists by normalizing their score distributions.
+
+    Dense and sparse retrievers produce scores on different scales (e.g. cosine
+    similarity vs BM25). Each list's scores are normalized before summing per doc:
+
+    - ``z_score``: (score - mean) / std of that list.
+    - ``min_max``: (score - min) / (max - min), mapped to [0, 1].
+    - ``rank``: position-based score (len - position), ignoring raw values.
+
+    A doc missing from a list contributes that list's *minimum* normalized score,
+    so documents retrieved by both retrievers rank above ones found by only one.
+
     Args:
-        dense_results: Dense retrieval results.
-        sparse_results: Sparse retrieval results.
-        method: Normalization method. Options: "z_score", "min_max", "rank".
-        k: Number of results to return (None = all).
-        
+        dense: Dense retrieval results as (doc, score) tuples.
+        sparse: Sparse retrieval results as (doc, score) tuples.
+        method: Normalization method ("z_score", "min_max", or "rank").
+        k: Number of fused results to return.
+
     Returns:
-        Fused results with normalized scores.
+        Top-k (doc, fused_score) tuples sorted by descending fused score.
     """
-    from collections import defaultdict
-    import numpy as np
-    
-    if not dense_results and not sparse_results:
-        return []
-    
-    # Normalize scores
-    def normalize_scores(results, method):
+    def _normalized(results: List[Tuple[Any, float]]) -> dict:
         if not results:
             return {}
-        
-        scores = [s for _, s in results]
-        
-        if method == "z_score":
-            # Z-score normalization
-            mean_score = np.mean(scores)
-            std_score = np.std(scores)
-            
-            if std_score < 1e-9:
-                # All scores are the same
-                return {str(item): 1.0 for item, _ in results}
-            
-            normalized = {}
-            for item, score in results:
-                z_score = (score - mean_score) / std_score
-                # Map to [0, 1] using sigmoid
-                normalized[str(item)] = 1.0 / (1.0 + np.exp(-z_score))
-            
-            return normalized
-        
-        elif method == "min_max":
-            # Min-max normalization
-            min_score = min(scores)
-            max_score = max(scores)
-            
-            if max_score - min_score < 1e-9:
-                return {str(item): 1.0 for item, _ in results}
-            
-            return {
-                str(item): (score - min_score) / (max_score - min_score)
-                for item, score in results
-            }
-        
-        elif method == "rank":
-            # Rank-based normalization
+        if method == "rank":
             n = len(results)
-            return {
-                str(item): (n - rank) / n
-                for rank, (item, _) in enumerate(results)
-            }
-        
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
-    
-    # Normalize both result sets
-    dense_norm = normalize_scores(dense_results, method)
-    sparse_norm = normalize_scores(sparse_results, method)
-    
-    # Combine scores
-    combined_scores = defaultdict(float)
-    item_lookup = {}
-    
-    for item, _ in dense_results:
-        key = str(item)
-        combined_scores[key] += dense_norm[key]
-        item_lookup[key] = item
-    
-    for item, _ in sparse_results:
-        key = str(item)
-        combined_scores[key] += sparse_norm[key]
-        item_lookup[key] = item
-    
-    # Sort by combined score
-    sorted_items = sorted(
-        combined_scores.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-    
-    if k is not None:
-        sorted_items = sorted_items[:k]
-    
-    return [(item_lookup[key], score) for key, score in sorted_items]
+            return {doc: float(n - pos) for pos, (doc, _s) in enumerate(results)}
+        scores = np.array([s for _d, s in results], dtype=float)
+        if method == "min_max":
+            lo, hi = scores.min(), scores.max()
+            norm = (scores - lo) / (hi - lo) if hi > lo else np.zeros_like(scores)
+        else:  # z_score (default)
+            std = scores.std()
+            norm = (scores - scores.mean()) / std if std > 0 else np.zeros_like(scores)
+        return {doc: float(norm[i]) for i, (doc, _s) in enumerate(results)}
+
+    normalized_lists = [_normalized(dense), _normalized(sparse)]
+    all_docs = set().union(*(nl.keys() for nl in normalized_lists)) if normalized_lists else set()
+
+    fused_scores: dict = {}
+    for doc in all_docs:
+        total = 0.0
+        for normalized in normalized_lists:
+            # Missing doc gets the list's minimum score, penalizing single-list hits.
+            total += normalized.get(doc, min(normalized.values()) if normalized else 0.0)
+        fused_scores[doc] = total
+
+    fused = sorted(fused_scores.items(), key=lambda item: item[1], reverse=True)
+    return fused[:k]

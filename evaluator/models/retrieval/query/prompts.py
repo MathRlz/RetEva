@@ -6,6 +6,8 @@ decomposition, and multi-query generation. All prompts are tailored for
 medical information retrieval.
 """
 
+from typing import Optional
+
 # Query Rewriting Prompts
 QUERY_REWRITE_SYSTEM_PROMPT = """You are a medical information retrieval expert. Your task is to refine search queries to improve medical document retrieval.
 
@@ -104,7 +106,7 @@ MEDICAL_CONTEXT_EXAMPLES = """Example medical query refinements:
 """
 
 
-def get_rewrite_prompt(query: str, context: str = None) -> tuple[str, str]:
+def get_rewrite_prompt(query: str, context: Optional[str] = None) -> tuple[str, str]:
     """Get system and user prompts for query rewriting.
     
     Args:

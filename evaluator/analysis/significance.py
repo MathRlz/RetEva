@@ -12,6 +12,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 from scipy import stats
 
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def paired_ttest(
     scores_a: List[float], scores_b: List[float]
@@ -212,32 +216,32 @@ def compare_experiments(
                     t_stat, t_pval = paired_ttest(scores_a, scores_b)
                     metric_result["ttest"] = {"t_stat": t_stat, "p_value": t_pval}
                     metric_result["significant_ttest"] = t_pval < 0.05
-                except Exception:
-                    pass
-                
+                except Exception as exc:
+                    logger.debug("paired t-test failed for %s: %s", metric, exc)
+
                 try:
                     w_stat, w_pval = wilcoxon_test(scores_a, scores_b)
                     metric_result["wilcoxon"] = {"stat": w_stat, "p_value": w_pval}
                     metric_result["significant_wilcoxon"] = w_pval < 0.05
-                except Exception:
-                    pass
-            
+                except Exception as exc:
+                    logger.debug("Wilcoxon test failed for %s: %s", metric, exc)
+
             # Compute confidence intervals
             if len(scores_a) >= 2:
                 try:
                     metric_result["ci_a"] = bootstrap_confidence_interval(
                         scores_a, random_state=42
                     )
-                except Exception:
-                    pass
-            
+                except Exception as exc:
+                    logger.debug("bootstrap CI (a) failed for %s: %s", metric, exc)
+
             if len(scores_b) >= 2:
                 try:
                     metric_result["ci_b"] = bootstrap_confidence_interval(
                         scores_b, random_state=42
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("bootstrap CI (b) failed for %s: %s", metric, exc)
         
         comparison[metric] = metric_result
     

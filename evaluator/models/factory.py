@@ -22,9 +22,6 @@ def create_asr_model(model_type: str, model_name: Optional[str] = None,
     Returns:
         ASRModel instance
     """
-    # Ensure all models are imported and registered
-    from .asr import whisper, wav2vec2, faster_whisper
-
     model_class = asr_registry.get(model_type)
     name = asr_registry.resolve_model_name(model_type, size=size, model_name=model_name)
 
@@ -47,9 +44,6 @@ def create_text_embedding_model(model_type: str, model_name: Optional[str] = Non
     Returns:
         TextEmbeddingModel instance or None for special cases
     """
-    # Ensure all models are imported and registered
-    from .t2e import labse, jina, clip, nemotron, bgem3
-
     if model_type == "clap_text":
         return None
 
@@ -112,6 +106,7 @@ def _build_clap_style_audio(
 
 
 register_audio_embedding_builder("attention_pool", _build_attention_pool_audio)
+register_audio_embedding_builder("attention_pool_m4t", _build_attention_pool_audio)
 register_audio_embedding_builder("clap_style", _build_clap_style_audio)
 
 
@@ -136,9 +131,6 @@ def create_audio_embedding_model(model_type: str, model_name: Optional[str] = No
     Returns:
         AudioEmbeddingModel instance
     """
-    # Ensure all models are imported and registered
-    from .a2e import attention_pool, clap_style
-
     model_class = audio_embedding_registry.get(model_type)
     builder = _AUDIO_EMBEDDING_BUILDERS.get(model_type)
     if builder is None:
@@ -178,9 +170,6 @@ def create_reranker(
     Returns:
         BaseReranker instance
     """
-    # Ensure reranker is registered
-    _register_rerankers()
-    
     model_class = reranker_registry.get(model_type)
     name = model_name or reranker_registry.get_default_name(model_type)
     
@@ -199,14 +188,3 @@ def create_reranker(
     )
 
 
-def _register_rerankers():
-    """Register all reranker models in the registry."""
-    from .retrieval.rag.reranker import CrossEncoderReranker
-    
-    if not reranker_registry.is_registered("cross_encoder"):
-        reranker_registry.register(
-            "cross_encoder",
-            CrossEncoderReranker,
-            default_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
-            description="Cross-encoder reranker using sentence-transformers",
-        )

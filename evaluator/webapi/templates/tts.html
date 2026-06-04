@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="panel">
+  <h2>TTS Playground</h2>
+  <p class="muted">Synthesize speech with any registered provider and play it inline.</p>
+  <form hx-post="/ui/tts/preview" hx-target="#tts-audio">
+    <div class="grid">
+      <label class="field">
+        <span>Provider</span>
+        <select name="provider">
+          {% for m in tts_models %}
+          <option value="{{ m.type }}">{{ m.type }} ({{ m.name }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field"><span>Language</span><input name="language" value="en"></label>
+      <label class="field"><span>Voice (optional)</span><input name="voice" placeholder="provider-specific"></label>
+    </div>
+    <label class="field">
+      <span>Text</span>
+      <textarea name="text" rows="3" placeholder="Type something to synthesize…">Does aspirin reduce the risk of heart attack?</textarea>
+    </label>
+    <div class="row">
+      <button type="submit">Synthesize &amp; play</button>
+      <span class="htmx-indicator muted">synthesizing…</span>
+    </div>
+  </form>
+  <div id="tts-audio"></div>
+</div>
+{% endblock %}

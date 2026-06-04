@@ -263,71 +263,47 @@ class ModelServiceProvider:
         return False
 
     def list_available_models(self) -> Dict[str, List[Dict[str, Any]]]:
-        """List all available models with normalized metadata schema."""
-        # Ensure model modules are imported so decorators register them.
-        from ..models.asr import whisper, wav2vec2, faster_whisper  # noqa: F401
-        from ..models.t2e import labse, jina, clip, nemotron, bgem3  # noqa: F401
-        from ..models.a2e import attention_pool, clap_style, hubert, wavlm  # noqa: F401
-        from ..models.factory import _register_rerankers
-        from ..models.registry import (
-            asr_registry,
-            audio_embedding_registry,
-            get_all_registered_models,
-            reranker_registry,
-            text_embedding_registry,
-        )
+        """List all available models with normalized metadata schema.
 
-        _register_rerankers()
-        raw_models = get_all_registered_models()
-        raw_models["tts"] = [
-            "piper",
-            "xtts_v2",
-            "xtts",
-            "xtts-v2",
-            "mms",
-            "mms_tts",
-            "mms-tts",
-        ]
+        Fully registry-driven: importing ``evaluator.models`` triggers every
+        model's ``@register_*`` decorator (each family subpackage is imported in
+        ``models/__init__.py``), so a model registered by decorator alone shows
+        up here — no second edit in this file. Per-model UI hints
+        (``capabilities``, ``requires_path``, aliases, extras) come from
+        decorator metadata, not hardcoded maps.
+        """
+        import evaluator.models  # noqa: F401  (populates all registries)
+        from ..models.registry import FAMILY_REGISTRIES
 
-        metadata_registry = {
-            "asr": asr_registry,
-            "text_embedding": text_embedding_registry,
-            "audio_embedding": audio_embedding_registry,
-            "reranker": reranker_registry,
-        }
-        capabilities_map = {
+        # Fallback capability per family when a model declares none.
+        default_capabilities = {
             "asr": ["transcription"],
             "text_embedding": ["text_embedding"],
             "audio_embedding": ["audio_embedding"],
             "reranker": ["reranking"],
             "tts": ["speech_synthesis"],
         }
-        requires_path_types = {"clap_style"}
 
         normalized: Dict[str, List[Dict[str, Any]]] = {}
-        for family, items in raw_models.items():
+        for family, registry in FAMILY_REGISTRIES.items():
             entries: List[Dict[str, Any]] = []
-            registry = metadata_registry.get(family)
-            for item in sorted(set(items)):
+            for model_type in sorted(registry.list_types()):
+                meta = dict(registry.get_metadata(model_type) or {})
                 entry: Dict[str, Any] = {
-                    "type": item,
-                    "name": item,
-                    "capabilities": capabilities_map.get(family, []),
-                    "requires_path": item in requires_path_types,
+                    "type": model_type,
+                    "name": registry.get_default_name(model_type) or model_type,
+                    "capabilities": meta.pop("capabilities", None) or default_capabilities.get(family, []),
+                    "requires_path": bool(meta.pop("requires_path", False)),
                     "default_device_hint": "cuda",
                 }
-                if registry is not None:
-                    default_name = registry.get_default_name(item)
-                    if default_name:
-                        entry["name"] = default_name
-                    model_meta = registry.get_metadata(item) or {}
-                    if model_meta:
-                        entry["metadata"] = model_meta
+                aliases = meta.pop("aliases", None)
+                if aliases:
+                    entry["aliases"] = list(aliases)
+                if meta:
+                    entry["metadata"] = meta
                 entries.append(entry)
             normalized[family] = entries
 
-        for required_family in ("asr", "text_embedding", "audio_embedding", "reranker", "tts"):
-            normalized.setdefault(required_family, [])
         return normalized
 
     def get_tts_model(self, config):

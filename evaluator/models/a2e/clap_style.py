@@ -13,6 +13,12 @@ from ..base import AudioEmbeddingModel, TextEmbeddingModel
 from ..registry import register_audio_embedding_model
 
 
+def set_requires_grad(module: nn.Module, requires_grad: bool) -> None:
+    """Set ``requires_grad`` on every parameter of ``module``."""
+    for param in module.parameters():
+        param.requires_grad = requires_grad
+
+
 # ============================================================================
 # Custom Unpickler for Loading Checkpoints
 # ============================================================================
@@ -169,13 +175,11 @@ class AudioEncoder(nn.Module):
     
     def freeze(self):
         """Freeze encoder parameters."""
-        for param in self.model.parameters():
-            param.requires_grad = False
-    
+        set_requires_grad(self.model, False)
+
     def unfreeze(self):
         """Unfreeze encoder parameters."""
-        for param in self.model.parameters():
-            param.requires_grad = True
+        set_requires_grad(self.model, True)
 
 
 class TextEncoder(nn.Module):
@@ -217,13 +221,11 @@ class TextEncoder(nn.Module):
     
     def freeze(self):
         """Freeze encoder parameters."""
-        for param in self.model.parameters():
-            param.requires_grad = False
-    
+        set_requires_grad(self.model, False)
+
     def unfreeze(self):
         """Unfreeze encoder parameters."""
-        for param in self.model.parameters():
-            param.requires_grad = True
+        set_requires_grad(self.model, True)
 
 
 # ============================================================================
@@ -513,7 +515,7 @@ class CLAP(nn.Module):
 # ============================================================================
 
 
-@register_audio_embedding_model('clap_style', description='CLAP-style multimodal audio-text embedding model')
+@register_audio_embedding_model('clap_style', requires_path=True, description='CLAP-style multimodal audio-text embedding model')
 class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
 
     @dataclass

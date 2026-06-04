@@ -20,15 +20,13 @@ from .helpers import (
 )
 from ..metrics import compute_ir_metrics, log_ir_metrics
 
-from .sample_wise import evaluate_with_pipeline
 from .phased import evaluate_phased, evaluate_from_bundle
 from .results import EvaluationResults
 
 
 __all__ = [
     "EvaluationResults",
-    # Main evaluation functions
-    "evaluate_with_pipeline",
+    # Main evaluation function (single engine; sample-wise engine removed)
     "evaluate_phased",
     "evaluate_from_bundle",
     # Metric functions (re-exported from ir_metrics/stt_metrics)

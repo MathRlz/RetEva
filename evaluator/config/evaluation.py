@@ -51,6 +51,67 @@ from .base import (
     DEVICE_PATTERN,
 )
 
+# Validation thresholds.
+GPU_MEMORY_SAFETY_FRACTION = 0.9
+LARGE_BATCH_SIZE_WARNING = 256
+
+
+def _merge_section_into(config_dict: dict, section_dict) -> None:
+    """Flatten a nested section (``runtime``/``experiment``) up into config_dict.
+
+    Dict values are deep-merged with any existing same-key dict (section wins);
+    scalar values overwrite. No-op when ``section_dict`` isn't a dict.
+    """
+    if not isinstance(section_dict, dict):
+        return
+    for key, value in section_dict.items():
+        if isinstance(value, dict) and isinstance(config_dict.get(key), dict):
+            merged = dict(config_dict[key])
+            merged.update(value)
+            config_dict[key] = merged
+        else:
+            config_dict[key] = value
+
+
+def _detect_cuda():
+    """Return (cuda_available, device_count); (False, 0) when torch is absent."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return True, torch.cuda.device_count()
+    except ImportError:
+        pass
+    return False, 0
+
+
+@dataclass
+class FeaturesConfig:
+    """Optional, toggleable pipeline features.
+
+    Groups the capability sub-configs (each with its own ``enabled`` flag) under
+    one namespace so the root ``EvaluationConfig`` is not flooded with always-off
+    options. Access them as ``config.features.judge`` (canonical) or via the
+    backward-compatible ``config.judge`` shortcut properties on EvaluationConfig.
+    """
+    audio_synthesis: AudioSynthesisConfig = field(default_factory=AudioSynthesisConfig)
+    augmentation: AudioAugmentationConfig = field(default_factory=AudioAugmentationConfig)
+    answer_generation: AnswerGenerationConfig = field(default_factory=AnswerGenerationConfig)
+    judge: JudgeConfig = field(default_factory=JudgeConfig)
+    query_optimization: QueryOptimizationConfig = field(default_factory=QueryOptimizationConfig)
+    embedding_fusion: EmbeddingFusionConfig = field(default_factory=EmbeddingFusionConfig)
+
+
+# Feature sub-config field name -> class. Single source for from_dict/presets.
+_FEATURE_SUBCONFIGS = {
+    "audio_synthesis": AudioSynthesisConfig,
+    "augmentation": AudioAugmentationConfig,
+    "answer_generation": AnswerGenerationConfig,
+    "judge": JudgeConfig,
+    "query_optimization": QueryOptimizationConfig,
+    "embedding_fusion": EmbeddingFusionConfig,
+}
+
+
 @dataclass
 class EvaluationConfig:
     """Complete evaluation configuration for audio-to-text retrieval.
@@ -120,14 +181,10 @@ class EvaluationConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
-    audio_synthesis: AudioSynthesisConfig = field(default_factory=AudioSynthesisConfig)
-    augmentation: AudioAugmentationConfig = field(default_factory=AudioAugmentationConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
-    answer_generation: AnswerGenerationConfig = field(default_factory=AnswerGenerationConfig)
     llm_server: LLMServerConfig = field(default_factory=LLMServerConfig)
-    judge: JudgeConfig = field(default_factory=JudgeConfig)
-    query_optimization: QueryOptimizationConfig = field(default_factory=QueryOptimizationConfig)
-    embedding_fusion: EmbeddingFusionConfig = field(default_factory=EmbeddingFusionConfig)
+    # Optional toggleable features grouped under one namespace (#7).
+    features: FeaturesConfig = field(default_factory=FeaturesConfig)
     vector_db: VectorDBConfig = field(default_factory=VectorDBConfig)
     device_pool: Optional[DevicePoolConfig] = None
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
@@ -136,11 +193,70 @@ class EvaluationConfig:
     checkpoint_enabled: bool = True
     checkpoint_interval: int = 50
     resume_from_checkpoint: bool = True
-    
+
+    # Oracle baseline: re-run retrieval with GT transcriptions to separate ASR cost
+    compute_oracle_baseline: bool = False
+
+    # Statistical analysis
+    compute_confidence_intervals: bool = False
+
+    # Domain term weighting for TW-WER
+    domain_term_weights_file: Optional[str] = None
+
     # Parallel evaluation settings
     parallel_enabled: bool = False
     num_parallel_workers: int = 0  # 0 = auto-detect GPU count
-    
+
+    # Backward-compatible shortcuts: config.judge <-> config.features.judge, etc.
+    # Keeps existing call sites working after the features grouping (#7).
+    @property
+    def audio_synthesis(self) -> AudioSynthesisConfig:
+        return self.features.audio_synthesis
+
+    @audio_synthesis.setter
+    def audio_synthesis(self, value: AudioSynthesisConfig) -> None:
+        self.features.audio_synthesis = value
+
+    @property
+    def augmentation(self) -> AudioAugmentationConfig:
+        return self.features.augmentation
+
+    @augmentation.setter
+    def augmentation(self, value: AudioAugmentationConfig) -> None:
+        self.features.augmentation = value
+
+    @property
+    def answer_generation(self) -> AnswerGenerationConfig:
+        return self.features.answer_generation
+
+    @answer_generation.setter
+    def answer_generation(self, value: AnswerGenerationConfig) -> None:
+        self.features.answer_generation = value
+
+    @property
+    def judge(self) -> JudgeConfig:
+        return self.features.judge
+
+    @judge.setter
+    def judge(self, value: JudgeConfig) -> None:
+        self.features.judge = value
+
+    @property
+    def query_optimization(self) -> QueryOptimizationConfig:
+        return self.features.query_optimization
+
+    @query_optimization.setter
+    def query_optimization(self, value: QueryOptimizationConfig) -> None:
+        self.features.query_optimization = value
+
+    @property
+    def embedding_fusion(self) -> EmbeddingFusionConfig:
+        return self.features.embedding_fusion
+
+    @embedding_fusion.setter
+    def embedding_fusion(self, value: EmbeddingFusionConfig) -> None:
+        self.features.embedding_fusion = value
+
     def with_auto_devices(self) -> 'EvaluationConfig':
         """Return a copy of this config with auto-configured device assignments.
         
@@ -181,22 +297,26 @@ class EvaluationConfig:
         pool.set_strategy(strategy)
         
         new_model = replace(self.model)
-        
-        # Allocate devices for each model type based on pipeline mode
+
+        # Which models a mode needs is owned by PipelineModeSpec (the single
+        # authority). Map each required model field to its (allocation category,
+        # model-type attr, device attr) and allocate for the ones that are set.
+        from ..pipeline.stage_graph import resolve_pipeline_mode_spec
+
+        _field_to_alloc = {
+            "model.asr_model_type": ("asr", "asr_model_type", "asr_device"),
+            "model.text_emb_model_type": ("text_embedding", "text_emb_model_type", "text_emb_device"),
+            "model.audio_emb_model_type": ("audio_embedding", "audio_emb_model_type", "audio_emb_device"),
+        }
         mode = enum_to_str(self.model.pipeline_mode)
-        
-        if mode in ("asr_text_retrieval", "asr_only") and self.model.asr_model_type:
-            asr_mem = estimate_model_memory_gb("asr", self.model.asr_model_type)
-            new_model.asr_device = pool.allocate("asr", asr_mem)
-        
-        if mode in ("asr_text_retrieval", "audio_text_retrieval") and self.model.text_emb_model_type:
-            text_mem = estimate_model_memory_gb("text_embedding", self.model.text_emb_model_type)
-            new_model.text_emb_device = pool.allocate("text_embedding", text_mem)
-        
-        if mode in ("audio_emb_retrieval", "audio_text_retrieval") and self.model.audio_emb_model_type:
-            audio_mem = estimate_model_memory_gb("audio_embedding", self.model.audio_emb_model_type)
-            new_model.audio_emb_device = pool.allocate("audio_embedding", audio_mem)
-        
+        spec = resolve_pipeline_mode_spec(mode)
+        for field_name in spec.required_model_fields:
+            category, model_type_attr, device_attr = _field_to_alloc[field_name]
+            model_type = getattr(self.model, model_type_attr)
+            if model_type:
+                mem = estimate_model_memory_gb(category, model_type)
+                setattr(new_model, device_attr, pool.allocate(category, mem))
+
         return replace(self, model=new_model)
     
     def validate(self) -> List[str]:
@@ -214,162 +334,159 @@ class EvaluationConfig:
         """
         errors: List[str] = []
         warnings: List[str] = []
-        
-        # Validate device strings
-        device_fields = [
+
+        cuda_available, cuda_count = _detect_cuda()
+        self._validate_devices(errors, warnings, cuda_available, cuda_count)
+        self._validate_model_types(errors)
+        self._validate_embedding_dims(warnings)
+        if cuda_available:
+            self._validate_gpu_memory(warnings, cuda_count)
+        self._validate_data_params(errors, warnings)
+        self._validate_dataset_compat(warnings)
+
+        if errors:
+            raise ConfigurationError(
+                "Configuration validation failed:\n  - " + "\n  - ".join(errors)
+            )
+        return warnings
+
+    @property
+    def _device_fields(self):
+        return [
             ('model.asr_device', self.model.asr_device),
             ('model.text_emb_device', self.model.text_emb_device),
             ('model.audio_emb_device', self.model.audio_emb_device),
         ]
-        for field_name, device in device_fields:
+
+    def _validate_devices(self, errors, warnings, cuda_available, cuda_count):
+        """Check device-string format and CUDA availability."""
+        for field_name, device in self._device_fields:
             if not DEVICE_PATTERN.match(device):
                 errors.append(
                     f"Invalid device format for {field_name}: '{device}'. "
                     f"Expected 'cpu', 'cuda', 'cuda:N', or 'mps'. "
                     f"Tip: call with_auto_devices() to auto-select valid devices."
                 )
-        
-        # Check CUDA availability warnings
-        try:
-            import torch
-            cuda_available = torch.cuda.is_available()
-            cuda_count = torch.cuda.device_count() if cuda_available else 0
-        except ImportError:
-            cuda_available = False
-            cuda_count = 0
-        
-        for field_name, device in device_fields:
-            if device.startswith('cuda'):
+            elif device.startswith('cuda'):
                 if not cuda_available:
                     warnings.append(
                         f"{field_name} is set to '{device}' but CUDA is not available. "
                         f"Consider using 'cpu' or calling with_auto_devices()."
                     )
-                elif ':' in device:
-                    device_idx = int(device.split(':')[1])
-                    if device_idx >= cuda_count:
-                        warnings.append(
-                            f"{field_name} is set to '{device}' but only {cuda_count} "
-                            f"CUDA device(s) available."
-                        )
-        
-        # Validate model types against registries
-        from ..models.registry import asr_registry, text_embedding_registry, audio_embedding_registry
-        
-        if self.model.asr_model_type is not None:
-            if not asr_registry.is_registered(self.model.asr_model_type):
-                available = ', '.join(asr_registry.list_types())
-                errors.append(
-                    f"Unknown ASR model type: '{self.model.asr_model_type}'. "
-                    f"Available types: {available}. "
-                    f"Tip: use one listed type or call EvaluationConfig.from_preset(...)."
-                )
-        
-        if self.model.text_emb_model_type is not None:
-            if not text_embedding_registry.is_registered(self.model.text_emb_model_type):
-                available = ', '.join(text_embedding_registry.list_types())
-                errors.append(
-                    f"Unknown text embedding model type: '{self.model.text_emb_model_type}'. "
-                    f"Available types: {available}. "
-                    f"Tip: use one listed type or call EvaluationConfig.from_preset(...)."
-                )
-        
-        if self.model.audio_emb_model_type is not None:
-            if not audio_embedding_registry.is_registered(self.model.audio_emb_model_type):
-                available = ', '.join(audio_embedding_registry.list_types())
-                errors.append(
-                    f"Unknown audio embedding model type: '{self.model.audio_emb_model_type}'. "
-                    f"Available types: {available}. "
-                    f"Tip: use one listed type or call EvaluationConfig.from_preset(...)."
-                )
-        
-        # Validate embedding dimension compatibility
-        if self.model.pipeline_mode == "audio_emb_retrieval":
-            text_emb_dim = get_text_embedding_dim(self.model.text_emb_model_type)
-            audio_emb_dim = self.model.audio_emb_dim
-            
-            if text_emb_dim is not None and audio_emb_dim != text_emb_dim:
-                warnings.append(
-                    f"Embedding dimension mismatch: audio_emb_dim ({audio_emb_dim}) != "
-                    f"text embedding dim for '{self.model.text_emb_model_type}' ({text_emb_dim}). "
-                    f"Ensure your audio embedding model projects to the correct dimension."
-                )
-        
-        # GPU memory validation
-        if cuda_available:
-            device_memory_usage: Dict[int, float] = {}
-            model_assignments = [
-                (self.model.asr_device, "asr", self.model.asr_model_type),
-                (self.model.text_emb_device, "text_embedding", self.model.text_emb_model_type),
-                (self.model.audio_emb_device, "audio_embedding", self.model.audio_emb_model_type),
-            ]
-            
-            for device_str, category, model_type in model_assignments:
-                if device_str.startswith("cuda"):
-                    device_idx = int(device_str.split(":")[1]) if ":" in device_str else 0
-                    estimated_mem = estimate_model_memory_gb(category, model_type)
-                    device_memory_usage[device_idx] = (
-                        device_memory_usage.get(device_idx, 0.0) + estimated_mem
+                elif ':' in device and int(device.split(':')[1]) >= cuda_count:
+                    warnings.append(
+                        f"{field_name} is set to '{device}' but only {cuda_count} "
+                        f"CUDA device(s) available."
                     )
-            
-            for device_idx, estimated_total in device_memory_usage.items():
-                if device_idx < cuda_count:
-                    gpu_memory = get_gpu_memory_gb(device_idx)
-                    if gpu_memory is not None and estimated_total > gpu_memory * 0.9:
-                        warnings.append(
-                            f"GPU {device_idx}: estimated memory usage ({estimated_total:.1f}GB) "
-                            f"exceeds 90% of available memory ({gpu_memory:.1f}GB). "
-                            f"Consider distributing models across devices."
-                        )
-        
-        # Validate file paths exist when provided
-        if self.data.questions_path is not None:
-            path = Path(self.data.questions_path)
-            if not path.exists():
+
+    def _validate_model_types(self, errors):
+        """Check each configured model type is registered."""
+        from ..models.registry import (
+            asr_registry, text_embedding_registry, audio_embedding_registry,
+        )
+        checks = [
+            (self.model.asr_model_type, asr_registry, "ASR"),
+            (self.model.text_emb_model_type, text_embedding_registry, "text embedding"),
+            (self.model.audio_emb_model_type, audio_embedding_registry, "audio embedding"),
+        ]
+        for model_type, registry, label in checks:
+            if model_type is not None and not registry.is_registered(model_type):
+                available = ', '.join(registry.list_types())
                 errors.append(
-                    f"Questions path does not exist: '{self.data.questions_path}'. "
-                    f"Tip: verify file path, or set data.prepared_dataset_dir for prepared datasets."
+                    f"Unknown {label} model type: '{model_type}'. "
+                    f"Available types: {available}. "
+                    f"Tip: use one listed type or call EvaluationConfig.from_preset(...)."
                 )
-        
-        if self.data.corpus_path is not None:
-            path = Path(self.data.corpus_path)
-            if not path.exists():
-                errors.append(
-                    f"Corpus path does not exist: '{self.data.corpus_path}'. "
-                    f"Tip: verify file path and ensure corpus JSON/JSONL file exists."
+
+    def _validate_embedding_dims(self, warnings):
+        """Warn when audio/text embedding dimensions disagree."""
+        if self.model.pipeline_mode != "audio_emb_retrieval":
+            return
+        text_emb_dim = get_text_embedding_dim(self.model.text_emb_model_type)
+        audio_emb_dim = self.model.audio_emb_dim
+        if text_emb_dim is not None and audio_emb_dim != text_emb_dim:
+            warnings.append(
+                f"Embedding dimension mismatch: audio_emb_dim ({audio_emb_dim}) != "
+                f"text embedding dim for '{self.model.text_emb_model_type}' ({text_emb_dim}). "
+                f"Ensure your audio embedding model projects to the correct dimension."
+            )
+
+    def _validate_gpu_memory(self, warnings, cuda_count):
+        """Warn when estimated per-GPU memory exceeds 90% of capacity."""
+        device_memory_usage: Dict[int, float] = {}
+        model_assignments = [
+            (self.model.asr_device, "asr", self.model.asr_model_type),
+            (self.model.text_emb_device, "text_embedding", self.model.text_emb_model_type),
+            (self.model.audio_emb_device, "audio_embedding", self.model.audio_emb_model_type),
+        ]
+        for device_str, category, model_type in model_assignments:
+            if device_str.startswith("cuda"):
+                device_idx = int(device_str.split(":")[1]) if ":" in device_str else 0
+                estimated_mem = estimate_model_memory_gb(category, model_type)
+                device_memory_usage[device_idx] = (
+                    device_memory_usage.get(device_idx, 0.0) + estimated_mem
                 )
-        
-        # Validate batch size is positive
+        for device_idx, estimated_total in device_memory_usage.items():
+            if device_idx < cuda_count:
+                gpu_memory = get_gpu_memory_gb(device_idx)
+                if gpu_memory is not None and estimated_total > gpu_memory * GPU_MEMORY_SAFETY_FRACTION:
+                    warnings.append(
+                        f"GPU {device_idx}: estimated memory usage ({estimated_total:.1f}GB) "
+                        f"exceeds 90% of available memory ({gpu_memory:.1f}GB). "
+                        f"Consider distributing models across devices."
+                    )
+
+    def _validate_data_params(self, errors, warnings):
+        """Check data paths, batch size, and k bounds."""
+        if self.data.questions_path is not None and not Path(self.data.questions_path).exists():
+            errors.append(
+                f"Questions path does not exist: '{self.data.questions_path}'. "
+                f"Tip: verify file path, or set data.prepared_dataset_dir for prepared datasets."
+            )
+        if self.data.corpus_path is not None and not Path(self.data.corpus_path).exists():
+            errors.append(
+                f"Corpus path does not exist: '{self.data.corpus_path}'. "
+                f"Tip: verify file path and ensure corpus JSON/JSONL file exists."
+            )
         if self.data.batch_size <= 0:
             errors.append(
                 f"Batch size must be positive, got: {self.data.batch_size}. "
                 f"Tip: start with batch_size=16 or batch_size=32."
             )
-        elif self.data.batch_size > 256:
+        elif self.data.batch_size > LARGE_BATCH_SIZE_WARNING:
             warnings.append(
                 f"Very large batch size ({self.data.batch_size}) may cause memory issues."
             )
-        
-        # Validate k values for metrics are positive
         if self.vector_db.k <= 0:
             errors.append(
                 f"vector_db.k must be positive, got: {self.vector_db.k}. "
                 f"Tip: use k=5 or k=10 for most evaluations."
             )
-        
         if self.vector_db.reranker_top_k <= 0:
             errors.append(
                 f"vector_db.reranker_top_k must be positive, got: {self.vector_db.reranker_top_k}. "
                 f"Tip: use reranker_top_k=20 or reranker_top_k=50."
             )
-        
-        # Raise errors if any
-        if errors:
-            raise ConfigurationError(
-                "Configuration validation failed:\n  - " + "\n  - ".join(errors)
-            )
-        
-        return warnings
+
+    def _validate_dataset_compat(self, warnings):
+        """Warn when the dataset doesn't support the chosen pipeline mode."""
+        try:
+            from ..datasets.descriptor import resolve_dataset_descriptor
+            descriptor = resolve_dataset_descriptor(self.data)
+            mode = enum_to_str(self.model.pipeline_mode)
+            if not descriptor.supports_pipeline_mode(mode):
+                warnings.append(
+                    f"Pipeline mode '{mode}' is not in the compatible modes for dataset "
+                    f"'{descriptor.id}': {', '.join(descriptor.compatible_pipeline_modes)}. "
+                    f"Results may be incorrect."
+                )
+            if self.audio_synthesis.enabled and not descriptor.supports_generation:
+                warnings.append(
+                    f"audio_synthesis.enabled=True but dataset '{descriptor.id}' does not "
+                    f"support audio generation (supports_generation=False)."
+                )
+        except Exception:
+            pass  # Unresolvable dataset; skip check rather than block validation
 
     # Sub-config fields that belong to runtime vs experiment dictionaries.
     _RUNTIME_FIELDS = frozenset({
@@ -378,11 +495,25 @@ class EvaluationConfig:
     _RUNTIME_SCALARS = frozenset({
         "checkpoint_enabled", "checkpoint_interval", "resume_from_checkpoint",
         "parallel_enabled", "num_parallel_workers",
+        "compute_oracle_baseline", "compute_confidence_intervals", "domain_term_weights_file",
     })
     _EXPERIMENT_SUBCONFIGS = frozenset({
-        "audio_synthesis", "augmentation", "answer_generation", "llm_server", "judge",
-        "query_optimization", "embedding_fusion", "tracking", "service_runtime",
+        "features", "llm", "llm_server", "tracking", "service_runtime",
     })
+    # Plain sub-configs: key → class. No custom construction logic needed.
+    # Adding a new sub-config here is the only change required in this file.
+    # (The optional features live under `features` — see _FEATURE_SUBCONFIGS.)
+    _PLAIN_SUBCONFIGS = {
+        'cache': CacheConfig,
+        'logging': LoggingConfig,
+        'model': ModelConfig,
+        'data': DataConfig,
+        'llm': LLMConfig,
+        'llm_server': LLMServerConfig,
+        'vector_db': VectorDBConfig,
+        'tracking': TrackingConfig,
+        'service_runtime': ServiceRuntimeConfig,
+    }
 
     def to_runtime_dict(self) -> Dict[str, Any]:
         """Return runtime execution configuration surface (auto-serialized)."""
@@ -425,39 +556,28 @@ class EvaluationConfig:
         # Create a copy to avoid modifying the original
         config_dict = dict(config_dict)
 
-        runtime_dict = config_dict.pop("runtime", None)
-        if isinstance(runtime_dict, dict):
-            for key, value in runtime_dict.items():
-                if isinstance(value, dict) and isinstance(config_dict.get(key), dict):
-                    merged = dict(config_dict[key])
-                    merged.update(value)
-                    config_dict[key] = merged
-                else:
-                    config_dict[key] = value
+        # The optional `runtime:`/`experiment:` blocks are flattened up into the
+        # top level (deep-merging any dict values) before sub-config construction.
+        _merge_section_into(config_dict, config_dict.pop("runtime", None))
+        _merge_section_into(config_dict, config_dict.pop("experiment", None))
 
-        experiment_dict = config_dict.pop("experiment", None)
-        if isinstance(experiment_dict, dict):
-            for key, value in experiment_dict.items():
-                if isinstance(value, dict) and isinstance(config_dict.get(key), dict):
-                    merged = dict(config_dict[key])
-                    merged.update(value)
-                    config_dict[key] = merged
-                else:
-                    config_dict[key] = value
-        
-        cache_config = CacheConfig(**config_dict.get('cache', {}))
-        logging_config = LoggingConfig(**config_dict.get('logging', {}))
-        
-        # Handle model config
-        model_dict = dict(config_dict.get('model', {}))
-        
-        model_config = ModelConfig(**model_dict)
-        data_config = DataConfig(**config_dict.get('data', {}))
-        audio_synthesis_config = AudioSynthesisConfig(**config_dict.get('audio_synthesis', {}))
-        augmentation_config = AudioAugmentationConfig(**config_dict.get('augmentation', {}))
+        # Accept the canonical nested `features:` block AND legacy flat feature
+        # keys (judge:, embedding_fusion:, ...) by flattening the former into the
+        # latter; nested values win over any stray flat key.
+        features_dict = config_dict.pop("features", None)
+        if isinstance(features_dict, dict):
+            for key, value in features_dict.items():
+                config_dict[key] = value
+
+        # Build plain sub-configs from registry — no duplication when adding new ones
+        sub_configs: Dict[str, Any] = {
+            key: cls_(**(config_dict.get(key) or {}))
+            for key, cls_ in cls._PLAIN_SUBCONFIGS.items()
+        }
+
         # Shared LLM backend — propagates to judge/answer_generation/query_optimization
         # as defaults; per-component values override.
-        llm_config = LLMConfig(**config_dict.get('llm', {}))
+        llm_config = LLMConfig(**(config_dict.get('llm') or {}))
         _llm_fields = {
             "model", "api_base", "api_key_env", "temperature",
             "timeout_s", "use_local_server", "local_server_url",
@@ -470,7 +590,7 @@ class EvaluationConfig:
             return merged
 
         # Backwards-compat: map old llm_* names in query_optimization dict
-        _qo_raw = dict(config_dict.get('query_optimization', {}))
+        _qo_raw = dict(config_dict.get('query_optimization') or {})
         for old, new in (
             ("llm_model", "model"),
             ("llm_api_base", "api_base"),
@@ -482,60 +602,31 @@ class EvaluationConfig:
             elif old in _qo_raw:
                 _qo_raw.pop(old)
 
-        answer_generation_config = AnswerGenerationConfig(**_merge_llm(config_dict.get('answer_generation', {})))
-        llm_server_config = LLMServerConfig(**config_dict.get('llm_server', {}))
-        judge_config = JudgeConfig(**_merge_llm(config_dict.get('judge', {})))
-        query_optimization_config = QueryOptimizationConfig(**_merge_llm(_qo_raw))
-        embedding_fusion_config = EmbeddingFusionConfig(**config_dict.get('embedding_fusion', {}))
-        vector_db_config = VectorDBConfig(**config_dict.get('vector_db', {}))
-        tracking_config = TrackingConfig(**config_dict.get('tracking', {}))
-        service_runtime_config = ServiceRuntimeConfig(**config_dict.get('service_runtime', {}))
+        sub_configs['llm'] = llm_config
 
-        # Handle device_pool (optional)
-        device_pool_dict = config_dict.get('device_pool')
-        device_pool_config = DevicePoolConfig(**device_pool_dict) if device_pool_dict else None
-
-        main_config = {
-            k: v for k, v in config_dict.items()
-            if k not in [
-                'cache',
-                'logging',
-                'model',
-                'data',
-                'audio_synthesis',
-                'augmentation',
-                'llm',
-                'answer_generation',
-                'llm_server',
-                'judge',
-                'query_optimization',
-                'embedding_fusion',
-                'vector_db',
-                'device_pool',
-                'tracking',
-                'service_runtime',
-            ]
-        }
-
-        config = cls(
-            **main_config,
-            cache=cache_config,
-            logging=logging_config,
-            model=model_config,
-            data=data_config,
-            audio_synthesis=audio_synthesis_config,
-            augmentation=augmentation_config,
-            llm=llm_config,
-            answer_generation=answer_generation_config,
-            llm_server=llm_server_config,
-            judge=judge_config,
-            query_optimization=query_optimization_config,
-            embedding_fusion=embedding_fusion_config,
-            vector_db=vector_db_config,
-            device_pool=device_pool_config,
-            tracking=tracking_config,
-            service_runtime=service_runtime_config,
+        # Assemble the optional features into one FeaturesConfig (#7). The three
+        # LLM-derived features inherit the shared backend defaults; the rest are
+        # plain sub-configs.
+        features = FeaturesConfig(
+            audio_synthesis=AudioSynthesisConfig(**(config_dict.get('audio_synthesis') or {})),
+            augmentation=AudioAugmentationConfig(**(config_dict.get('augmentation') or {})),
+            answer_generation=AnswerGenerationConfig(**_merge_llm(config_dict.get('answer_generation') or {})),
+            judge=JudgeConfig(**_merge_llm(config_dict.get('judge') or {})),
+            query_optimization=QueryOptimizationConfig(**_merge_llm(_qo_raw)),
+            embedding_fusion=EmbeddingFusionConfig(**(config_dict.get('embedding_fusion') or {})),
         )
+        sub_configs['features'] = features
+
+        # device_pool is optional
+        device_pool_dict = config_dict.get('device_pool')
+        sub_configs['device_pool'] = DevicePoolConfig(**device_pool_dict) if device_pool_dict else None
+
+        # All remaining keys are scalar fields on EvaluationConfig itself.
+        # Exclude the feature keys consumed above (they're not EvaluationConfig fields).
+        _consumed = set(sub_configs) | set(_FEATURE_SUBCONFIGS)
+        main_config = {k: v for k, v in config_dict.items() if k not in _consumed}
+
+        config = cls(**main_config, **sub_configs)
         
         if validate:
             config.validate()
@@ -591,8 +682,21 @@ class EvaluationConfig:
         
         config_dict = get_preset(preset_name)
         
-        # Apply overrides
+        # Apply overrides — dotted paths ("model.asr_device") take priority;
+        # underscore notation is kept for backward compatibility.
         for key, value in overrides.items():
+            if '.' in key:
+                # Dotted path: navigate / create nested dicts
+                segments = key.split('.')
+                d = config_dict
+                for seg in segments[:-1]:
+                    if not isinstance(d.get(seg), dict):
+                        d[seg] = {}
+                    d = d[seg]
+                d[segments[-1]] = value
+                continue
+
+            # Legacy underscore notation
             parts = key.split('_', 1)
             if len(parts) == 2 and parts[0] in ['cache', 'logging', 'model', 'data', 'judge', 'vector', 'device', 'tracking', 'service']:
                 section = parts[0]
@@ -626,7 +730,7 @@ class EvaluationConfig:
                         continue
                 else:
                     sub_key = parts[1]
-                
+
                 if section not in config_dict:
                     config_dict[section] = {}
                 config_dict[section][sub_key] = value
@@ -693,41 +797,21 @@ class EvaluationConfig:
 
     def _to_nested_dict(self) -> Dict[str, Any]:
         """Full nested dict that round-trips through ``from_dict``."""
-        from dataclasses import asdict
-
-        def _section(obj: Any) -> Dict[str, Any]:
-            d = asdict(obj)
-            # Convert enums to strings
-            for k, v in d.items():
-                if hasattr(v, 'value'):
-                    d[k] = v.value
-            return d
-
         result: Dict[str, Any] = {
             'experiment_name': self.experiment_name,
             'output_dir': self.output_dir,
             'checkpoint_enabled': self.checkpoint_enabled,
             'checkpoint_interval': self.checkpoint_interval,
+            'resume_from_checkpoint': self.resume_from_checkpoint,
             'parallel_enabled': self.parallel_enabled,
             'num_parallel_workers': self.num_parallel_workers,
-            'model': _section(self.model),
-            'data': _section(self.data),
-            'cache': _section(self.cache),
-            'logging': _section(self.logging),
-            'vector_db': _section(self.vector_db),
-            'llm': _section(self.llm),
-            'judge': _section(self.judge),
-            'tracking': _section(self.tracking),
-            'service_runtime': _section(self.service_runtime),
-            'audio_synthesis': _section(self.audio_synthesis),
-            'augmentation': _section(self.augmentation),
-            'answer_generation': _section(self.answer_generation),
-            'llm_server': _section(self.llm_server),
-            'query_optimization': _section(self.query_optimization),
-            'embedding_fusion': _section(self.embedding_fusion),
         }
+        for key in self._PLAIN_SUBCONFIGS:
+            result[key] = _serialize_dataclass(getattr(self, key))
+        result['llm'] = _serialize_dataclass(self.llm)
+        result['features'] = _serialize_dataclass(self.features)
         if self.device_pool is not None:
-            result['device_pool'] = _section(self.device_pool)
+            result['device_pool'] = _serialize_dataclass(self.device_pool)
         return result
 
 
@@ -826,14 +910,47 @@ def preflight_check(config: EvaluationConfig) -> List[str]:
                 "Set an audio embedding model or change pipeline_mode."
             )
     
+    # Warn about AdvancedRetrievalConfig stub fields — declared but not implemented
+    _UNIMPLEMENTED_RETRIEVAL_FEATURES = {
+        "multi_vector_enabled": "multi-vector retrieval",
+        "query_expansion_enabled": "query expansion",
+        "pseudo_feedback_enabled": "pseudo-relevance feedback",
+        "adaptive_fusion_enabled": "adaptive fusion",
+    }
+    for field, label in _UNIMPLEMENTED_RETRIEVAL_FEATURES.items():
+        if getattr(config.vector_db, field, False):
+            warnings.append(
+                f"vector_db.{field}=True but {label} is not implemented in any "
+                f"retrieval backend. The setting will have no effect."
+            )
+
+    import os
+
     # Check for judge API key if enabled
     if config.judge.enabled:
-        import os
         api_key = os.environ.get(config.judge.api_key_env)
         if not api_key:
             warnings.append(
                 f"LLM judge is enabled but {config.judge.api_key_env} environment variable "
                 f"is not set. Judge scoring will fail."
             )
-    
+
+    # Check for answer_generation API key if enabled
+    if config.answer_generation.enabled:
+        api_key = os.environ.get(config.answer_generation.api_key_env)
+        if not api_key:
+            warnings.append(
+                f"answer_generation is enabled but {config.answer_generation.api_key_env} "
+                f"environment variable is not set. Answer generation will fail."
+            )
+
+    # Check for query_optimization API key if enabled
+    if config.query_optimization.enabled:
+        api_key = os.environ.get(config.query_optimization.api_key_env)
+        if not api_key:
+            warnings.append(
+                f"query_optimization is enabled but {config.query_optimization.api_key_env} "
+                f"environment variable is not set. Query optimization will fail."
+            )
+
     return warnings

@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..errors import ConfigurationError
-from .core import AdmedQueryDataset, PubMedQADataset, QueryDataset, load_admed_voice_corpus, load_pubmed_qa_dataset
+from .core import (
+    AdmedQueryDataset,
+    PubMedQADataset,
+    QueryDataset,
+    load_admed_voice_corpus,
+    load_audio_file as _load_audio_waveform,
+    load_pubmed_qa_dataset,
+)
 from .loaders.factory import create_dataset_loader
 
 
@@ -129,6 +136,63 @@ def _load_corpus_entries(path: str) -> List[Dict[str, Any]]:
     return corpus
 
 
+class LazyAudioQueryDataset(QueryDataset):
+    """QueryDataset backed by BenchmarkQuestion + CorpusDocument lists.
+
+    Audio is loaded lazily on ``__getitem__`` via torchaudio, so large datasets
+    do not require loading all waveforms into memory at init time.  Used by the
+    descriptor registry as the implementation for ``pubmed_qa`` and any other
+    dataset whose questions have ``audio_path`` set.
+    """
+
+    def __init__(
+        self,
+        questions: List[Any],
+        corpus: List[Any],
+        *,
+        trace_limit: int = 0,
+    ) -> None:
+        self.questions: List[Any] = (
+            questions[:trace_limit] if trace_limit and trace_limit > 0 else questions
+        )
+        self._corpus: List[Any] = corpus
+
+    def __len__(self) -> int:
+        return len(self.questions)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        question = self.questions[idx]
+        if not question.audio_path:
+            raise ValueError(
+                f"Question {question.question_id} has no audio_path. "
+                "Enable audio_synthesis in config or provide pre-recorded audio."
+            )
+        waveform, sample_rate = _load_audio_waveform(question.audio_path)
+        return {
+            "audio_array": waveform.squeeze().numpy(),
+            "sampling_rate": sample_rate,
+            "transcription": question.question_text,
+            "question_text": question.question_text,
+            "question_id": question.question_id,
+            "groundtruth_doc_ids": question.groundtruth_doc_ids,
+            "relevance_grades": question.relevance_grades,
+            "language": question.language,
+            "metadata": question.metadata,
+        }
+
+    def get_corpus(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "doc_id": doc.doc_id,
+                "text": doc.text,
+                "title": doc.title,
+                "language": doc.language,
+                "metadata": doc.metadata,
+            }
+            for doc in self._corpus
+        ]
+
+
 def list_dataset_runtime_specs() -> List[DatasetRuntimeSpec]:
     return [
         DatasetRuntimeSpec(
@@ -207,62 +271,16 @@ def validate_dataset_runtime_config(config: Any, *, retrieval_required: bool = F
 
 
 def load_runtime_dataset(config: Any) -> QueryDataset:
-    spec = validate_dataset_runtime_config(config)
+    """Load the dataset described by *config* via the descriptor registry.
 
-    if spec.id == "prepared_pubmed":
-        dataset_dir = Path(config.data.prepared_dataset_dir)
-        if not dataset_dir.exists():
-            raise ConfigurationError(
-                f"Prepared dataset directory not found: {config.data.prepared_dataset_dir}"
-            )
-        questions_path = dataset_dir / "questions.json"
-        corpus_path = dataset_dir / "corpus.json"
-        if not questions_path.exists() or not corpus_path.exists():
-            raise ConfigurationError(
-                "Prepared dataset directory must contain questions.json and corpus.json"
-            )
-        return load_pubmed_qa_dataset(
-            str(questions_path),
-            str(corpus_path),
-            trace_limit=config.data.trace_limit,
-        )
-
-    if spec.id == "pubmed_paths":
-        questions_path = Path(config.data.questions_path)
-        if not questions_path.exists():
-            raise ConfigurationError(
-                f"Questions file not found: {config.data.questions_path}"
-            )
-        if not config.data.corpus_path:
-            raise ConfigurationError(
-                "Missing data.corpus_path for pubmed_qa dataset."
-            )
-        return PubMedQADataset(
-            questions_path=str(questions_path),
-            corpus_path=config.data.corpus_path,
-            trace_limit=config.data.trace_limit,
-        )
-
-    if spec.id == "admed_voice":
-        train_set, _ = load_admed_voice_corpus(test_size=config.data.test_size)
-        return AdmedQueryDataset(train_set)
-
-    loader = create_dataset_loader(
-        source=config.data.dataset_source,
-        audio_dir=config.data.audio_dir,
-        transcripts_file=config.data.transcripts_file,
-        huggingface_dataset=config.data.huggingface_dataset,
-        huggingface_subset=config.data.huggingface_subset,
-        huggingface_split=config.data.huggingface_split,
-        column_mapping=config.data.column_mapping,
-        max_samples=config.data.max_samples,
-        default_language=config.data.default_language,
-        sample_rate=config.data.sample_rate,
-    )
-    samples = loader.load()
-    corpus_entries = _load_corpus_entries(config.data.corpus_path) if config.data.corpus_path else []
-    return AudioSamplesQueryDataset(
-        samples,
-        trace_limit=config.data.trace_limit,
-        corpus_entries=corpus_entries,
-    )
+    Delegates to :func:`~evaluator.datasets.descriptor.resolve_dataset_descriptor`
+    so that custom datasets registered via
+    :func:`~evaluator.datasets.descriptor.register_dataset` are automatically
+    supported without any changes here.
+    """
+    from .descriptor import resolve_dataset_descriptor
+    descriptor = resolve_dataset_descriptor(config.data)
+    errors = descriptor.validate_data_config(config.data)
+    if errors:
+        raise ConfigurationError("; ".join(errors))
+    return descriptor.load(config.data)

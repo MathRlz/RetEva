@@ -7,11 +7,12 @@ This module implements various query optimization techniques including:
 - Multi-query generation: Creating query variations
 """
 
+import json
 from typing import List, Dict, Any, Optional, Tuple
 
 from ....logging_config import get_logger
 from ....config import QueryOptimizationConfig
-from ....llm.client import LLMClient
+from ....llm.client import LLMClient, _cache as _llm_cache, _cache_key
 from .prompts import (
     get_rewrite_prompt,
     get_hyde_prompt,
@@ -24,6 +25,15 @@ logger = get_logger(__name__)
 
 def _make_client(config: QueryOptimizationConfig) -> LLMClient:
     return LLMClient(config.to_llm_config())
+
+
+def _hash_request(system_prompt: str, user_prompt: str, model: str, temperature: float) -> str:
+    """Cache key for an LLM request, matching the shared LLM client cache."""
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    return _cache_key(messages, model, temperature)
 
 
 def _call_llm(
@@ -309,19 +319,23 @@ def combine_retrieval_results(
         # Weighted combination
         if weights is None:
             weights = [1.0 / len(results_list)] * len(results_list)
-        
-        combined_scores: Dict[Any, float] = {}
-        
+
+        combined_scores: Dict[str, float] = {}
+        payload_lookup: Dict[str, Any] = {}
+
         for results, weight in zip(results_list, weights):
             for payload, score in results:
-                # Use hash of str representation as key
+                # Key by str only for de-dup; the original payload is preserved.
                 key = str(payload)
-                if key not in combined_scores:
-                    combined_scores[key] = 0.0
-                combined_scores[key] += score * weight
-        
-        # Convert back and sort
-        combined = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
+                combined_scores[key] = combined_scores.get(key, 0.0) + score * weight
+                payload_lookup.setdefault(key, payload)
+
+        # Sort by combined score, returning the original payloads (not the keys).
+        combined = sorted(
+            ((payload_lookup[key], total) for key, total in combined_scores.items()),
+            key=lambda x: x[1],
+            reverse=True,
+        )
         return combined[:k]
     
     elif strategy == "union":
@@ -342,22 +356,22 @@ def combine_retrieval_results(
         # Intersection: only documents appearing in all queries
         # Track payloads and their scores across queries
         payload_scores: Dict[str, List[float]] = {}
-        
+        payload_lookup: Dict[str, Any] = {}
+
         for results in results_list:
             for payload, score in results:
-                key = str(payload)
-                if key not in payload_scores:
-                    payload_scores[key] = []
-                payload_scores[key].append(score)
-        
-        # Keep only payloads that appear in all queries
+                key = str(payload)  # de-dup key only
+                payload_scores.setdefault(key, []).append(score)
+                payload_lookup.setdefault(key, payload)
+
+        # Keep only payloads that appear in all queries, returning the originals.
         n_queries = len(results_list)
         intersection = [
-            (key, sum(scores) / len(scores))  # Average score
+            (payload_lookup[key], sum(scores) / len(scores))  # average score
             for key, scores in payload_scores.items()
             if len(scores) == n_queries
         ]
-        
+
         # Sort by average score
         combined = sorted(intersection, key=lambda x: x[1], reverse=True)
         return combined[:k]
