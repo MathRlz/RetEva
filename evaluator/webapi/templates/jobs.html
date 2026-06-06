@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="panel">
+  <h2>Jobs</h2>
+  <div id="jobs-list" hx-get="/ui/jobs/list" hx-trigger="load, every 3s" hx-swap="innerHTML">
+    Loading…
+  </div>
+</div>
+<div id="job-detail"></div>
+{% endblock %}

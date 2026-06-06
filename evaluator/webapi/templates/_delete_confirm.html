@@ -1,0 +1,17 @@
+<div class="panel" style="margin-top:12px; border-color:#7f1d1d">
+  <form>
+    <p>Delete run <strong>{{ run_id }}</strong>? This cannot be undone.</p>
+    <label class="field">
+      <span><input type="checkbox" name="delete_cache"> Delete cache as well (vector-DB index for this run)</span>
+    </label>
+    <div class="row">
+      <button hx-post="/ui/runs/{{ run_id }}/delete" hx-include="#lb-controls"
+              hx-target="#leaderboard" hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('lb-confirm').innerHTML=''">
+        Confirm delete
+      </button>
+      <button type="button" class="secondary"
+              onclick="document.getElementById('lb-confirm').innerHTML=''">Cancel</button>
+    </div>
+  </form>
+</div>

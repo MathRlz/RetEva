@@ -3,60 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, Optional, Protocol, TypeVar
+from typing import Any, Callable, Generic, Optional, TypeVar
 import gc
 import logging
 import time
 
 import torch
-
-
-class ModelService(Protocol):
-    """Common lifecycle contract for model-backed services."""
-
-    def start(self) -> None:
-        """Initialize underlying model resource."""
-
-    def stop(self) -> None:
-        """Release underlying model resource."""
-
-    def health(self) -> bool:
-        """Return True when service has active model instance."""
-
-    def move_to_device(self, device: str) -> None:
-        """Move active model instance to another device."""
-
-
-class ASRService(ModelService, Protocol):
-    """Service contract for ASR model operations."""
-
-    def transcribe(self, *args: Any, **kwargs: Any):
-        ...
-
-    def transcribe_from_features(self, *args: Any, **kwargs: Any):
-        ...
-
-
-class TextEmbeddingService(ModelService, Protocol):
-    """Service contract for text embedding operations."""
-
-    def encode(self, *args: Any, **kwargs: Any):
-        ...
-
-
-class AudioEmbeddingService(ModelService, Protocol):
-    """Service contract for audio embedding operations."""
-
-    def encode_audio(self, *args: Any, **kwargs: Any):
-        ...
-
-
-class TTSService(ModelService, Protocol):
-    """Service contract for text-to-speech operations."""
-
-    def synthesize(self, *args: Any, **kwargs: Any):
-        ...
-
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -111,42 +63,14 @@ class FactoryModelService(Generic[T]):
             logger.info("service.move label=%s device=%s", self.label, device)
 
 
-class ASRModelService(FactoryModelService[Any]):
-    """Typed adapter for ASR model services."""
-
-    def transcribe(self, *args: Any, **kwargs: Any):
-        return self.get().transcribe(*args, **kwargs)
-
-    def transcribe_from_features(self, *args: Any, **kwargs: Any):
-        return self.get().transcribe_from_features(*args, **kwargs)
-
-
-class TextEmbeddingModelService(FactoryModelService[Any]):
-    """Typed adapter for text embedding model services."""
-
-    def encode(self, *args: Any, **kwargs: Any):
-        return self.get().encode(*args, **kwargs)
-
-
-class AudioEmbeddingModelService(FactoryModelService[Any]):
-    """Typed adapter for audio embedding model services."""
-
-    def encode_audio(self, *args: Any, **kwargs: Any):
-        return self.get().encode_audio(*args, **kwargs)
-
-
-class TTSModelService(FactoryModelService[Any]):
-    """Typed adapter for TTS model services."""
-
-    def synthesize(self, *args: Any, **kwargs: Any):
-        return self.get().synthesize(*args, **kwargs)
-
-
 class LLMServerService:
     """Lifecycle wrapper for local LLM server backends."""
 
     def __init__(
-        self, factory: Callable[[], Any], label: str = "llm_server", auto_start: bool = True
+        self,
+        factory: Callable[[], Any],
+        label: str = "llm_server",
+        auto_start: bool = True,
     ) -> None:
         self.factory = factory
         self.label = label
@@ -174,7 +98,9 @@ class LLMServerService:
         self._owns_process = True
         health_after = self._instance.health_check()
         if not health_after.is_healthy:
-            raise RuntimeError(f"Local LLM server unhealthy after start for {self.label}")
+            raise RuntimeError(
+                f"Local LLM server unhealthy after start for {self.label}"
+            )
         elapsed = time.perf_counter() - t0
         logger.info("service.start label=%s load_time=%.2fs", self.label, elapsed)
 

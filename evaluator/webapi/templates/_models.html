@@ -19,6 +19,27 @@
   </select>
 </label>
 {% endif %}
+{% for p in sec.params %}
+<label class="field">
+  <span>{{ sec.family }} · {{ p.name }}</span>
+  {% if p.choices %}
+  <select name="{{ p.field }}">
+    <option value="">— {{ p.default }} —</option>
+    {% for c in p.choices %}<option value="{{ c }}" {{ 'selected' if c|string == p.value else '' }}>{{ c }}</option>{% endfor %}
+  </select>
+  {% elif p.is_bool %}
+  <input type="checkbox" name="{{ p.field }}" {{ 'checked' if p.value == 'on' else '' }}>
+  {% else %}
+  <input type="text" name="{{ p.field }}" value="{{ p.value }}" placeholder="default: {{ p.default }}">
+  {% endif %}
+</label>
+{% endfor %}
+{% if sec.selected_type %}
+<label class="field">
+  <span>{{ sec.family }} · extra args</span>
+  <textarea name="{{ sec.extra_field }}" rows="2" placeholder="key=value per line (registry-undeclared args)"></textarea>
+</label>
+{% endif %}
 {% else %}
 <p class="muted">No models required for this mode.</p>
 {% endfor %}

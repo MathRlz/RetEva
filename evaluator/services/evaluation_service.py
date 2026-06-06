@@ -244,8 +244,61 @@ def _configure_local_llm_runtime(
         config.query_optimization.llm_api_base = local_api_url
 
 
+def _run_core(
+    config: EvaluationConfig,
+    *,
+    cache_manager,
+    service_provider=None,
+    progress_callback=None,
+    load_info: Optional[Dict[str, Any]] = None,
+):
+    """Build pipelines, load the dataset (+corpus/synthesis), and evaluate.
+
+    The single execution core shared by the public API (with a provider), the CLI, and
+    the webapi. Returns ``(metrics, dataset)``. The caller owns provider lifecycle,
+    logging, metadata, and leaderboard ingest.
+    """
+    if load_info is None:
+        load_info = {}
+    logger = get_logger(__name__)
+
+    # Prepare the dataset (load + TTS-synthesize missing query audio) BEFORE building the
+    # model pipelines, so a TTS model is loaded and fully offloaded before the ASR/embedding
+    # models are constructed — they are never co-resident (which avoids the native crash a
+    # TTS runtime can inflict on a subsequently-built embedder).
+    dataset = prepare_dataset(
+        config,
+        retrieval_required=_mode_needs_retrieval(config.model.pipeline_mode),
+        cache_manager=cache_manager,
+    )
+
+    bundle = create_pipeline_from_config(config, cache_manager, service_provider=service_provider)
+    _apply_startup_policy(config, bundle, logger)
+    if service_provider is not None:
+        _configure_local_llm_runtime(config, service_provider, logger)
+
+    build_corpus_index(
+        config,
+        dataset,
+        bundle.retrieval_pipeline,
+        bundle.text_embedding_pipeline,
+        audio_emb_pipeline=bundle.audio_embedding_pipeline,
+        cache_manager=cache_manager,
+        load_info=load_info,
+    )
+    tracker = _create_tracker(config)
+    metrics = _evaluate_metrics(
+        config, dataset, bundle, cache_manager, tracker, progress_callback=progress_callback
+    )
+    return metrics, dataset
+
+
 def run_evaluation(config: EvaluationConfig, progress_callback=None) -> EvaluationResults:
-    """Run complete evaluation lifecycle for a validated config."""
+    """Run complete evaluation lifecycle for a validated config.
+
+    Thin wrapper over :func:`_run_core`: provider lifecycle, logging, metadata, and
+    leaderboard ingest.
+    """
     start_time = datetime.now()
     service_provider = ModelServiceProvider()
 
@@ -260,8 +313,6 @@ def run_evaluation(config: EvaluationConfig, progress_callback=None) -> Evaluati
         except Exception as e:
             raise RuntimeError(f"Failed to setup logging: {e}") from e
 
-        tracker = _create_tracker(config)
-
         try:
             cache_manager = CacheManager(
                 cache_dir=config.cache.cache_dir,
@@ -271,35 +322,17 @@ def run_evaluation(config: EvaluationConfig, progress_callback=None) -> Evaluati
         except Exception as e:
             raise RuntimeError(f"Failed to create cache manager: {e}") from e
 
-        try:
-            bundle = create_pipeline_from_config(
-                config,
-                cache_manager,
-                service_provider=service_provider,
-            )
-            logger = get_logger(__name__)
-            _apply_startup_policy(config, bundle, logger)
-            _configure_local_llm_runtime(config, service_provider, logger)
-        except Exception as e:
-            raise RuntimeError(f"Failed to create pipelines: {e}") from e
-
         load_info: Dict[str, Any] = {}
         cache_stats_before = cache_manager.get_cache_stats() if cache_manager.enabled else {}
 
         try:
-            dataset = load_dataset(
+            metrics, dataset = _run_core(
                 config,
-                bundle.retrieval_pipeline,
-                bundle.text_embedding_pipeline,
-                audio_emb_pipeline=bundle.audio_embedding_pipeline,
                 cache_manager=cache_manager,
+                service_provider=service_provider,
+                progress_callback=progress_callback,
                 load_info=load_info,
             )
-        except Exception as e:
-            raise RuntimeError(f"Failed to load dataset: {e}") from e
-
-        try:
-            metrics = _evaluate_metrics(config, dataset, bundle, cache_manager, tracker, progress_callback=progress_callback)
         except Exception as e:
             raise RuntimeError(f"Evaluation failed: {e}") from e
 
@@ -534,6 +567,52 @@ def _build_comparison_bundle(
     }
 
 
+def _mode_needs_retrieval(mode) -> bool:
+    """Every pipeline mode retrieves except ``asr_only``."""
+    return str(mode) != "asr_only"
+
+
+def prepare_dataset(
+    config: EvaluationConfig, *, retrieval_required: bool, cache_manager: CacheManager | None = None
+):
+    """Validate + load the dataset and synthesize any missing query audio.
+
+    Runs before the model pipelines are built so a TTS model is loaded and offloaded
+    before the ASR/embedding models are constructed (no co-resident native runtimes).
+    Synthesized audio is cached via ``cache_manager`` (so ``--no-cache``/``--clear-cache``
+    apply) when supplied.
+    """
+    logger = get_logger(__name__)
+    validate_dataset_runtime_config(config, retrieval_required=retrieval_required)
+    dataset = load_runtime_dataset(config)
+    _synthesize_query_audio(config, dataset, logger, cache_manager)
+    return dataset
+
+
+def _synthesize_query_audio(config: EvaluationConfig, dataset, logger, cache_manager=None) -> None:
+    """Synthesize audio for questions lacking ``audio_path`` (when enabled or needed)."""
+    questions_missing_audio = (
+        hasattr(dataset, "questions")
+        and dataset.questions
+        and any(not getattr(q, "audio_path", None) for q in dataset.questions)
+    )
+    if not (config.audio_synthesis.enabled or questions_missing_audio):
+        return
+    if questions_missing_audio and not config.audio_synthesis.enabled:
+        logger.info("Audio missing for some questions — auto-synthesizing with TTS")
+    else:
+        logger.info("Audio synthesis enabled - checking for questions needing synthesis")
+    if not (hasattr(dataset, "questions") and dataset.questions):
+        logger.warning("Dataset does not have 'questions' attribute, TTS synthesis skipped")
+        return
+    from ..pipeline.audio.prepare import synthesize_missing_query_audio
+    logger.info("STAGE prepare_dataset: TTS synthesis START (provider=%s)", config.audio_synthesis.provider)
+    synthesize_missing_query_audio(
+        dataset.questions, config.audio_synthesis, log=logger, cache_manager=cache_manager
+    )
+    logger.info("STAGE prepare_dataset: TTS synthesis DONE")
+
+
 def load_dataset(
     config: EvaluationConfig,
     retrieval_pipeline=None,
@@ -542,32 +621,30 @@ def load_dataset(
     cache_manager: CacheManager | None = None,
     load_info: Dict[str, Any] | None = None,
 ):
-    """Load dataset and build retrieval index if needed."""
+    """Back-compat: prepare the dataset (load + synth) then build the corpus index."""
+    dataset = prepare_dataset(config, retrieval_required=(retrieval_pipeline is not None))
+    return build_corpus_index(
+        config, dataset, retrieval_pipeline, text_emb_pipeline,
+        audio_emb_pipeline=audio_emb_pipeline, cache_manager=cache_manager, load_info=load_info,
+    )
+
+
+def build_corpus_index(
+    config: EvaluationConfig,
+    dataset,
+    retrieval_pipeline=None,
+    text_emb_pipeline=None,
+    audio_emb_pipeline=None,
+    cache_manager: CacheManager | None = None,
+    load_info: Dict[str, Any] | None = None,
+):
+    """Embed the corpus and build the retrieval index when the mode retrieves.
+
+    Runs after the model pipelines are built (TTS already offloaded).
+    """
     from ..pipeline.audio.synthesis import AudioSynthesizer
 
     logger = get_logger(__name__)
-
-    validate_dataset_runtime_config(
-        config,
-        retrieval_required=(retrieval_pipeline is not None),
-    )
-    dataset = load_runtime_dataset(config)
-
-    questions_missing_audio = (
-        hasattr(dataset, "questions")
-        and dataset.questions
-        and any(not getattr(q, "audio_path", None) for q in dataset.questions)
-    )
-    if config.audio_synthesis.enabled or questions_missing_audio:
-        if questions_missing_audio and not config.audio_synthesis.enabled:
-            logger.info("Audio missing for some questions — auto-synthesizing with TTS")
-        else:
-            logger.info("Audio synthesis enabled - checking for questions needing synthesis")
-        if hasattr(dataset, "questions") and dataset.questions:
-            from ..pipeline.audio.prepare import synthesize_missing_query_audio
-            synthesize_missing_query_audio(dataset.questions, config.audio_synthesis, log=logger)
-        else:
-            logger.warning("Dataset does not have 'questions' attribute, TTS synthesis skipped")
 
     if retrieval_pipeline is not None and hasattr(dataset, "get_corpus"):
         corpus = dataset.get_corpus()
@@ -605,7 +682,9 @@ def load_dataset(
                     load_info["vector_cache_key"] = vector_cache_key
                     load_info["corpus_size"] = len(corpus)
 
+            logger.info("STAGE load_dataset: corpus embedding START (%d docs)", len(corpus_texts))
             corpus_embeddings = text_emb_pipeline.process_batch(corpus_texts, show_progress=True, desc="Embedding corpus docs")
+            logger.info("STAGE load_dataset: corpus embedding DONE; building index")
             vectors = np.array(corpus_embeddings)
             retrieval_pipeline.build_index(embeddings=vectors, metadata=corpus)
             if can_use_vector_cache and vector_cache_key:

@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict
 from fastapi import APIRouter, HTTPException
 
 from evaluator.services import ModelServiceProvider
+from evaluator.webapi.utils import with_provider
 
 
 def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) -> APIRouter:
@@ -13,11 +14,7 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
     @router.get("/api/models", summary="List available models")
     def list_models() -> Dict[str, Any]:
         """Return available models grouped by family (asr, text_embedding, etc.)."""
-        provider = provider_factory()
-        try:
-            return provider.list_available_models()
-        finally:
-            provider.shutdown()
+        return with_provider(provider_factory, lambda p: p.list_available_models())
 
     @router.get("/api/models/{family}/{model_type}/params")
     def model_params(family: str, model_type: str) -> Dict[str, Any]:

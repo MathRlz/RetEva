@@ -14,6 +14,34 @@ from evaluator.webapi.schemas import ErrorResponse, EvaluationJobRequest, JobSub
 from evaluator.webapi.utils import artifact_listing
 
 
+def _require_job(jobs: JobManager, job_id: str):
+    """Fetch a job record or raise HTTP 404."""
+    try:
+        return jobs.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+
+
+# Non-terminal/terminal statuses that have no result to return -> (code, detail).
+# A None detail means "use the job's own error message".
+_NO_RESULT_STATUS = {
+    "queued": (409, "Job still running"),
+    "running": (409, "Job still running"),
+    "failed": (500, None),
+    "cancelled": (409, "Job cancelled"),
+}
+
+
+def _reject_non_result_status(job) -> None:
+    """Raise the appropriate HTTPException when a job has no usable result."""
+    mapped = _NO_RESULT_STATUS.get(job.status)
+    if mapped is not None:
+        code, detail = mapped
+        raise HTTPException(status_code=code, detail=detail or job.error or "Job failed")
+    if job.result is None:
+        raise HTTPException(status_code=500, detail="Job completed but produced no result")
+
+
 def build_jobs_router(jobs: JobManager) -> APIRouter:
     router = APIRouter()
 
@@ -59,11 +87,7 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
     )
     def job_status(job_id: str) -> Dict[str, Any]:
         """Return current status of a job. Poll this endpoint until status is terminal."""
-        try:
-            job = jobs.get(job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
-        return job.to_dict()
+        return _require_job(jobs, job_id).to_dict()
 
     @router.post(
         "/api/jobs/{job_id}/cancel",
@@ -72,12 +96,9 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
     )
     def cancel_job(job_id: str) -> Dict[str, Any]:
         """Request cancellation of a running job."""
-        try:
-            accepted = jobs.request_cancel(job_id)
-            status = jobs.get(job_id).status
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
-        return {"job_id": job_id, "accepted": accepted, "status": status}
+        _require_job(jobs, job_id)
+        accepted = jobs.request_cancel(job_id)
+        return {"job_id": job_id, "accepted": accepted, "status": jobs.get(job_id).status}
 
     @router.get(
         "/api/jobs/{job_id}/result",
@@ -86,18 +107,8 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
     )
     def job_result(job_id: str) -> Dict[str, Any]:
         """Return evaluation result for a completed job. 409 if still running."""
-        try:
-            job = jobs.get(job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
-        if job.status in {"queued", "running"}:
-            raise HTTPException(status_code=409, detail="Job still running")
-        if job.status == "failed":
-            raise HTTPException(status_code=500, detail=job.error or "Job failed")
-        if job.status == "cancelled":
-            raise HTTPException(status_code=409, detail="Job cancelled")
-        if job.result is None:
-            raise HTTPException(status_code=500, detail="Job completed but produced no result")
+        job = _require_job(jobs, job_id)
+        _reject_non_result_status(job)
         return {"job_id": job_id, "result": job.result}
 
     @router.get(
@@ -107,10 +118,7 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
     )
     def job_metadata(job_id: str) -> Dict[str, Any]:
         """Return config snapshot and metadata for a job."""
-        try:
-            job = jobs.get(job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+        job = _require_job(jobs, job_id)
 
         result_metadata = {}
         if isinstance(job.result, dict):
@@ -121,12 +129,19 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
             "metadata": result_metadata,
         }
 
+    @router.get(
+        "/api/jobs/{job_id}/log",
+        summary="Captured console output for a job",
+        responses={404: {"model": ErrorResponse}},
+    )
+    def job_log(job_id: str, tail: int = 0) -> Dict[str, Any]:
+        """Return the subprocess console log (optionally only the last ``tail`` lines)."""
+        _require_job(jobs, job_id)
+        return {"job_id": job_id, "log": jobs.get_log(job_id, tail=tail or None)}
+
     @router.get("/api/jobs/{job_id}/artifacts")
     def job_artifacts(job_id: str) -> Dict[str, Any]:
-        try:
-            job = jobs.get(job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+        job = _require_job(jobs, job_id)
 
         output_dir: Optional[str] = None
         if job.config_snapshot is not None:
@@ -137,10 +152,7 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
     @router.get("/api/jobs/{job_id}/progress", summary="SSE progress stream")
     def job_progress_stream(job_id: str, poll_interval: float = 0.5):
         """Stream job progress events as Server-Sent Events until job is terminal."""
-        try:
-            jobs.get(job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+        _require_job(jobs, job_id)
 
         def _generate():
             sent = 0

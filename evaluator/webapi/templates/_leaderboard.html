@@ -15,19 +15,27 @@
   })();
 </script>
 <table>
-  <thead><tr><th>Run</th><th>Experiment</th><th>Dataset</th><th>Mode</th><th>{{ metric }}</th></tr></thead>
+  <thead><tr><th>Run</th><th>Experiment</th><th>Dataset</th><th>Mode</th><th>{{ metric }}</th><th></th></tr></thead>
   <tbody>
     {% for r in rows %}
-    <tr>
+    <tr class="clickable"
+        hx-get="/ui/runs/{{ r.run_id }}?output_dir={{ output_dir|default('evaluation_results') }}"
+        hx-target="#run-detail" hx-trigger="click">
       <td>{{ r.run_id }}</td>
       <td>{{ r.experiment_name }}</td>
       <td>{{ r.dataset_name }}</td>
       <td>{{ r.pipeline_mode }}</td>
       <td>{{ '%.4f'|format(r.metric_value) if r.metric_value is number else r.metric_value }}</td>
+      <td>
+        <button class="secondary" title="Delete run" onclick="event.stopPropagation()"
+                hx-get="/ui/runs/{{ r.run_id }}/confirm-delete?output_dir={{ output_dir|default('evaluation_results') }}"
+                hx-target="#lb-confirm" hx-swap="innerHTML">✕</button>
+      </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+<p class="muted">Click a row for run details.</p>
 {% else %}
 <p class="muted">No leaderboard rows for metric "{{ metric }}" yet. Run an experiment first.</p>
 {% endif %}

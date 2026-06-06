@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
@@ -25,6 +26,30 @@ def _wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
+def build_synthesizer(
+    provider: str,
+    voice: str,
+    language: str,
+    sample_rate: int,
+    *,
+    output_dir: Optional[str] = None,
+    skip_cache: bool = True,
+):
+    """Construct an AudioSynthesizer for a preview request (shared by API + UI)."""
+    from evaluator.pipeline.audio.synthesis import AudioSynthesizer
+
+    config = AudioSynthesisConfig(
+        enabled=True,
+        provider=provider,
+        voice=voice or AudioSynthesisConfig.voice,
+        language=language,
+        sample_rate=sample_rate,
+        skip_cache=skip_cache,
+        output_dir=output_dir,
+    )
+    return AudioSynthesizer(config)
+
+
 def build_tts_router() -> APIRouter:
     router = APIRouter()
 
@@ -38,19 +63,10 @@ def build_tts_router() -> APIRouter:
         if not req.text or not req.text.strip():
             raise HTTPException(status_code=400, detail="text must not be empty")
 
-        from evaluator.pipeline.audio.synthesis import AudioSynthesizer
-
-        synth_config = AudioSynthesisConfig(
-            enabled=True,
-            provider=req.provider,
-            voice=req.voice or AudioSynthesisConfig.voice,
-            language=req.language,
-            sample_rate=req.sample_rate,
-            skip_cache=True,
-            output_dir=None,
-        )
         try:
-            synthesizer = AudioSynthesizer(synth_config)
+            synthesizer = build_synthesizer(
+                req.provider, req.voice, req.language, req.sample_rate
+            )
             audio = synthesizer.synthesize(req.text)
         except ValueError as exc:  # unknown provider
             raise HTTPException(status_code=400, detail=str(exc)) from exc

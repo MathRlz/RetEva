@@ -13,14 +13,9 @@ from ..models import (
 )
 from ..models.llm import create_server as factory_create_llm_server
 from .model_services import (
-    ASRModelService,
-    AudioEmbeddingModelService,
     FactoryModelService,
     LLMServerService,
-    TTSModelService,
-    TextEmbeddingModelService,
 )
-
 
 ASRKey = Tuple[str, Optional[str], Optional[str], str]
 TextKey = Tuple[str, Optional[str], str]
@@ -35,11 +30,11 @@ class ModelServiceProvider:
     """Creates, reuses, and tears down model services for one runtime."""
 
     def __init__(self) -> None:
-        self._asr_services: Dict[ASRKey, ASRModelService] = {}
-        self._text_services: Dict[TextKey, TextEmbeddingModelService] = {}
-        self._audio_services: Dict[AudioKey, AudioEmbeddingModelService] = {}
+        self._asr_services: Dict[ASRKey, FactoryModelService] = {}
+        self._text_services: Dict[TextKey, FactoryModelService] = {}
+        self._audio_services: Dict[AudioKey, FactoryModelService] = {}
         self._reranker_services: Dict[RerankerKey, FactoryModelService[Any]] = {}
-        self._tts_services: Dict[TTSKey, TTSModelService] = {}
+        self._tts_services: Dict[TTSKey, FactoryModelService] = {}
         self._llm_server_services: Dict[LLMServerKey, LLMServerService] = {}
 
     def get_asr_model(
@@ -52,7 +47,7 @@ class ModelServiceProvider:
         key: ASRKey = (model_type, model_name, adapter_path, device)
         service = self._asr_services.get(key)
         if service is None:
-            service = ASRModelService(
+            service = FactoryModelService(
                 lambda: factory_create_asr_model(
                     model_type=model_type,
                     model_name=model_name,
@@ -73,7 +68,7 @@ class ModelServiceProvider:
         key: TextKey = (model_type, model_name, device)
         service = self._text_services.get(key)
         if service is None:
-            service = TextEmbeddingModelService(
+            service = FactoryModelService(
                 lambda: factory_create_text_embedding_model(
                     model_type=model_type,
                     model_name=model_name,
@@ -96,7 +91,7 @@ class ModelServiceProvider:
         key: AudioKey = (model_type, model_name, model_path, emb_dim, dropout, device)
         service = self._audio_services.get(key)
         if service is None:
-            service = AudioEmbeddingModelService(
+            service = FactoryModelService(
                 lambda: factory_create_audio_embedding_model(
                     model_type=model_type,
                     model_name=model_name,
@@ -144,7 +139,9 @@ class ModelServiceProvider:
     ):
         old_key: ASRKey = (model_type, model_name, adapter_path, current_device)
         new_key: ASRKey = (model_type, model_name, adapter_path, target_device)
-        return self._move_service(self._asr_services, old_key, new_key, target_device, "ASR")
+        return self._move_service(
+            self._asr_services, old_key, new_key, target_device, "ASR"
+        )
 
     def move_text_embedding_model(
         self,
@@ -173,8 +170,22 @@ class ModelServiceProvider:
         current_device: str,
         target_device: str,
     ):
-        old_key: AudioKey = (model_type, model_name, model_path, emb_dim, dropout, current_device)
-        new_key: AudioKey = (model_type, model_name, model_path, emb_dim, dropout, target_device)
+        old_key: AudioKey = (
+            model_type,
+            model_name,
+            model_path,
+            emb_dim,
+            dropout,
+            current_device,
+        )
+        new_key: AudioKey = (
+            model_type,
+            model_name,
+            model_path,
+            emb_dim,
+            dropout,
+            target_device,
+        )
         return self._move_service(
             self._audio_services,
             old_key,
@@ -194,8 +205,20 @@ class ModelServiceProvider:
     ):
         if target_device is None:
             raise ValueError("target_device must be provided to move reranker.")
-        old_key: RerankerKey = (model_type, model_name, current_device, batch_size, max_length)
-        new_key: RerankerKey = (model_type, model_name, target_device, batch_size, max_length)
+        old_key: RerankerKey = (
+            model_type,
+            model_name,
+            current_device,
+            batch_size,
+            max_length,
+        )
+        new_key: RerankerKey = (
+            model_type,
+            model_name,
+            target_device,
+            batch_size,
+            max_length,
+        )
         return self._move_service(
             self._reranker_services,
             old_key,
@@ -292,7 +315,8 @@ class ModelServiceProvider:
                 entry: Dict[str, Any] = {
                     "type": model_type,
                     "name": registry.get_default_name(model_type) or model_type,
-                    "capabilities": meta.pop("capabilities", None) or default_capabilities.get(family, []),
+                    "capabilities": meta.pop("capabilities", None)
+                    or default_capabilities.get(family, []),
                     "requires_path": bool(meta.pop("requires_path", False)),
                     "default_device_hint": "cuda",
                 }
@@ -316,7 +340,7 @@ class ModelServiceProvider:
         )
         service = self._tts_services.get(key)
         if service is None:
-            service = TTSModelService(
+            service = FactoryModelService(
                 lambda: self._create_tts_backend(config),
                 label=f"tts:{key[0]}",
             )

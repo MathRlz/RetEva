@@ -2,10 +2,24 @@ from abc import ABC, abstractmethod
 from typing import List, Any, Tuple, Union
 from pathlib import Path
 import numpy as np
-import faiss
 import json
 
 from ..constants import MIN_NORM_THRESHOLD
+
+# faiss is imported lazily: loading it eagerly (on any `import evaluator.storage`)
+# pulls faiss + its OpenMP runtime into every process, which clashes with torch's
+# OpenMP and segfaults torch ops — even for runs that use the in-memory store and
+# never touch faiss. Constructed only when a Faiss store is actually built.
+faiss = None  # set by _ensure_faiss()
+
+
+def _ensure_faiss():
+    """Import faiss on first use and bind it to the module global."""
+    global faiss
+    if faiss is None:
+        import faiss as _faiss
+        faiss = _faiss
+    return faiss
 
 class VectorStore(ABC):
     @abstractmethod
@@ -101,6 +115,7 @@ class InMemoryVectorStore(VectorStore):
 
 class FaissVectorStore(VectorStore):
     def __init__(self, dim: int) -> None:
+        _ensure_faiss()
         self.dim = dim
         self.index = faiss.IndexFlatIP(dim)
         self.payloads: List[Any] = []
@@ -147,6 +162,7 @@ class FaissVectorStore(VectorStore):
     
 class FaissGpuVectorStore(VectorStore):
     def __init__(self, dim: int, gpu_id: int = 0) -> None:
+        _ensure_faiss()
         self.dim = dim
         self.gpu_id = gpu_id
         self.res = faiss.StandardGpuResources()
@@ -222,6 +238,7 @@ class FaissGpuVectorStore(VectorStore):
 
 
 def build_gpu_ivf(vectors: np.ndarray, dim: int, nlist: int = 1024, gpu_id: int = 0):
+    _ensure_faiss()
     res = faiss.StandardGpuResources()
 
     quantizer = faiss.IndexFlatIP(dim)

@@ -1,0 +1,62 @@
+# Query Optimization: Iterative Rewriting Configuration
+# Use this for progressive query refinement with LLM
+
+experiment_name: "query_rewrite_experiment"
+
+dataset:
+  name: "pubmed_qa"
+  path: "data/pubmed_qa"
+
+vector_db:
+  type: "chroma"
+  collection_name: "pubmed_docs"
+  retrieval_mode: "dense"
+  top_k: 10
+
+# Query Optimization with Iterative Rewriting
+query_optimization:
+  enabled: true
+  method: "rewrite"
+  
+  # Number of refinement iterations
+  num_iterations: 2
+  
+  # LLM Configuration
+  llm:
+    provider: "openai"
+    model: "gpt-3.5-turbo"
+    api_key: "${OPENAI_API_KEY}"
+    temperature: 0.7
+    max_tokens: 256
+    timeout: 30
+  
+  # Custom rewrite prompt for medical domain
+  rewrite_prompt: |
+    You are a medical information specialist. Given the following query and retrieved context, 
+    rewrite the query to use precise medical terminology and improve search accuracy.
+    
+    Original Query: "{query}"
+    
+    Retrieved Context:
+    {context}
+    
+    Rewritten Query (concise, medical terminology):
+  
+  # Enable caching to reduce API costs
+  cache_llm_calls: true
+  cache_ttl: 86400  # 24 hours
+
+evaluation:
+  metrics:
+    - "mrr"
+    - "ndcg"
+    - "map"
+
+output:
+  results_dir: "evaluation_results/query_rewrite"
+  save_json: true
+  generate_plots: true
+
+logging:
+  level: "INFO"
+  show_progress_bars: true

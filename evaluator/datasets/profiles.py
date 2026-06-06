@@ -25,26 +25,10 @@ class DatasetCapabilityProfile:
         return mode in set(self.recommended_pipeline_modes)
 
 
-_PROFILE_REGISTRY: Dict[str, DatasetCapabilityProfile] = {
-    "admed_voice": DatasetCapabilityProfile(
-        name="admed_voice",
-        dataset_type=DatasetType.AUDIO_TRANSCRIPTION,
-        requires_audio=True,
-        requires_text=False,
-        supports_generation=False,
-        evaluation_mode="transcription",
-        recommended_pipeline_modes=("asr_only", "asr_text_retrieval"),
-    ),
-    "pubmed_qa": DatasetCapabilityProfile(
-        name="pubmed_qa",
-        dataset_type=DatasetType.MULTIMODAL_QA,
-        requires_audio=True,
-        requires_text=True,
-        supports_generation=True,
-        evaluation_mode="qa_retrieval",
-        recommended_pipeline_modes=("asr_text_retrieval", "audio_text_retrieval"),
-    ),
-}
+# Capability metadata for the built-in datasets lives on their DatasetDescriptors
+# (the single source of truth) — resolve_dataset_profile derives a profile from there.
+# This registry only holds profiles added at runtime via register_dataset_profile.
+_PROFILE_REGISTRY: Dict[str, DatasetCapabilityProfile] = {}
 
 
 _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {

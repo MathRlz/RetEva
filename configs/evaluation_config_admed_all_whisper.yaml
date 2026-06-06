@@ -1,0 +1,52 @@
+# Example configuration for Medical Whisper with LoRA adapter + Jina V4
+experiment_name: medical_whisper_jina_v4
+output_dir: evaluation_results
+
+checkpoint_enabled: true
+checkpoint_interval: 50
+resume_from_checkpoint: true
+
+cache:
+  enabled: true
+  cache_dir: .cache
+  max_size_gb: null
+  cache_asr_features: true
+  cache_transcriptions: true
+  cache_embeddings: true
+  cache_vector_db: true
+
+logging:
+  log_dir: logs
+  console_level: INFO
+  file_level: DEBUG
+
+model:
+  pipeline_mode: asr_text_retrieval
+  
+  # Whisper ASR with medical adapter
+  asr_model_type: whisper
+  asr_model_name: openai/whisper-medium
+  asr_adapter_path: /home/student5/models/medical-transcribe-pl/natural_anonym_synth_cv_fl/  # LoRA adapter path
+  asr_device: cuda:0
+  
+  # Jina V4 Embeddings
+  text_emb_model_type: jina_v4
+  text_emb_model_name: jinaai/jina-embeddings-v4
+  text_emb_adapter_path: null
+  text_emb_device: cuda:1
+  
+  audio_emb_model_type: null
+  audio_emb_model_name: null
+  audio_emb_adapter_path: null
+  audio_emb_device: cuda:0
+
+data:
+  dataset_name: admed_voice
+  batch_size: 32
+  num_workers: 4
+  test_size: 0.0
+
+vector_db:
+  type: inmemory
+  k: 5
+  gpu_id: 0

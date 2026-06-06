@@ -2,11 +2,22 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
+
+T = TypeVar("T")
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def with_provider(provider_factory: Callable[[], Any], fn: Callable[[Any], T]) -> T:
+    """Run ``fn`` with a freshly built ModelServiceProvider, always shutting it down."""
+    provider = provider_factory()
+    try:
+        return fn(provider)
+    finally:
+        provider.shutdown()
 
 
 def artifact_listing(output_dir: Optional[str], *, max_entries: int = 200) -> List[Dict[str, Any]]:

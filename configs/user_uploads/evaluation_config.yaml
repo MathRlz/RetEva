@@ -1,0 +1,77 @@
+audio_synthesis:
+  enabled: false
+  output_dir: prepared_benchmarks/audio
+  provider: espeak
+  sample_rate: 16000
+  seed: 42
+  voice: en
+cache:
+  cache_asr_features: true
+  cache_dir: .cache
+  cache_embeddings: true
+  cache_transcriptions: true
+  cache_vector_db: true
+  enabled: true
+  max_size_gb: null
+checkpoint_enabled: true
+checkpoint_interval: 50
+data:
+  batch_size: 32
+  corpus_path: null
+  dataset_name: admed_voice
+  num_workers: 0
+  prepared_dataset_dir: null
+  questions_path: null
+  strict_validation: true
+  test_size: 0.0
+  trace_limit: 0
+experiment_name: evaluation
+judge:
+  api_base: https://api.openai.com/v1/chat/completions
+  api_key_env: OPENAI_API_KEY
+  enabled: false
+  max_cases: 50
+  model: gpt-4o-mini
+  temperature: 0.0
+  timeout_s: 60
+logging:
+  console_level: INFO
+  file_level: DEBUG
+  log_dir: logs
+model:
+  asr_adapter_path: null
+  asr_device: cuda:0
+  asr_model_name: jonatasgrosman/wav2vec2-large-xlsr-53-polish
+  asr_model_type: wav2vec2
+  audio_emb_adapter_path: null
+  audio_emb_device: cuda:0
+  audio_emb_dim: 2048
+  audio_emb_dropout: 0.1
+  audio_emb_model_name: null
+  audio_emb_model_path: null
+  audio_emb_model_type: null
+  pipeline_mode: asr_text_retrieval
+  text_emb_adapter_path: null
+  text_emb_device: cuda:1
+  text_emb_model_name: sentence-transformers/LaBSE
+  text_emb_model_type: labse
+num_parallel_workers: 0
+output_dir: evaluation_results
+parallel_enabled: false
+resume_from_checkpoint: true
+tracking:
+  backend: mlflow
+  enabled: false
+  mlflow_experiment_name: null
+  mlflow_tracking_uri: null
+vector_db:
+  bm25_b: 0.75
+  bm25_k1: 1.5
+  gpu_id: 0
+  hybrid_dense_weight: 0.5
+  k: 5
+  reranker_mode: none
+  reranker_top_k: 20
+  reranker_weight: 0.5
+  retrieval_mode: dense
+  type: inmemory

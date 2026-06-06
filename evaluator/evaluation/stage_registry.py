@@ -1,0 +1,58 @@
+"""Registry of executable pipeline stages (DAG node handlers).
+
+Mirrors the model-family registries: a stage handler registers itself with the
+``@register_stage_handler`` decorator and the executor discovers it by name, so
+adding a stage no longer means editing a central dispatch dict. Each spec also
+carries the executor's timing policy (whether the handler times itself, and which
+``stage_times`` bucket the executor accumulates its runtime into).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Optional
+
+StageFn = Callable[[Any], None]
+
+
+@dataclass(frozen=True)
+class StageSpec:
+    """A registered stage handler plus the executor's timing policy for it."""
+
+    stage: str
+    fn: StageFn
+    self_timed: bool = False  # handler records its own stage_times entry
+    time_key: Optional[str] = None  # bucket the executor accumulates runtime into
+
+
+_STAGE_REGISTRY: Dict[str, StageSpec] = {}
+
+
+def register_stage_handler(
+    stage: str, *, self_timed: bool = False, time_key: Optional[str] = None
+) -> Callable[[StageFn], StageFn]:
+    """Register a stage handler under ``stage`` (decorator)."""
+
+    def decorator(fn: StageFn) -> StageFn:
+        if stage in _STAGE_REGISTRY:
+            raise ValueError(f"Stage handler already registered: {stage}")
+        _STAGE_REGISTRY[stage] = StageSpec(stage, fn, self_timed, time_key)
+        return fn
+
+    return decorator
+
+
+def get_stage_spec(stage: str) -> StageSpec:
+    """Return the spec for ``stage`` or raise with the registered names."""
+    try:
+        return _STAGE_REGISTRY[stage]
+    except KeyError:
+        registered = ", ".join(sorted(_STAGE_REGISTRY))
+        raise KeyError(
+            f"No stage handler registered: {stage}. Registered: {registered}"
+        ) from None
+
+
+def stage_registry() -> Dict[str, StageSpec]:
+    """Return a copy of the full stage registry."""
+    return dict(_STAGE_REGISTRY)

@@ -1,0 +1,139 @@
+{% set r = run %}
+{% set m = r.metrics or {} %}
+{% set lat = m.get('latency') or {} %}
+{% set traces = m.get('query_traces') or [] %}
+{% set speakers = m.get('per_speaker') or {} %}
+{% set judge = m.get('llm_judge') or {} %}
+{% set fail = m.get('retrieval_failure_analysis') or {} %}
+<div class="panel" style="margin-top:12px">
+  <h3>Run {{ r.run_id }} — {{ r.experiment_name }}</h3>
+  <div class="row muted">
+    <span>{{ r.dataset_name }}</span>
+    <span>· {{ r.pipeline_mode }}</span>
+    {% if r.duration_seconds is number %}<span>· {{ '%.1f'|format(r.duration_seconds) }}s</span>{% endif %}
+    {% if r.created_at %}<span>· {{ r.created_at }}</span>{% endif %}
+  </div>
+
+  {# --- Metric chips, with bootstrap CI when present (R4) --- #}
+  <div>
+    {% for k, v in m.items() %}
+      {% if v is number %}
+        {% set ci = m.get(k ~ '_ci') %}
+        <span class="chip">{{ k }}: {{ '%.4f'|format(v) }}{% if ci and ci|length == 2 %}
+          <span class="muted">[{{ '%.3f'|format(ci[0]) }}–{{ '%.3f'|format(ci[1]) }}]</span>{% endif %}</span>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  {# --- Per-stage latency breakdown (R2) --- #}
+  {% if lat %}
+  <details open>
+    <summary>Stage latency</summary>
+    <div id="run-latency-chart" style="height:240px;"></div>
+    <script>
+      (function () {
+        var lat = {{ lat|tojson }};
+        var keys = Object.keys(lat).filter(function (k) { return k !== 'total_s' && lat[k] > 0; });
+        var labels = keys.map(function (k) { return k.replace(/_s$/, ''); });
+        var values = keys.map(function (k) { return lat[k]; });
+        if (window.Plotly && values.length) {
+          Plotly.newPlot('run-latency-chart', [{
+            x: values, y: labels, type: 'bar', orientation: 'h',
+            marker: { color: '#1d4ed8' },
+            text: values.map(function (v) { return v.toFixed(3) + 's'; }), textposition: 'auto'
+          }], {
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#e2e8f0' }, margin: { l: 90, r: 16, t: 10, b: 30 },
+            xaxis: { title: 'seconds', gridcolor: '#1f2937' }, yaxis: { gridcolor: '#1f2937' }
+          }, { displaylogo: false, responsive: true });
+        }
+      })();
+    </script>
+    {% if lat.get('total_s') %}<p class="muted">Total: {{ '%.3f'|format(lat.total_s) }}s</p>{% endif %}
+  </details>
+  {% endif %}
+
+  {# --- Retrieval failure analysis (R3) --- #}
+  {% if fail %}
+  <details>
+    <summary>Failure analysis</summary>
+    <div class="row" style="gap:8px;flex-wrap:wrap">
+      {% if fail.get('success_rate') is number %}<span class="chip ok">success {{ '%.0f%%'|format(fail.success_rate * 100) }}</span>{% endif %}
+      {% if fail.get('near_miss_rate') is number %}<span class="chip">near-miss {{ '%.0f%%'|format(fail.near_miss_rate * 100) }}</span>{% endif %}
+      {% if fail.get('failure_rate') is number %}<span class="chip error">fail {{ '%.0f%%'|format(fail.failure_rate * 100) }}</span>{% endif %}
+    </div>
+    {% set cats = fail.get('failure_categories') or {} %}
+    {% if cats %}<p class="muted">Categories: {% for c, n in cats.items() %}{{ c }}={{ n }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+    {% set ranks = fail.get('rank_distribution') or {} %}
+    {% if ranks %}<p class="muted">First-relevant rank: {% for rk, n in ranks.items() %}@{{ rk }}={{ n }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+  </details>
+  {% endif %}
+
+  {# --- Per-speaker breakdown (R2) --- #}
+  {% if speakers %}
+  <details>
+    <summary>Per-speaker ({{ speakers|length }})</summary>
+    <table>
+      <thead><tr><th>Speaker</th>
+        {% set first = (speakers.values()|list)[0] %}
+        {% for mk in first.keys() %}<th>{{ mk }}</th>{% endfor %}
+      </tr></thead>
+      <tbody>
+        {% for sp, sm in speakers.items() %}
+        <tr><td>{{ sp }}</td>
+          {% for mk, mv in sm.items() %}<td>{{ '%.4f'|format(mv) if mv is number else mv }}</td>{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+
+  {# --- LLM judge (R3) --- #}
+  {% if judge %}
+  <details>
+    <summary>LLM judge</summary>
+    <pre style="white-space:pre-wrap; font-size:.8rem; color:#cbd5e1">{{ judge | tojson(indent=2) }}</pre>
+  </details>
+  {% endif %}
+
+  {# --- Per-query traces (R1) --- #}
+  {% if traces %}
+  <details open>
+    <summary>Per-query traces ({{ traces|length }})</summary>
+    <table>
+      <thead><tr><th>Query</th><th>WER</th><th>CER</th><th>R@5</th><th>Top docs</th></tr></thead>
+      <tbody>
+        {% for t in traces %}
+        <tr>
+          <td>
+            <details>
+              <summary>{{ t.get('question') or t.get('query_id') }}</summary>
+              {% if t.get('generated_answer') %}<p class="muted"><strong>gen:</strong> {{ t.generated_answer }}</p>{% endif %}
+              {% if t.get('reference_answer') %}<p class="muted"><strong>ref:</strong> {{ t.reference_answer }}</p>{% endif %}
+              <ol>
+                {% for d in (t.get('retrieved') or [])[:10] %}
+                {% set rel = (t.get('relevant') or {}).get(d.get('doc_key')) %}
+                <li{% if rel %} class="ok"{% endif %}>{{ d.get('doc_key') }} — {{ '%.4f'|format(d.get('score') or 0) }}{% if rel %} ✓{% endif %}</li>
+                {% endfor %}
+              </ol>
+            </details>
+          </td>
+          <td>{{ '%.3f'|format(t.per_query_wer) if t.get('per_query_wer') is number else '—' }}</td>
+          <td>{{ '%.3f'|format(t.per_query_cer) if t.get('per_query_cer') is number else '—' }}</td>
+          <td>{{ '%.2f'|format(t.recall_at_5) if t.get('recall_at_5') is number else '—' }}</td>
+          <td class="muted">{{ (t.get('retrieved') or [])|length }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+
+  {% if r.output_dir %}<p class="muted">Output: <code>{{ r.output_dir }}</code></p>{% endif %}
+
+  <details>
+    <summary>Config snapshot</summary>
+    <pre style="white-space:pre-wrap; font-size:.8rem; color:#cbd5e1">{{ r.config | tojson(indent=2) }}</pre>
+  </details>
+</div>

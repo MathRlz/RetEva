@@ -49,7 +49,8 @@ class CacheManager:
         self.audio_embeddings_dir = self.cache_dir / "audio_embeddings"
         self.vector_db_dir = self.cache_dir / "vector_dbs"
         self.checkpoints_dir = self.cache_dir / "checkpoints"
-        
+        self.synthesized_audio_dir = self.cache_dir / "synthesized_audio"
+
         # Centralized mapping for cache directories (replaces if-elif chains)
         self._cache_dirs: Dict[str, Path] = {
             "asr_features": self.asr_features_dir,
@@ -58,11 +59,17 @@ class CacheManager:
             "audio_embeddings": self.audio_embeddings_dir,
             "vector_db": self.vector_db_dir,
             "checkpoints": self.checkpoints_dir,
+            "synthesized_audio": self.synthesized_audio_dir,
         }
         
         if self.enabled:
             for dir_path in self._cache_dirs.values():
-                dir_path.mkdir(parents=True, exist_ok=True)
+                try:
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    # A single unwritable category shouldn't crash the whole cache; that
+                    # category just degrades to no-op (get returns None, writes are skipped).
+                    logger.warning("Could not create cache dir %s: %s", dir_path, exc)
             self._initialize_manifest_db()
 
     def _initialize_manifest_db(self) -> None:
@@ -484,11 +491,66 @@ class CacheManager:
             'timestamp': datetime.now().isoformat(),
         }
         self._write_json_file(metadata_path, payload)
-    
+
+    def delete_vector_db(self, db_key: str) -> bool:
+        """Delete a cached vector DB (artifacts + manifest entry).
+
+        Returns True if anything was removed. Used to drop the index cache tied to a
+        specific run (its ``db_key`` is stored in the run's metadata).
+        """
+        removed = False
+        # Deterministic artifact paths (_vectors.npy + _metadata.json).
+        for extension in ("_vectors.npy", "_metadata.json"):
+            path = self._get_cache_path("vector_db", db_key, extension)
+            if path.exists():
+                path.unlink(missing_ok=True)
+                removed = True
+        # Manifest row (the .npy is tracked there; remove it and its artifact too).
+        if self.manifest_db_path.exists():
+            with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+                row = conn.execute(
+                    "SELECT artifact_path FROM cache_entries "
+                    "WHERE cache_type='vector_db' AND cache_key=?",
+                    (db_key,),
+                ).fetchone()
+                if row and row[0]:
+                    artifact = Path(row[0])
+                    if artifact.exists():
+                        artifact.unlink(missing_ok=True)
+                        removed = True
+                cursor = conn.execute(
+                    "DELETE FROM cache_entries WHERE cache_type='vector_db' AND cache_key=?",
+                    (db_key,),
+                )
+                conn.commit()
+                removed = removed or cursor.rowcount > 0
+        return removed
+
     def get_checkpoint(self, experiment_id: str) -> Optional[Dict[str, Any]]:
         """Load evaluation checkpoint."""
         return self._load_json_cache("checkpoints", experiment_id, ".json")
-    
+
+    # ── Synthesized (TTS) audio ───────────────────────────────────────
+    def synthesized_audio_path(self, cache_key: str) -> Path:
+        """Path where a synthesized-audio WAV for *cache_key* lives in the cache."""
+        return self._get_cache_path("synthesized_audio", cache_key, ".wav")
+
+    def get_synthesized_audio(self, cache_key: str) -> Optional[Path]:
+        """Return the cached WAV path for *cache_key* if present (and caching enabled)."""
+        if not self.enabled:
+            return None
+        path = self.synthesized_audio_path(cache_key)
+        return path if path.exists() else None
+
+    def register_synthesized_audio(self, cache_key: str, path: Path) -> None:
+        """Record a synthesized-audio WAV in the manifest (for stats + clear_all/clear_type)."""
+        if not self.enabled:
+            return
+        self._upsert_manifest_entry(
+            cache_type="synthesized_audio", cache_key=cache_key,
+            artifact_path=path, stage="synthesis",
+        )
+
     def get_unique_texts(
         self,
         dataset_name: Optional[str] = None,

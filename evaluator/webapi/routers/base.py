@@ -6,7 +6,7 @@ from fastapi import APIRouter, Response
 
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.schemas import HealthResponse
-from evaluator.webapi.utils import utc_now
+from evaluator.webapi.utils import utc_now, with_provider
 
 
 def build_base_router(provider_factory: Callable[[], ModelServiceProvider]) -> APIRouter:
@@ -34,11 +34,7 @@ def build_base_router(provider_factory: Callable[[], ModelServiceProvider]) -> A
     @router.get("/api/services/status", summary="Service status with model inventory")
     def service_status() -> Dict[str, Any]:
         """Return available models and service health at check time."""
-        provider = provider_factory()
-        try:
-            models = provider.list_available_models()
-        finally:
-            provider.shutdown()
+        models = with_provider(provider_factory, lambda p: p.list_available_models())
         return {
             "status": "ok",
             "available_models": models,

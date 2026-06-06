@@ -21,9 +21,12 @@ from .retrieval_pipeline import RetrievalPipeline
 from .stage_graph import (
     PipelineModeSpec,
     StageNode,
+    StageNodeDef,
     StageGraph,
     build_stage_graph,
+    get_stage_node_def,
     list_pipeline_mode_specs,
+    register_stage_node,
     resolve_pipeline_mode_spec,
 )
 from .text_embedding_pipeline import TextEmbeddingPipeline
@@ -37,10 +40,13 @@ __all__ = [
     "AudioEmbeddingPipeline",
     "RetrievalPipeline",
     "StageNode",
+    "StageNodeDef",
     "StageGraph",
     "PipelineModeSpec",
     "build_stage_graph",
+    "get_stage_node_def",
     "list_pipeline_mode_specs",
+    "register_stage_node",
     "resolve_pipeline_mode_spec",
     "AudioSynthesizer",
     "AudioAugmenter",

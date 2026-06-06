@@ -1,0 +1,127 @@
+# Ablation Study Grid Configuration
+# Systematic evaluation of RAG component combinations
+
+experiment_name: "ablation_study_grid"
+
+# Base dataset configuration
+dataset:
+  name: "pubmed_qa"
+  path: "data/pubmed_qa"
+  max_samples: 500  # Limit for faster ablation
+
+# Grid search parameters
+# The ablation study will test all combinations
+
+ablation:
+  # Retrieval modes to test
+  retrieval_modes:
+    - "dense"
+    - "sparse"
+    - "hybrid"
+  
+  # Hybrid alpha values (for hybrid mode)
+  hybrid_alphas:
+    - 0.5
+    - 0.7
+    - 0.9
+  
+  # Fusion methods (for hybrid mode)
+  fusion_methods:
+    - "weighted"
+    - "rrf"
+  
+  # Embedding fusion (if audio+text data available)
+  embedding_fusion:
+    enabled: [false, true]
+    audio_weights: [0.3, 0.5, 0.7]
+  
+  # Query optimization
+  query_optimization:
+    enabled: [false, true]
+    methods: ["rewrite", "hyde"]
+    iterations: [1, 2]
+  
+  # Query expansion
+  query_expansion:
+    enabled: [false, true]
+    methods: ["synonym", "prf"]
+  
+  # Reranking
+  reranking:
+    enabled: [false, true]
+  
+  # Diversity
+  diversity:
+    enabled: [false, true]
+    lambda_params: [0.5, 0.7, 0.9]
+
+# Default configuration (baseline)
+# Individual ablation runs will override specific parameters
+vector_db:
+  type: "chroma"
+  collection_name: "ablation_study"
+  retrieval_mode: "dense"  # Will be overridden
+  top_k: 10
+
+evaluation:
+  metrics:
+    - "mrr"
+    - "ndcg"
+    - "map"
+    - "recall"
+  
+  ndcg_k: 10
+  recall_k: [5, 10]
+  
+  # Track per-component contribution
+  track_component_impact: true
+
+output:
+  results_dir: "evaluation_results/ablation_study"
+  save_json: true
+  save_csv: true
+  
+  # Generate ablation-specific visualizations
+  generate_ablation_plots: true
+  plot_types:
+    - "component_contribution"
+    - "interaction_effects"
+    - "pareto_frontier"  # Quality vs latency
+
+logging:
+  level: "INFO"
+  show_progress_bars: true
+  log_timing: true
+
+# Cost management for ablation study
+# Only use LLM features on sample for cost control
+query_optimization:
+  enabled: false  # Set to true if testing, but use sample_rate
+  sample_rate: 0.1  # Only optimize 10% of queries
+
+judge:
+  enabled: false  # Too expensive for full ablation
+  sample_rate: 0.05  # If enabled, judge 5%
+
+# Recommended ablation workflow:
+# 1. Run baseline (all features disabled)
+# 2. Enable retrieval mode variants
+# 3. Add embedding fusion
+# 4. Add query optimization (sampled)
+# 5. Add reranking
+# 6. Add diversity
+# 7. Analyze results to find optimal configuration
+
+# Example ablation runs (execute these sequentially):
+# Run 1: Baseline - dense only
+# Run 2: Dense + fusion
+# Run 3: Hybrid (α=0.7) 
+# Run 4: Hybrid + fusion
+# Run 5: Hybrid + fusion + reranking
+# Run 6: Full stack (all features)
+
+# Compare runs to identify:
+# - Which components provide the most value
+# - Which combinations are synergistic
+# - Quality vs latency trade-offs
+# - Cost-effectiveness of LLM features

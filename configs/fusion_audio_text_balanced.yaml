@@ -1,0 +1,55 @@
+# Embedding Fusion: Balanced Audio and Text Configuration
+# Use this configuration when both audio features and text semantics are equally important
+
+experiment_name: "fusion_balanced_experiment"
+
+dataset:
+  name: "medical_audio"
+  path: "data/medical_audio"
+  loader: "local"
+
+vector_db:
+  type: "chroma"
+  collection_name: "medical_fusion_balanced"
+  
+  # Dense retrieval mode
+  retrieval_mode: "dense"
+  top_k: 10
+  
+  # Embedding Fusion Configuration
+  embedding_fusion:
+    enabled: true
+    method: "weighted"
+    
+    # Balanced weights: 50/50 audio and text
+    audio_weight: 0.5
+    text_weight: 0.5
+    
+    # Normalization (recommended)
+    normalize: true
+    
+    # Audio model
+    audio_model: "wav2vec2-base"
+    
+    # Text model
+    text_model: "sentence-transformers/all-MiniLM-L6-v2"
+
+evaluation:
+  metrics:
+    - "mrr"
+    - "ndcg"
+    - "map"
+    - "recall"
+  
+  ndcg_k: 10
+  recall_k: [5, 10, 20]
+
+output:
+  results_dir: "evaluation_results/fusion_balanced"
+  save_json: true
+  save_csv: true
+  generate_plots: true
+
+logging:
+  level: "INFO"
+  show_progress_bars: true

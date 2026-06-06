@@ -19,6 +19,7 @@ from ..pipeline import (
     RetrievalPipelineProtocol,
     build_stage_graph,
 )
+from .stage_registry import register_stage_handler, get_stage_spec
 from ..storage.cache import CacheManager
 from ..logging_config import get_logger, TimingContext, log_cache_stats
 from ..judge import run_llm_judging
@@ -436,6 +437,10 @@ class _PhasedState:
     total: int
     cb: Callable
     t_total: float = 0.0
+    # Model lifecycle: when set, a stage's model is released after the last stage that
+    # uses it (frees the device mid-run). Off unless a provider + on_finish policy apply.
+    service_provider: Any = None
+    offload_after_stage: bool = False
     # accumulators (parallel per-query lists unless noted)
     all_hypotheses: list = field(default_factory=list)
     all_ground_truth: list = field(default_factory=list)
@@ -452,8 +457,15 @@ class _PhasedState:
     query_opt_bypassed: bool = False
     stage_times: Dict[str, float] = field(default_factory=dict)
     results: "PhasedResults" = field(default_factory=lambda: PhasedResults())
+    # Intermediates the metrics stage hands to the answer-gen / finalize stages.
+    metrics_all_relevant: list = field(default_factory=list)
+    wer_scores: list = field(default_factory=list)
+    cer_scores: list = field(default_factory=list)
+    per_query_recall5: list = field(default_factory=list)
+    ans_detail_by_qid: dict = field(default_factory=dict)
 
 
+@register_stage_handler("asr", time_key="asr_s")
 def _stage_asr(s: _PhasedState) -> None:
     """ASR (or oracle bypass): produce query texts + relevance for ASR modes."""
     s.cb("phase_1_asr", 0, s.total, "Phase 1: Oracle bypass" if s.oracle_mode else "Phase 1: ASR transcription")
@@ -470,6 +482,7 @@ def _stage_asr(s: _PhasedState) -> None:
     s.cb("phase_1_asr", s.total, s.total, "Oracle bypass complete" if s.oracle_mode else "ASR transcription complete")
 
 
+@register_stage_handler("audio_embedding", time_key="asr_s")
 def _stage_audio_embedding(s: _PhasedState) -> None:
     """Embed all audio; becomes the retrieval input unless fusion overrides it."""
     _log_phase("PHASE 1: Audio Embedding")
@@ -485,6 +498,7 @@ def _stage_audio_embedding(s: _PhasedState) -> None:
     _log_embedding_stats(s.all_embeddings, "Audio embedding")
 
 
+@register_stage_handler("text_embedding", time_key="embedding_s")
 def _stage_text_embedding(s: _PhasedState) -> None:
     """Text embedding. For ASR modes embeds the (optimized) hypotheses into the
     retrieval input; for fused audio_text it embeds reference texts for fusion."""
@@ -522,6 +536,7 @@ def _stage_text_embedding(s: _PhasedState) -> None:
         )
 
 
+@register_stage_handler("fusion", time_key="embedding_s")
 def _stage_fusion(s: _PhasedState) -> None:
     """Fuse audio + reference-text embeddings into the retrieval input."""
     if s.text_embedding_pipeline is None or s.text_embeddings_for_fusion is None:
@@ -550,6 +565,7 @@ def _stage_fusion(s: _PhasedState) -> None:
     s.all_embeddings = fused_embeddings
 
 
+@register_stage_handler("retrieval", time_key="retrieval_s")
 def _stage_retrieval(s: _PhasedState) -> None:
     """Vector search over the retrieval-input embeddings."""
     if s.query_opt_bypassed:
@@ -704,6 +720,7 @@ def _run_judge(s: "_PhasedState", results, all_relevant, per_query_recall5) -> N
     )
 
 
+@register_stage_handler("metrics", self_timed=True)
 def _stage_metrics(s: _PhasedState) -> None:
     """Terminal node: compute ASR/IR metrics, traces, answer-gen, judge → results."""
     # Bind state into locals so the metric logic reads naturally.
@@ -726,7 +743,6 @@ def _stage_metrics(s: _PhasedState) -> None:
     trace_limit = s.trace_limit
     compute_confidence_intervals = s.compute_confidence_intervals
     _stage_times = s.stage_times
-    _t_total = s.t_total
     _t_phase = time.perf_counter()
 
     _log_phase("PHASE 4: IR Metrics")
@@ -852,51 +868,105 @@ def _stage_metrics(s: _PhasedState) -> None:
             logger.info("Bootstrap CI (95%%) computed for %d samples", len(all_retrieved))
 
         _stage_times["metrics_s"] = time.perf_counter() - _t_phase
-        _t_phase = time.perf_counter()
+        # Hand the IR-stage intermediates to the answer-gen / finalize stages.
+        s.metrics_all_relevant = all_relevant
+        s.per_query_recall5 = _per_query_recall5
 
-        # ========== PHASE 5: Answer Generation + traces ==========
-        _ans_detail_by_qid = _generate_answer_details(s, results, all_relevant)
-        _build_query_traces(
-            s, results, all_relevant, wer_scores, cer_scores,
-            _per_query_recall5, _ans_detail_by_qid,
-        )
-
-        _stage_times["answer_gen_s"] = time.perf_counter() - _t_phase
-        _t_phase = time.perf_counter()
-
-        # ========== PHASE 6: LLM Judge ==========
-        _run_judge(s, results, all_relevant, _per_query_recall5)
-
-    _stage_times["judge_s"] = time.perf_counter() - _t_phase
-    _stage_times["total_s"] = time.perf_counter() - _t_total
-    results["latency"] = _stage_times
-    logger.info(
-        "Stage latency — asr=%.1fs embed=%.1fs retrieve=%.1fs total=%.1fs",
-        _stage_times.get("asr_s", 0),
-        _stage_times.get("embedding_s", 0),
-        _stage_times.get("retrieval_s", 0),
-        _stage_times["total_s"],
-    )
+    s.wer_scores = wer_scores
+    s.cer_scores = cer_scores
     s.results = results
 
 
-# Stage id -> handler. Every node in the graph maps to a handler; the orchestrator
-# iterates the topological levels and dispatches each node here.
-_STAGE_HANDLERS: Dict[str, Callable[["_PhasedState"], None]] = {
-    "asr": _stage_asr,
-    "audio_embedding": _stage_audio_embedding,
-    "text_embedding": _stage_text_embedding,
-    "fusion": _stage_fusion,
-    "retrieval": _stage_retrieval,
-    "metrics": _stage_metrics,
+@register_stage_handler("answer_gen", self_timed=True)
+def _stage_answer_gen(s: _PhasedState) -> None:
+    """PHASE 5: RAG answer generation + per-query traces (retrieval modes only).
+
+    Reads the IR intermediates the metrics stage stored on the state; writes
+    ``answer_generation`` and ``query_traces`` into ``s.results``.
+    """
+    if s.mode == "asr_only":
+        return
+    _t = time.perf_counter()
+    s.ans_detail_by_qid = _generate_answer_details(s, s.results, s.metrics_all_relevant)
+    _build_query_traces(
+        s, s.results, s.metrics_all_relevant, s.wer_scores, s.cer_scores,
+        s.per_query_recall5, s.ans_detail_by_qid,
+    )
+    s.stage_times["answer_gen_s"] = (
+        s.stage_times.get("answer_gen_s", 0.0) + (time.perf_counter() - _t)
+    )
+
+
+@register_stage_handler("finalize", self_timed=True)
+def _stage_finalize(s: _PhasedState) -> None:
+    """PHASE 6: LLM judge (retrieval modes) + latency summary. Terminal node."""
+    if s.mode != "asr_only":
+        _t = time.perf_counter()
+        _run_judge(s, s.results, s.metrics_all_relevant, s.per_query_recall5)
+        s.stage_times["judge_s"] = (
+            s.stage_times.get("judge_s", 0.0) + (time.perf_counter() - _t)
+        )
+    s.stage_times["total_s"] = time.perf_counter() - s.t_total
+    s.results["latency"] = s.stage_times
+    logger.info(
+        "Stage latency — asr=%.1fs embed=%.1fs retrieve=%.1fs total=%.1fs",
+        s.stage_times.get("asr_s", 0),
+        s.stage_times.get("embedding_s", 0),
+        s.stage_times.get("retrieval_s", 0),
+        s.stage_times["total_s"],
+    )
+
+
+# Stage handlers register themselves via @register_stage_handler (see stage_registry);
+# the executor discovers them by name. Timing policy (self_timed / time_key) lives on
+# each StageSpec, so adding a stage no longer means editing a central dispatch dict.
+
+
+# Stage id -> the _PhasedState attribute holding the pipeline whose model that stage runs.
+_STAGE_PIPELINE_ATTR = {
+    "asr": "asr_pipeline",
+    "text_embedding": "text_embedding_pipeline",
+    "audio_embedding": "audio_embedding_pipeline",
 }
 
-# Stage id -> the stage_times bucket its runtime accumulates into.
-_STAGE_TIME_KEY = {
-    "asr": "asr_s", "audio_embedding": "asr_s",
-    "text_embedding": "embedding_s", "fusion": "embedding_s",
-    "retrieval": "retrieval_s",
-}
+
+def _stage_model(state: "_PhasedState", stage: str):
+    """The model a stage runs, or None for model-free stages (fusion/metrics).
+
+    The retrieval stage's model is its cross-encoder reranker (when configured); it is used
+    only there, so it can be freed once retrieval completes.
+    """
+    if stage == "retrieval":
+        rp = getattr(state, "retrieval_pipeline", None)
+        return getattr(rp, "reranker", None) if rp is not None else None
+    attr = _STAGE_PIPELINE_ATTR.get(stage)
+    pipe = getattr(state, attr, None) if attr else None
+    return getattr(pipe, "model", None) if pipe is not None else None
+
+
+def _plan_stage_offloads(state: "_PhasedState", flat_nodes, query_opt_enabled: bool):
+    """Map each stage position to the models whose LAST use is there (so they can be freed).
+
+    Keyed by model *instance* so a model shared across stages (e.g. a multimodal embedder
+    used for both audio and text) is released only after its final stage. The text
+    embedder is excluded when query optimization is on, since query-opt may re-embed.
+    """
+    if not state.offload_after_stage or state.service_provider is None:
+        return {}
+    excluded = set()
+    if query_opt_enabled:
+        te = _stage_model(state, "text_embedding")
+        if te is not None:
+            excluded.add(id(te))
+    last: Dict[int, tuple] = {}
+    for pos, node in enumerate(flat_nodes):
+        model = _stage_model(state, node.stage)
+        if model is not None and id(model) not in excluded:
+            last[id(model)] = (pos, model)
+    by_pos: Dict[int, list] = {}
+    for pos, model in last.values():
+        by_pos.setdefault(pos, []).append(model)
+    return by_pos
 
 
 def _execute_stage_graph(
@@ -908,19 +978,31 @@ def _execute_stage_graph(
     The stage graph is the single source of truth for what runs and in what
     order. The terminal "metrics" node tracks its own per-sub-phase timing;
     query optimization is a documented transform inserted after the source level
-    (no graph node, since it can bypass embedding+retrieval).
+    (no graph node, since it can bypass embedding+retrieval). When a provider +
+    on_finish policy apply, each stage's model is released after its last use.
     """
     query_opt_enabled = query_opt_config is not None and getattr(
         query_opt_config, "enabled", False
     )
+    flat_nodes = [node for level in stage_graph.topological_levels() for node in level]
+    offloads = _plan_stage_offloads(state, flat_nodes, query_opt_enabled)
+    pos = 0
     for level_idx, level in enumerate(stage_graph.topological_levels()):
         for node in level:
-            if node.stage == "metrics":
-                _STAGE_HANDLERS[node.stage](state)
-                continue
-            _t = time.perf_counter()
-            _STAGE_HANDLERS[node.stage](state)
-            state.stage_times[_STAGE_TIME_KEY[node.stage]] += time.perf_counter() - _t
+            spec = get_stage_spec(node.stage)
+            if spec.self_timed:
+                spec.fn(state)
+            else:
+                _t = time.perf_counter()
+                spec.fn(state)
+                state.stage_times[spec.time_key] += time.perf_counter() - _t
+            for model in offloads.get(pos, ()):
+                try:
+                    state.service_provider.release_model_instance(model)
+                    logger.info("offloaded model after stage '%s'", node.stage)
+                except Exception as exc:  # never let offload break the run
+                    logger.warning("offload after stage '%s' failed: %s", node.stage, exc)
+            pos += 1
 
         # Query optimization runs once, right after the query texts are produced.
         if level_idx == 0 and query_opt_enabled:
@@ -977,6 +1059,8 @@ def evaluate_phased(
     resume_from_checkpoint: bool = True,
     progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
     oracle_mode: bool = False,
+    service_provider: Any = None,
+    offload_policy: str = "never",
     context: Optional["EvaluationContext"] = None,
 ) -> PhasedResults:
     """Optimized phased evaluation - processes entire dataset in phases.
@@ -1144,6 +1228,8 @@ def evaluate_phased(
         total=_total,
         cb=_cb,
         t_total=_t_total,
+        service_provider=service_provider,
+        offload_after_stage=(service_provider is not None and offload_policy == "on_finish"),
     )
     state.stage_times = {"asr_s": 0.0, "query_opt_s": 0.0, "embedding_s": 0.0, "retrieval_s": 0.0}
 
@@ -1202,6 +1288,13 @@ def evaluate_from_bundle(
         term_weights=_term_weights,
         compute_confidence_intervals=getattr(config, "compute_confidence_intervals", False),
     )
+    # Per-stage model offload: free each stage's model after its last use. Guarded so the
+    # oracle baseline re-run below (which reuses these pipelines) still has its models — the
+    # first call must not offload when an oracle pass follows.
+    _offload_policy = getattr(getattr(config, "service_runtime", None), "offload_policy", "never")
+    _oracle_will_run = (
+        getattr(config, "compute_oracle_baseline", False) and bundle.mode == "asr_text_retrieval"
+    )
     _shared_kwargs = dict(
         retrieval_pipeline=bundle.retrieval_pipeline,
         asr_pipeline=bundle.asr_pipeline,
@@ -1216,8 +1309,13 @@ def evaluate_from_bundle(
         experiment_id=config.experiment_name,
         resume_from_checkpoint=getattr(config, 'resume_from_checkpoint', True),
         progress_callback=progress_callback,
+        service_provider=bundle.service_provider,
     )
-    results = evaluate_phased(dataset=dataset, features=features, **_shared_kwargs)
+    results = evaluate_phased(
+        dataset=dataset, features=features,
+        offload_policy="never" if _oracle_will_run else _offload_policy,
+        **_shared_kwargs,
+    )
 
     if getattr(config, "compute_oracle_baseline", False) and results.get("pipeline_mode") == "asr_text_retrieval":
         # The oracle baseline only contributes MRR / Recall@5 / NDCG@5 to the
@@ -1227,6 +1325,7 @@ def evaluate_from_bundle(
         oracle_features = _replace(features, judge_config=None, answer_gen_config=None, compute_confidence_intervals=False)
         oracle_results = evaluate_phased(
             dataset=dataset, oracle_mode=True, features=oracle_features,
+            offload_policy=_offload_policy,  # last use of these pipelines → safe to offload
             **dict(_shared_kwargs, trace_limit=0),
         )
         actual_mrr = results.get("MRR", 0.0)

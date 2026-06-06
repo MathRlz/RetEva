@@ -59,15 +59,5 @@ class JobSubmitResponse(BaseModel):
     job_id: str
 
 
-class JobStatusResponse(BaseModel):
-    job_id: str
-    job_type: str
-    status: str
-    submitted_at: str
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    error: Optional[str] = None
-
-
 class ErrorResponse(BaseModel):
     detail: str

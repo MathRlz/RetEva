@@ -1,261 +1,91 @@
-"""Pre-configured evaluation presets for common scenarios.
+"""File-based evaluation presets.
 
-Provides ready-to-use configurations so users don't need to specify 70+ parameters.
-Device assignments use auto-detection by default to work on both GPU and CPU machines.
+Presets are the YAML configs in the repo ``configs/`` directory: any ``*.yaml`` there
+that parses as a valid :class:`EvaluationConfig` is offered as a preset, named by its
+file stem. The hardcoded preset dicts were removed so the runnable example configs and
+the preset list are a single source of truth.
+
+The configs directory is resolved relative to the repo by default, overridable with the
+``EVALUATOR_CONFIGS_DIR`` environment variable.
 """
 
-from typing import Dict, Any
+import os
+from pathlib import Path
+from typing import Any, Dict, List
+
+import yaml
+
+# ``configs/`` at the repo root (this file is ``evaluator/config/model_presets.py``),
+# overridable for non-standard layouts.
+CONFIGS_DIR = Path(
+    os.environ.get("EVALUATOR_CONFIGS_DIR")
+    or (Path(__file__).resolve().parents[2] / "configs")
+)
 
 
-def _auto_device() -> str:
-    """Get auto-detected device for presets."""
-    from .base import detect_device
-    return detect_device()
+def _preset_paths() -> Dict[str, Path]:
+    """Map preset name (file stem) -> path for every ``configs/*.yaml``."""
+    if not CONFIGS_DIR.is_dir():
+        return {}
+    return {path.stem: path for path in sorted(CONFIGS_DIR.glob("*.yaml"))}
 
 
-# Whisper ASR + LaBSE text embedding (asr_text_retrieval mode)
-WHISPER_LABSE_PRESET: Dict[str, Any] = {
-    "experiment_name": "whisper_labse_eval",
-    "model": {
-        "pipeline_mode": "asr_text_retrieval",
-        "asr_model_type": "whisper",
-        "asr_size": "base",
-        "text_emb_model_type": "labse",
-    },
-    "data": {
-        "batch_size": 32,
-    },
-    "vector_db": {
-        "type": "inmemory",
-        "k": 5,
-        "retrieval_mode": "dense",
-    },
-}
+def _is_valid_preset(path: Path) -> bool:
+    """A preset is any config that builds an EvaluationConfig (structure only).
+
+    ``validate=False`` skips the run-time checks (file existence, registries) so a
+    config still counts as a preset even when its dataset/corpus files aren't present;
+    grid/ablation YAMLs that aren't a single EvaluationConfig fail here and are excluded.
+    """
+    from .evaluation import EvaluationConfig
+    try:
+        EvaluationConfig.from_yaml(str(path), validate=False)
+        return True
+    except Exception:
+        return False
 
 
-# Wav2Vec2 ASR + Jina V4 text embedding
-WAV2VEC_JINA_PRESET: Dict[str, Any] = {
-    "experiment_name": "wav2vec_jina_eval",
-    "model": {
-        "pipeline_mode": "asr_text_retrieval",
-        "asr_model_type": "wav2vec2",
-        "asr_size": "base",
-        "text_emb_model_type": "jina_v4",
-    },
-    "data": {
-        "batch_size": 32,
-    },
-    "vector_db": {
-        "type": "inmemory",
-        "k": 5,
-        "retrieval_mode": "dense",
-    },
-}
+def _apply_auto_devices(preset: Dict[str, Any]) -> None:
+    """Override the preset's model device fields based on available GPUs."""
+    from . import get_available_gpu_count
+
+    model = preset.setdefault("model", {})
+    gpu_count = get_available_gpu_count()
+    if gpu_count == 0:
+        devices = {"asr_device": "cpu", "text_emb_device": "cpu", "audio_emb_device": "cpu"}
+    elif gpu_count == 1:
+        devices = {"asr_device": "cuda:0", "text_emb_device": "cuda:0", "audio_emb_device": "cuda:0"}
+    else:
+        devices = {"asr_device": "cuda:0", "text_emb_device": "cuda:1", "audio_emb_device": "cuda:0"}
+    model.update(devices)
 
 
-# Direct audio embedding mode (audio_emb_retrieval)
-AUDIO_ONLY_PRESET: Dict[str, Any] = {
-    "experiment_name": "audio_embedding_eval",
-    "model": {
-        "pipeline_mode": "audio_emb_retrieval",
-        "asr_model_type": None,
-        "text_emb_model_type": None,
-        "audio_emb_model_type": "attention_pool",
-        "audio_emb_size": "large",
-        "audio_emb_dim": 2048,
-        "audio_emb_dropout": 0.1,
-    },
-    "data": {
-        "batch_size": 16,
-    },
-    "vector_db": {
-        "type": "inmemory",
-        "k": 5,
-        "retrieval_mode": "dense",
-    },
-}
-
-
-# Quick development preset with smaller models/fewer samples
-FAST_DEV_PRESET: Dict[str, Any] = {
-    "experiment_name": "fast_dev",
-    "model": {
-        "pipeline_mode": "asr_text_retrieval",
-        "asr_model_type": "whisper",
-        "asr_size": "tiny",
-        "text_emb_model_type": "labse",
-    },
-    "data": {
-        "batch_size": 8,
-        "trace_limit": 50,
-    },
-    "cache": {
-        "enabled": True,
-    },
-    "logging": {
-        "console_level": "DEBUG",
-    },
-    "vector_db": {
-        "type": "inmemory",
-        "k": 5,
-    },
-    "checkpoint_enabled": False,
-}
-
-
-# SeamlessM4T-v2 ASR + LaBSE text embedding (asr_text_retrieval mode)
-M4T_ASR_PRESET: Dict[str, Any] = {
-    "experiment_name": "m4t_asr_eval",
-    "model": {
-        "pipeline_mode": "asr_text_retrieval",
-        "asr_model_type": "seamless_m4t",
-        "text_emb_model_type": "labse",
-    },
-    "data": {
-        "batch_size": 16,
-    },
-    "vector_db": {
-        "type": "inmemory",
-        "k": 5,
-        "retrieval_mode": "dense",
-    },
-}
-
-
-# SeamlessM4T-v2 speech->English translation as ASR (foreign audio -> EN text -> retrieve)
-M4T_TRANSLATE_PRESET: Dict[str, Any] = {
-    "experiment_name": "m4t_translate_eval",
-    "model": {
-        "pipeline_mode": "asr_text_retrieval",
-        "asr_model_type": "seamless_m4t",
-        "asr_params": {"tgt_lang": "eng"},
-        "text_emb_model_type": "labse",
-    },
-    "data": {
-        "batch_size": 16,
-    },
-    "vector_db": {
-        "type": "inmemory",
-        "k": 5,
-        "retrieval_mode": "dense",
-    },
-}
-
-
-# SONAR zero-shot cross-modal retrieval: audio query vs text corpus, shared 1024-d space
-SONAR_CROSSMODAL_PRESET: Dict[str, Any] = {
-    "experiment_name": "sonar_crossmodal_eval",
-    "model": {
-        "pipeline_mode": "audio_text_retrieval",
-        "asr_model_type": None,
-        "audio_emb_model_type": "sonar_speech",
-        "text_emb_model_type": "sonar",
-        "audio_emb_dim": 1024,
-    },
-    "data": {
-        "batch_size": 16,
-    },
-    "vector_db": {
-        "type": "inmemory",
-        "k": 5,
-        "retrieval_mode": "dense",
-    },
-}
-
-
-# Registry of all presets
-_PRESETS: Dict[str, Dict[str, Any]] = {
-    "whisper_labse": WHISPER_LABSE_PRESET,
-    "wav2vec_jina": WAV2VEC_JINA_PRESET,
-    "audio_only": AUDIO_ONLY_PRESET,
-    "fast_dev": FAST_DEV_PRESET,
-    "m4t_asr": M4T_ASR_PRESET,
-    "m4t_translate": M4T_TRANSLATE_PRESET,
-    "sonar_crossmodal": SONAR_CROSSMODAL_PRESET,
-}
+def list_presets() -> List[str]:
+    """Return preset names: ``configs/*.yaml`` that parse as a valid EvaluationConfig."""
+    return [name for name, path in _preset_paths().items() if _is_valid_preset(path)]
 
 
 def get_preset(name: str, auto_devices: bool = True) -> Dict[str, Any]:
-    """Retrieve a preset configuration by name.
-
-    Presets provide pre-configured model combinations optimized for common
-    evaluation scenarios. Each preset specifies model types, embedding models,
-    and sensible defaults for batch size and retrieval settings.
+    """Load preset ``name`` (``configs/<name>.yaml``) as a config dict.
 
     Args:
-        name: Name of the preset (whisper_labse, wav2vec_jina, audio_only, fast_dev)
-        auto_devices: If True (default), auto-configure device assignments based
-                      on available hardware. Set to False to use ModelConfig defaults.
+        name: Preset name — the YAML file stem under ``configs/``.
+        auto_devices: If True (default), override model device fields for the
+            available hardware. Set False to keep the file's device assignments.
 
     Returns:
-        Dictionary with preset configuration values.
+        The parsed config dict (a fresh object each call).
 
     Raises:
-        ValueError: If preset name is not found.
-
-    Examples:
-        Listing available presets::
-
-            >>> from evaluator.config.model_presets import list_presets
-            >>> list_presets()
-            ['whisper_labse', 'wav2vec_jina', 'audio_only', 'fast_dev']
-
-        Getting a preset configuration::
-
-            >>> preset = get_preset("whisper_labse")
-            >>> preset["model"]["asr_model_type"]
-            'whisper'
-            >>> preset["model"]["text_emb_model_type"]
-            'labse'
-
-        Using preset with EvaluationConfig and overrides::
-
-            >>> from evaluator.config import EvaluationConfig
-            >>> config = EvaluationConfig.from_preset(
-            ...     "fast_dev",
-            ...     data_batch_size=16,
-            ...     model_asr_device="cpu"
-            ... )
-            >>> config.data.batch_size
-            16
-
-        Disabling auto device configuration::
-
-            >>> preset = get_preset("audio_only", auto_devices=False)
-            >>> # Uses default device assignments from ModelConfig
+        ValueError: If no valid preset with that name exists.
     """
-    if name not in _PRESETS:
-        available = ", ".join(_PRESETS.keys())
-        raise ValueError(f"Unknown preset '{name}'. Available presets: {available}")
-
-    # Return a deep copy to prevent mutation
-    import copy
-    preset = copy.deepcopy(_PRESETS[name])
-
-    # Auto-configure devices if requested
+    path = _preset_paths().get(name)
+    if path is None or not _is_valid_preset(path):
+        raise ValueError(
+            f"Unknown preset '{name}'. Available presets: {', '.join(list_presets())}"
+        )
+    with open(path, "r", encoding="utf-8") as handle:
+        preset: Dict[str, Any] = yaml.safe_load(handle) or {}
     if auto_devices:
-        from . import get_available_gpu_count
-        gpu_count = get_available_gpu_count()
-
-        if "model" not in preset:
-            preset["model"] = {}
-
-        if gpu_count == 0:
-            preset["model"]["asr_device"] = "cpu"
-            preset["model"]["text_emb_device"] = "cpu"
-            preset["model"]["audio_emb_device"] = "cpu"
-        elif gpu_count == 1:
-            preset["model"]["asr_device"] = "cuda:0"
-            preset["model"]["text_emb_device"] = "cuda:0"
-            preset["model"]["audio_emb_device"] = "cuda:0"
-        else:
-            preset["model"]["asr_device"] = "cuda:0"
-            preset["model"]["text_emb_device"] = "cuda:1"
-            preset["model"]["audio_emb_device"] = "cuda:0"
-
+        _apply_auto_devices(preset)
     return preset
-
-
-def list_presets() -> list[str]:
-    """Return list of available preset names."""
-    return list(_PRESETS.keys())

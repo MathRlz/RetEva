@@ -5,16 +5,46 @@
 {% block body %}
 <div class="panel">
   <h2>Leaderboard</h2>
-  <div class="row">
+  {% set f = filters|default({}) %}
+  {% macro filter_select(label, field, options) %}
+    <label class="field" style="margin:0">
+      <span>{{ label }}</span>
+      <select name="{{ field }}"
+              hx-get="/ui/leaderboard" hx-target="#leaderboard" hx-include="#lb-controls" hx-trigger="change">
+        <option value="">all</option>
+        {% for o in options %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
+      </select>
+    </label>
+  {% endmacro %}
+  <div id="lb-controls" class="grid">
+    <label class="field" style="margin:0">
+      <span>Search</span>
+      <input name="name" placeholder="experiment name…"
+             hx-get="/ui/leaderboard" hx-target="#leaderboard" hx-include="#lb-controls"
+             hx-trigger="keyup changed delay:400ms, search">
+    </label>
     <label class="field" style="margin:0">
       <span>Metric</span>
-      <input name="metric" value="{{ metric }}"
-             hx-get="/ui/leaderboard" hx-target="#leaderboard" hx-trigger="change, keyup changed delay:400ms" hx-include="this">
+      <select name="metric"
+              hx-get="/ui/leaderboard" hx-target="#leaderboard" hx-include="#lb-controls" hx-trigger="change">
+        {% for m in metrics %}
+        <option value="{{ m }}" {{ 'selected' if m == metric else '' }}>{{ m }}</option>
+        {% endfor %}
+        {% if not metrics %}<option value="MRR" selected>MRR</option>{% endif %}
+      </select>
     </label>
+    {{ filter_select("Dataset", "dataset_name", f.get("datasets", [])) }}
+    {{ filter_select("Pipeline", "pipeline_mode", f.get("pipeline_modes", [])) }}
+    {{ filter_select("ASR model", "asr_model_type", f.get("asr_models", [])) }}
+    {{ filter_select("Text embed", "text_emb_model_type", f.get("text_emb_models", [])) }}
+    {{ filter_select("Audio embed", "audio_emb_model_type", f.get("audio_emb_models", [])) }}
+    <input type="hidden" name="output_dir" value="{{ output_dir }}">
   </div>
   <div id="leaderboard"
-       hx-get="/ui/leaderboard?metric={{ metric }}" hx-trigger="load" hx-swap="innerHTML">
+       hx-get="/ui/leaderboard?metric={{ metric }}&output_dir={{ output_dir }}" hx-trigger="load" hx-swap="innerHTML">
     Loading…
   </div>
 </div>
+<div id="lb-confirm"></div>
+<div id="run-detail"></div>
 {% endblock %}

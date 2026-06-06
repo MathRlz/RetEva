@@ -43,6 +43,15 @@ from .runtime import (
     validate_dataset_runtime_config,
     load_runtime_dataset,
 )
+from .types import (
+    EvalDataset,
+    AudioTranscriptionDataset,
+    AudioRetrievalDataset,
+    TextRetrievalDataset,
+    MultimodalQADataset,
+    register_eval_dataset,
+)
+from . import builtins  # noqa: F401  — registers the built-in datasets (side-effect)
 
 __all__ = [
     # Legacy classes (backward compatibility)
@@ -65,6 +74,13 @@ __all__ = [
     "register_dataset_profile",
     "resolve_dataset_profile",
     "list_known_dataset_names",
+    # Per-type ABCs (new extension API)
+    "EvalDataset",
+    "AudioTranscriptionDataset",
+    "AudioRetrievalDataset",
+    "TextRetrievalDataset",
+    "MultimodalQADataset",
+    "register_eval_dataset",
     # Unified descriptor registry (new API)
     "DatasetDescriptor",
     "METRICS_BY_MODE",

@@ -3,20 +3,29 @@
 <div {% if not terminal %}hx-get="/ui/jobs/{{ job_id }}/status" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
   <section class="step">
     <h3>Job {{ job_id[:8] }} — {{ status }}</h3>
-    {% set prog = job.get('last_progress') %}
-    {% if prog and not terminal %}
-      {% set total = prog.get('total') or 0 %}
-      {% set cur = prog.get('current') or 0 %}
-      <div class="row"><strong>{{ prog.get('phase','') }}</strong>
-        {% if total %}<span class="muted">{{ cur }} / {{ total }}</span>{% endif %}
+    {% if not terminal %}
+      {% set prog = job.get('last_progress') %}
+      {% set total = (prog.get('total') if prog else 0) or 0 %}
+      {% set cur = (prog.get('current') if prog else 0) or 0 %}
+      {% set pct = ((cur / total * 100) | round) if total else 0 %}
+      <div class="row">
+        <strong>{{ (prog.get('phase') if prog else '') or 'queued' }}…</strong>
+        {% if total %}<span class="muted">{{ cur }} / {{ total }} ({{ pct }}%)</span>{% endif %}
       </div>
       <div class="progress-track">
-        <div class="progress-fill" style="width: {{ ((cur / total * 100) | round) if total else 0 }}%"></div>
+        <div class="progress-fill" style="width: {{ pct }}%"></div>
       </div>
-      {% if prog.get('message') %}<div class="muted">{{ prog.get('message') }}</div>{% endif %}
+      {% if prog and prog.get('message') %}<div class="muted">{{ prog.get('message') }}</div>{% endif %}
     {% endif %}
 
     {% if status == 'failed' %}<p class="error">{{ job.get('error') }}</p>{% endif %}
+
+    {% if log_text %}
+    <details {% if not terminal %}open{% endif %}>
+      <summary>Console log</summary>
+      <pre class="job-log">{{ log_text }}</pre>
+    </details>
+    {% endif %}
 
     {% if result %}
       <div>

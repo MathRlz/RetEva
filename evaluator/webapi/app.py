@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from evaluator import EvaluationConfig, run_evaluation, run_evaluation_matrix
 from evaluator.pipeline import create_pipeline_from_config  # noqa: F401
@@ -70,5 +72,11 @@ def create_app(
         )
     )
     app.include_router(build_ui_router(provider_factory, jobs))
+
+    app.mount(
+        "/static",
+        StaticFiles(directory=Path(__file__).parent / "static"),
+        name="static",
+    )
 
     return app

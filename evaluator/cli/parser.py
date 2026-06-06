@@ -15,7 +15,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="List available models by family and exit",
     )
-    
+    parser.add_argument(
+        "--print_graph",
+        action="store_true",
+        help="Print the execution DAG for the config and exit (no models loaded)",
+    )
+
     # Model arguments (override config)
     parser.add_argument("--asr_model_type", type=str, default=None,
                        choices=["whisper", "wav2vec2"])

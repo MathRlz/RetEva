@@ -1,0 +1,113 @@
+# =============================================================================
+# Multi-GPU Production Configuration
+# =============================================================================
+#
+# Optimized configuration for production evaluation on multi-GPU servers.
+# Designed for maximum throughput and accuracy.
+#
+# Requirements:
+#   - Multiple NVIDIA GPUs (2+ recommended)
+#   - Sufficient VRAM (16GB+ per GPU recommended)
+#   - Large storage for caching
+#
+# Features:
+#   - Models distributed across GPUs
+#   - Large batch sizes for throughput
+#   - Full caching enabled
+#   - Best-quality models
+#   - GPU-accelerated FAISS
+#
+# =============================================================================
+
+experiment_name: production_evaluation
+output_dir: evaluation_results
+
+# ----- Checkpointing -----
+# Critical for long production runs
+checkpoint_enabled: true
+checkpoint_interval: 200       # Less frequent checkpoints (faster)
+resume_from_checkpoint: true
+
+# ----- Caching -----
+cache:
+  enabled: true
+  cache_dir: .cache
+  max_size_gb: null            # Unlimited for production
+  
+  # Enable all caches for maximum reuse
+  cache_asr_features: true
+  cache_transcriptions: true
+  cache_embeddings: true
+  cache_vector_db: true
+
+logging:
+  log_dir: logs
+  console_level: INFO
+  file_level: DEBUG
+
+model:
+  pipeline_mode: asr_text_retrieval
+  
+  # === ASR Model (GPU 0) ===
+  # Large Whisper for best accuracy
+  asr_model_type: whisper
+  asr_model_name: openai/whisper-large-v3
+  asr_adapter_path: null
+  asr_device: cuda:0           # Primary GPU for ASR
+  
+  # === Text Embedding Model (GPU 1) ===
+  # Jina v4 or BGE-M3 for best semantic understanding
+  text_emb_model_type: jina_v4
+  text_emb_model_name: jinaai/jina-embeddings-v4
+  text_emb_adapter_path: null
+  text_emb_device: cuda:1      # Secondary GPU for embeddings
+  
+  audio_emb_model_type: null
+  audio_emb_model_name: null
+  audio_emb_device: cuda:0
+
+# ----- Dataset Configuration -----
+data:
+  dataset_name: pubmed_qa
+  questions_path: data/pubmed_qa/questions_with_audio.jsonl
+  corpus_path: data/pubmed_qa/corpus_documents.jsonl
+  strict_validation: true
+  trace_limit: 0               # No limit - process all samples
+  batch_size: 64               # Large batches for throughput
+  num_workers: 4               # Parallel data loading
+  test_size: 0.0
+
+# ----- Audio Synthesis (optional) -----
+# Enable if you need to generate audio from text queries
+audio_synthesis:
+  enabled: false
+  provider: espeak
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: data/pubmed_qa/audio
+
+# ----- Vector Database -----
+vector_db:
+  # Use GPU-accelerated FAISS for large-scale retrieval
+  type: faiss_gpu              # GPU-accelerated vector search
+  gpu_id: 0                    # FAISS GPU device
+  k: 10
+  
+  # Hybrid retrieval for best accuracy
+  retrieval_mode: hybrid
+  hybrid_fusion_method: rrf
+  hybrid_dense_weight: 0.5
+  rrf_k: 60
+  
+  # BM25 parameters
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  
+  # Reranking for final quality boost
+  reranker_mode: cross_encoder
+  reranker_enabled: true
+  reranker_top_k: 50           # Rerank more candidates
+  reranker_weight: 0.35
+  reranker_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  reranker_device: cuda:1      # Reranker on secondary GPU

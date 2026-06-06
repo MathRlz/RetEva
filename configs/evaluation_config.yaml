@@ -1,0 +1,68 @@
+# Evaluation Configuration
+# This file defines the complete configuration for running evaluations
+
+# Experiment metadata
+experiment_name: evaluation
+output_dir: evaluation_results
+
+# Checkpoint configuration
+checkpoint_enabled: true
+checkpoint_interval: 50  # Save checkpoint every N samples
+resume_from_checkpoint: true
+
+# Cache configuration
+cache:
+  enabled: true
+  cache_dir: .cache
+  max_size_gb: null  # null = unlimited, or set a number like 10.0 for 10GB limit
+  
+  # Enable/disable specific cache types
+  cache_asr_features: true
+  cache_transcriptions: true
+  cache_embeddings: true
+  cache_vector_db: true
+
+# Logging configuration
+logging:
+  log_dir: logs
+  console_level: INFO  # DEBUG, INFO, WARNING, ERROR
+  file_level: DEBUG
+
+# Model configuration
+model:
+  # Pipeline mode: "asr_text_retrieval" (ASR + Text Embedding + Retrieval) 
+  #                "audio_emb_retrieval" (direct audio embedding + Retrieval)
+  #                "asr_only" (ASR only, no retrieval)
+  pipeline_mode: asr_text_retrieval
+  
+  # ASR Model (for asr_text_retrieval or asr_only mode)
+  asr_model_type: wav2vec2  # whisper or wav2vec2
+  asr_model_name: jonatasgrosman/wav2vec2-large-xlsr-53-polish  # null for default
+  asr_adapter_path: null  # Path to PEFT/LoRA adapter weights (e.g., ~/models/medical-transcribe-pl/natural)
+  asr_device: cuda:0
+  
+  # Text Embedding Model (for asr_text_retrieval mode)
+  text_emb_model_type: labse  # labse, jina_v4, clip, nemotron
+  text_emb_model_name: sentence-transformers/LaBSE  # null for default
+  text_emb_adapter_path: null  # Path to adapter weights
+  text_emb_device: cuda:1
+  
+  # Audio Embedding Model (for audio_emb_retrieval mode)
+  audio_emb_model_type: null  # Your custom audio embedding model type
+  audio_emb_model_name: null
+  audio_emb_adapter_path: null  # Path to adapter weights
+  audio_emb_device: cuda:0
+
+# Dataset configuration
+data:
+  dataset_name: admed_voice
+  batch_size: 32
+  num_workers: 0
+  test_size: 0.0
+
+# Vector database configuration
+vector_db:
+  type: inmemory  # inmemory, faiss, faiss_gpu
+  k: 5  # Number of retrieval results
+  gpu_id: 0  # GPU ID for faiss_gpu
+  gpu_id: 0  # For faiss_gpu

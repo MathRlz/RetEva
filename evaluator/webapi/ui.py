@@ -15,102 +15,24 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from evaluator import ConfigurationError
 from evaluator.services import ModelServiceProvider
-from evaluator.webapi.config_helpers import create_config_options, graph_preview, prepare_run_config
+from evaluator.webapi.config_helpers import graph_preview
 from evaluator.webapi.jobs import JobManager
+from evaluator import list_presets
+from evaluator.webapi.ui_helpers import (
+    _model_section,
+    _prepared_config_or_error,
+    _preset_form_context,
+)
+
+
+def _default_preset() -> str:
+    """First available config preset (the Config page loads prefilled from it)."""
+    presets = list_presets()
+    return presets[0] if presets else ""
+from evaluator.webapi.utils import with_provider
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
-
-# Pipeline field -> (family, type form-field, size form-field).
-_MODEL_FIELDS = {
-    "model.asr_model_type": ("asr", "asr_model_type", "asr_size"),
-    "model.text_emb_model_type": ("text_embedding", "text_emb_model_type", "text_emb_size"),
-    "model.audio_emb_model_type": ("audio_embedding", "audio_emb_model_type", "audio_emb_size"),
-}
-
-
-def _required_fields(mode: str) -> List[str]:
-    from evaluator.pipeline.stage_graph import resolve_pipeline_mode_spec
-    try:
-        return list(resolve_pipeline_mode_spec(mode).required_model_fields)
-    except ValueError:
-        return []
-
-
-def _model_section(provider_factory, mode: str, current: Dict[str, str]) -> List[Dict[str, Any]]:
-    """Build the registry-driven model-select descriptors for a pipeline mode."""
-    provider = provider_factory()
-    try:
-        models = provider.list_available_models()
-    finally:
-        provider.shutdown()
-    import evaluator.models  # noqa: F401
-    from evaluator.models.registry import FAMILY_REGISTRIES
-
-    sections: List[Dict[str, Any]] = []
-    for field in _required_fields(mode):
-        spec = _MODEL_FIELDS.get(field)
-        if not spec:
-            continue
-        family, type_field, size_field = spec
-        reg = FAMILY_REGISTRIES.get(family)
-        selected_type = current.get(type_field, "")
-        sizes = list(reg.get_sizes(selected_type).keys()) if (reg and selected_type) else []
-        sections.append({
-            "family": family,
-            "type_field": type_field,
-            "size_field": size_field,
-            "options": [{"type": e["type"], "name": e["name"]} for e in models.get(family, [])],
-            "selected_type": selected_type,
-            "sizes": sizes,
-            "selected_size": current.get(size_field, ""),
-        })
-    return sections
-
-
-def _form_to_config(form: Dict[str, str]) -> Dict[str, Any]:
-    """Map flat UI form fields to a nested EvaluationConfig dict (drop blanks)."""
-    def s(key: str) -> str:
-        return (form.get(key) or "").strip()
-
-    def num(key: str, default):
-        v = s(key)
-        try:
-            return int(v) if v else default
-        except ValueError:
-            return default
-
-    model: Dict[str, Any] = {"pipeline_mode": s("pipeline_mode") or "asr_text_retrieval"}
-    for _field, (_family, type_field, size_field) in _MODEL_FIELDS.items():
-        if s(type_field):
-            model[type_field] = s(type_field)
-        if s(size_field):
-            model[size_field] = s(size_field)
-
-    data: Dict[str, Any] = {}
-    for k in ("dataset_name", "questions_path", "corpus_path"):
-        if s(k):
-            data[k] = s(k)
-    data["batch_size"] = num("batch_size", 8)
-    data["trace_limit"] = num("trace_limit", 0)
-
-    config: Dict[str, Any] = {
-        "experiment_name": s("experiment_name") or "webui_experiment",
-        "output_dir": s("output_dir") or "evaluation_results/webui",
-        "model": model,
-        "data": data,
-        "vector_db": {
-            "type": s("vector_db_type") or "inmemory",
-            "k": num("k", 10),
-            "retrieval_mode": s("retrieval_mode") or "dense",
-        },
-        "audio_synthesis": {
-            "enabled": s("audio_synthesis_enabled") == "on",
-            "provider": s("tts_provider") or "mms",
-        },
-    }
-    return config
 
 
 def build_ui_router(
@@ -129,13 +51,8 @@ def build_ui_router(
 
     @router.get("/ui/config", response_class=HTMLResponse, include_in_schema=False)
     def ui_config(request: Request) -> HTMLResponse:
-        options = create_config_options(provider_factory)
-        mode = "asr_text_retrieval"
-        return page(
-            request, "config.html", active="config",
-            options=options, mode=mode,
-            model_sections=_model_section(provider_factory, mode, {}),
-        )
+        ctx = _preset_form_context(provider_factory, _default_preset())
+        return page(request, "config.html", active="config", **ctx)
 
     @router.get("/ui/models", response_class=HTMLResponse, include_in_schema=False)
     def ui_models(request: Request, pipeline_mode: str = "asr_text_retrieval") -> HTMLResponse:
@@ -146,61 +63,39 @@ def build_ui_router(
 
     @router.get("/ui/preset", response_class=HTMLResponse, include_in_schema=False)
     def ui_preset(request: Request, name: str = "") -> HTMLResponse:
-        from evaluator.config.model_presets import get_preset
-        cfg: Dict[str, Any] = {}
-        if name:
-            try:
-                cfg = get_preset(name, auto_devices=False)
-            except Exception:
-                cfg = {}
-        m = cfg.get("model", {})
-        data = cfg.get("data", {})
-        vdb = cfg.get("vector_db", {})
-        mode = m.get("pipeline_mode", "asr_text_retrieval")
-        current = {
-            "asr_model_type": m.get("asr_model_type", "") or "",
-            "asr_size": m.get("asr_size", "") or "",
-            "text_emb_model_type": m.get("text_emb_model_type", "") or "",
-            "text_emb_size": m.get("text_emb_size", "") or "",
-            "audio_emb_model_type": m.get("audio_emb_model_type", "") or "",
-            "audio_emb_size": m.get("audio_emb_size", "") or "",
-        }
-        options = create_config_options(provider_factory)
-        return page(
-            request, "_config_form.html", options=options, mode=mode,
-            preset={
-                "experiment_name": cfg.get("experiment_name", "webui_experiment"),
-                "output_dir": cfg.get("output_dir", "evaluation_results/webui"),
-                "dataset_name": data.get("dataset_name", ""),
-                "questions_path": data.get("questions_path", ""),
-                "corpus_path": data.get("corpus_path", ""),
-                "batch_size": data.get("batch_size", 8),
-                "trace_limit": data.get("trace_limit", 0),
-                "vector_db_type": vdb.get("type", "inmemory"),
-                "k": vdb.get("k", 10),
-                "retrieval_mode": vdb.get("retrieval_mode", "dense"),
-            },
-            model_sections=_model_section(provider_factory, mode, current),
-        )
+        # hx-include sends the whole form as query params; preserve user fields
+        # (dataset/paths) the chosen preset doesn't define.
+        ctx = _preset_form_context(provider_factory, name, dict(request.query_params))
+        return page(request, "_config_form.html", **ctx)
 
     @router.post("/ui/validate", response_class=HTMLResponse, include_in_schema=False)
     async def ui_validate(request: Request) -> HTMLResponse:
-        form = dict(await request.form())
-        try:
-            prepare_run_config(_form_to_config(form), auto_devices=True)
-            return HTMLResponse('<p class="ok">Config valid ✓</p>')
-        except (ConfigurationError, ImportError, ValueError) as exc:
-            return HTMLResponse(f'<p class="error">Invalid: {exc}</p>')
+        config, error = _prepared_config_or_error(await request.form())
+        if error is not None:
+            return error
+        return HTMLResponse('<p class="ok">Config valid ✓</p>')
 
     @router.post("/ui/graph", response_class=HTMLResponse, include_in_schema=False)
     async def ui_graph(request: Request) -> HTMLResponse:
-        form = dict(await request.form())
-        try:
-            config = prepare_run_config(_form_to_config(form), auto_devices=True)
-            preview = graph_preview(config)
-            return page(request, "_graph.html", levels=preview.get("levels", []))
-        except (ConfigurationError, ImportError, ValueError) as exc:
-            return HTMLResponse(f'<p class="error">{exc}</p>')
+        config, error = _prepared_config_or_error(await request.form())
+        if error is not None:
+            return error
+        preview = graph_preview(config)
+        return page(request, "_graph.html", levels=preview.get("levels", []))
+
+    @router.post("/ui/yaml", response_class=HTMLResponse, include_in_schema=False)
+    async def ui_yaml(request: Request) -> HTMLResponse:
+        """Render the full config the form produces as copy-able YAML."""
+        config, error = _prepared_config_or_error(await request.form())
+        if error is not None:
+            return error
+        import html
+        import yaml
+        text = yaml.safe_dump(config.to_dict(), sort_keys=False, default_flow_style=False)
+        return HTMLResponse(
+            f'<section class="step"><h4>Config (YAML)</h4>'
+            f'<pre class="yaml">{html.escape(text)}</pre></section>'
+        )
 
     def _status_response(request: Request, job_id: str) -> HTMLResponse:
         try:
@@ -213,61 +108,143 @@ def build_ui_router(
             result = getattr(job, "result", None)
             if hasattr(result, "to_dict"):
                 result = result.to_dict()
-        return page(request, "_status.html", job_id=job_id, job=data, result=result)
+        log_text = "\n".join(jobs.get_log(job_id, tail=400))
+        return page(request, "_status.html", job_id=job_id, job=data, result=result, log_text=log_text)
 
     @router.post("/ui/run", response_class=HTMLResponse, include_in_schema=False)
     async def ui_run(request: Request) -> HTMLResponse:
-        form = dict(await request.form())
-        try:
-            config = prepare_run_config(_form_to_config(form), auto_devices=True)
-            job = jobs.submit_evaluation(config)
-        except (ConfigurationError, ImportError, ValueError) as exc:
-            return HTMLResponse(f'<p class="error">{exc}</p>')
+        config, error = _prepared_config_or_error(await request.form())
+        if error is not None:
+            return error
+        job = jobs.submit_evaluation(config)
         return _status_response(request, job.job_id)
+
+    @router.get("/ui/jobs", response_class=HTMLResponse, include_in_schema=False)
+    def ui_jobs(request: Request) -> HTMLResponse:
+        return page(request, "jobs.html", active="jobs")
+
+    @router.get("/ui/jobs/list", response_class=HTMLResponse, include_in_schema=False)
+    def ui_jobs_list(request: Request) -> HTMLResponse:
+        # Newest first.
+        return page(request, "_jobs.html", jobs=list(reversed(jobs.list_jobs())))
 
     @router.get("/ui/jobs/{job_id}/status", response_class=HTMLResponse, include_in_schema=False)
     def ui_job_status(request: Request, job_id: str) -> HTMLResponse:
         return _status_response(request, job_id)
 
     @router.get("/ui/results", response_class=HTMLResponse, include_in_schema=False)
-    def ui_results(request: Request, metric: str = "MRR") -> HTMLResponse:
-        return page(request, "results.html", active="results", metric=metric)
-
-    @router.get("/ui/leaderboard", response_class=HTMLResponse, include_in_schema=False)
-    def ui_leaderboard(request: Request, metric: str = "MRR", output_dir: str = "evaluation_results") -> HTMLResponse:
+    def ui_results(
+        request: Request, metric: str = "MRR", output_dir: str = "evaluation_results"
+    ) -> HTMLResponse:
         from evaluator.storage import ExperimentStore
-        rows: List[Dict[str, Any]] = []
         try:
             store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
-            for r in store.query_leaderboard(metric_name=metric, limit=50):
-                rows.append({
-                    "run_id": r.run_id,
-                    "experiment_name": r.experiment_name,
-                    "dataset_name": r.dataset_name,
-                    "pipeline_mode": r.pipeline_mode,
-                    "metric_value": r.metric_value,
-                })
+            metrics = store.available_metrics()
+            filters = store.filter_options()
+        except Exception:
+            metrics, filters = [], {}
+        if metric not in metrics:
+            metric = metrics[0] if metrics else "MRR"
+        return page(
+            request, "results.html", active="results",
+            metric=metric, metrics=metrics, filters=filters, output_dir=output_dir,
+        )
+
+    def _render_leaderboard(
+        request, metric, output_dir, name,
+        dataset_name, pipeline_mode,
+        asr_model_type, text_emb_model_type, audio_emb_model_type,
+    ) -> HTMLResponse:
+        from evaluator.webapi.routers.leaderboard import leaderboard_rows
+        model_filters = {
+            "asr_model_type": asr_model_type,
+            "text_emb_model_type": text_emb_model_type,
+            "audio_emb_model_type": audio_emb_model_type,
+        }
+        try:
+            rows: List[Dict[str, Any]] = leaderboard_rows(
+                metric=metric, limit=50, output_dir=output_dir,
+                dataset_name=dataset_name or None, pipeline_mode=pipeline_mode or None,
+                name=name or None, model_filters=model_filters,
+            )
         except Exception:
             rows = []
         labels = [str(r.get("experiment_name") or r.get("run_id") or i) for i, r in enumerate(rows)]
         values = [r.get("metric_value") for r in rows]
         return page(
             request, "_leaderboard.html",
-            rows=rows, metric=metric,
+            rows=rows, metric=metric, output_dir=output_dir,
             chart_labels=json.dumps(labels), chart_values=json.dumps(values),
         )
 
-    @router.get("/ui/live", response_class=HTMLResponse, include_in_schema=False)
-    def ui_live(request: Request) -> HTMLResponse:
-        return page(request, "live.html", active="live")
+    @router.get("/ui/leaderboard", response_class=HTMLResponse, include_in_schema=False)
+    def ui_leaderboard(
+        request: Request,
+        metric: str = "MRR",
+        output_dir: str = "evaluation_results",
+        name: str = "",
+        dataset_name: str = "",
+        pipeline_mode: str = "",
+        asr_model_type: str = "",
+        text_emb_model_type: str = "",
+        audio_emb_model_type: str = "",
+    ) -> HTMLResponse:
+        return _render_leaderboard(
+            request, metric, output_dir, name, dataset_name, pipeline_mode,
+            asr_model_type, text_emb_model_type, audio_emb_model_type,
+        )
+
+    @router.get("/ui/runs/{run_id}/confirm-delete", response_class=HTMLResponse, include_in_schema=False)
+    def ui_confirm_delete(
+        request: Request, run_id: int, output_dir: str = "evaluation_results"
+    ) -> HTMLResponse:
+        return page(request, "_delete_confirm.html", run_id=run_id, output_dir=output_dir)
+
+    @router.post("/ui/runs/{run_id}/delete", response_class=HTMLResponse, include_in_schema=False)
+    def ui_delete_run(
+        request: Request,
+        run_id: int,
+        delete_cache: str = Form(""),
+        output_dir: str = Form("evaluation_results"),
+        metric: str = Form("MRR"),
+        name: str = Form(""),
+        dataset_name: str = Form(""),
+        pipeline_mode: str = Form(""),
+        asr_model_type: str = Form(""),
+        text_emb_model_type: str = Form(""),
+        audio_emb_model_type: str = Form(""),
+    ) -> HTMLResponse:
+        from evaluator.webapi.routers.leaderboard import delete_run_and_cache
+        try:
+            delete_run_and_cache(
+                run_id, delete_cache=(delete_cache == "on"), output_dir=output_dir
+            )
+        except Exception:
+            pass  # Re-render the (now-updated) list regardless.
+        return _render_leaderboard(
+            request, metric, output_dir, name, dataset_name, pipeline_mode,
+            asr_model_type, text_emb_model_type, audio_emb_model_type,
+        )
+
+    @router.get("/ui/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
+    def ui_run_detail(
+        request: Request, run_id: int, output_dir: str = "evaluation_results"
+    ) -> HTMLResponse:
+        from evaluator.storage import ExperimentStore
+        try:
+            store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
+            run = store.get_run(run_id)
+        except Exception:
+            run = None
+        if run is None:
+            return HTMLResponse('<p class="error">run not found</p>')
+        return page(request, "_run_detail.html", run=run)
 
     @router.get("/ui/tts", response_class=HTMLResponse, include_in_schema=False)
     def ui_tts(request: Request) -> HTMLResponse:
-        provider = provider_factory()
-        try:
-            tts_models = provider.list_available_models().get("tts", [])
-        finally:
-            provider.shutdown()
+        tts_models = with_provider(
+            provider_factory, lambda p: p.list_available_models()
+        ).get("tts", [])
         return page(request, "tts.html", active="tts", tts_models=tts_models)
 
     @router.post("/ui/tts/preview", response_class=HTMLResponse, include_in_schema=False)
@@ -279,8 +256,7 @@ def build_ui_router(
         voice: str = Form(""),
     ) -> HTMLResponse:
         import os
-        from evaluator.config import AudioSynthesisConfig
-        from evaluator.pipeline.audio.synthesis import AudioSynthesizer
+        from evaluator.webapi.routers.tts import build_synthesizer
 
         if not text.strip():
             return HTMLResponse('<p class="error">text must not be empty</p>')
@@ -289,19 +265,14 @@ def build_ui_router(
         out_dir.mkdir(parents=True, exist_ok=True)
         wav = out_dir / f"preview_{abs(hash((text, provider, language, voice)))}.wav"
         try:
-            cfg = AudioSynthesisConfig(
-                enabled=True, provider=provider, voice=voice or AudioSynthesisConfig.voice,
-                language=language, sample_rate=16000, output_dir=str(out_dir),
+            synthesizer = build_synthesizer(
+                provider, voice, language, 16000,
+                output_dir=str(out_dir), skip_cache=False,
             )
-            AudioSynthesizer(cfg).synthesize(text, output_path=str(wav))
+            synthesizer.synthesize(text, output_path=str(wav))
         except Exception as exc:  # noqa: BLE001
             return HTMLResponse(f'<p class="error">TTS failed: {exc}</p>')
         rel = os.path.relpath(wav, Path.cwd())
         return page(request, "_tts_audio.html", audio_path=rel)
-
-    @router.post("/ui/live", response_class=HTMLResponse, include_in_schema=False)
-    async def ui_live_query(request: Request) -> HTMLResponse:
-        # Placeholder: live query needs a built pipeline; surface a hint for now.
-        return HTMLResponse('<p class="muted">Use the JSON API /api/live/query for ad-hoc retrieval.</p>')
 
     return router

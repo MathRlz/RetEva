@@ -13,6 +13,27 @@ from evaluator.storage.cache import CacheManager
 from evaluator.webapi.schemas import ErrorResponse, LiveQueryRequest
 
 
+def _validate_live_payload(payload: LiveQueryRequest) -> None:
+    """Reject empty queries / non-positive k with HTTP 400."""
+    if not payload.query_text.strip():
+        raise HTTPException(status_code=400, detail="query_text must not be empty")
+    if payload.k <= 0:
+        raise HTTPException(status_code=400, detail="k must be positive")
+
+
+def _results_to_docs(search_results) -> list:
+    """Shape raw search rows into the live-query response documents."""
+    return [
+        {
+            "score": float(row.get("score", 0.0)),
+            "id": row.get("id"),
+            "title": row.get("title"),
+            "text": row.get("text", ""),
+        }
+        for row in search_results
+    ]
+
+
 def build_live_router(
     provider_factory: Callable[[], ModelServiceProvider],
     *,
@@ -28,10 +49,7 @@ def build_live_router(
     )
     def live_query(payload: LiveQueryRequest) -> Dict[str, Any]:
         """Run a single retrieval query against a configured pipeline."""
-        if not payload.query_text.strip():
-            raise HTTPException(status_code=400, detail="query_text must not be empty")
-        if payload.k <= 0:
-            raise HTTPException(status_code=400, detail="k must be positive")
+        _validate_live_payload(payload)
 
         config = EvaluationConfig.from_dict(payload.config)
         if payload.auto_devices:
@@ -66,16 +84,7 @@ def build_live_router(
                 k=payload.k,
                 query_texts=[payload.query_text],
             )[0]
-            docs = []
-            for row in search_results:
-                docs.append(
-                    {
-                        "score": float(row.get("score", 0.0)),
-                        "id": row.get("id"),
-                        "title": row.get("title"),
-                        "text": row.get("text", ""),
-                    }
-                )
+            docs = _results_to_docs(search_results)
             return {"query_text": payload.query_text, "k": payload.k, "results": docs}
         finally:
             provider.shutdown(offload=config.service_runtime.offload_policy != "never")

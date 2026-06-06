@@ -6,50 +6,15 @@
   <title>Evaluator</title>
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   {% block head %}{% endblock %}
-  <style>
-    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #0f172a; color: #e2e8f0; }
-    .app { max-width: 1100px; margin: 0 auto; padding: 20px; }
-    h1 { margin: 0 0 12px; }
-    nav { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
-    nav a { color: #cbd5e1; text-decoration: none; padding: 8px 12px; border: 1px solid #334155; border-radius: 8px; }
-    nav a.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
-    .panel { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 16px; }
-    section.step { border-top: 1px solid #1f2937; padding: 14px 0; }
-    section.step:first-of-type { border-top: none; }
-    label.field { display: grid; gap: 4px; margin-bottom: 10px; font-size: .9rem; }
-    label.field > span { color: #cbd5e1; }
-    input, select, textarea { background: #0b1220; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 7px 9px; font: inherit; }
-    .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
-    button { background: #1d4ed8; color: #fff; border: none; border-radius: 8px; padding: 9px 14px; cursor: pointer; font: inherit; }
-    button:hover { background: #2563eb; }
-    button.secondary { background: #334155; }
-    .muted { color: #94a3b8; font-size: .88rem; }
-    .ok { color: #4ade80; }
-    .error { color: #f87171; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid #1f2937; font-size: .9rem; }
-    th { color: #cbd5e1; }
-    .chip { display: inline-block; background: #0b1220; border: 1px solid #334155; border-radius: 999px; padding: 3px 10px; margin: 3px; font-size: .85rem; }
-    .graph-level { display: flex; gap: 8px; margin: 4px 0; }
-    .graph-node { background: #0b1220; border: 1px solid #334155; border-radius: 6px; padding: 4px 10px; }
-    details { margin: 6px 0; }
-    .progress-track { background: #0b1220; border: 1px solid #334155; border-radius: 6px; height: 14px; overflow: hidden; }
-    .progress-fill { background: #1d4ed8; height: 100%; transition: width .3s; }
-    audio { width: 100%; margin-top: 8px; }
-    .htmx-indicator { opacity: 0; transition: opacity .2s; }
-    .htmx-request .htmx-indicator { opacity: 1; }
-  </style>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <div class="app">
     <h1>Evaluator</h1>
     <nav>
       <a href="/ui/config" class="{{ 'active' if active == 'config' else '' }}">Config &amp; Run</a>
+      <a href="/ui/jobs" class="{{ 'active' if active == 'jobs' else '' }}">Jobs</a>
       <a href="/ui/results" class="{{ 'active' if active == 'results' else '' }}">Results</a>
-      <a href="/ui/live" class="{{ 'active' if active == 'live' else '' }}">Live</a>
       <a href="/ui/tts" class="{{ 'active' if active == 'tts' else '' }}">TTS</a>
     </nav>
     {% block body %}{% endblock %}

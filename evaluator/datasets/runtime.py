@@ -9,14 +9,9 @@ from typing import Any, Dict, List, Optional
 
 from ..errors import ConfigurationError
 from .core import (
-    AdmedQueryDataset,
-    PubMedQADataset,
     QueryDataset,
-    load_admed_voice_corpus,
     load_audio_file as _load_audio_waveform,
-    load_pubmed_qa_dataset,
 )
-from .loaders.factory import create_dataset_loader
 
 
 @dataclass(frozen=True)
@@ -83,7 +78,19 @@ class AudioSamplesQueryDataset(QueryDataset):
         }
 
     def get_corpus(self) -> List[Dict[str, Any]]:
-        return self.corpus_entries
+        if self.corpus_entries:
+            return self.corpus_entries
+        # CLI parity: derive a text corpus from the samples' unique transcriptions so
+        # corpus-less audio datasets (e.g. admed_voice) support text retrieval. doc_id
+        # is the transcription text, matching the ``{transcription: 1}`` relevance
+        # fallback in ``_build_relevant_from_item`` (mirrors the CLI's transcription
+        # corpus in ``cli/commands.py``).
+        derived: Dict[str, Dict[str, Any]] = {}
+        for sample in self.samples:
+            text = str(getattr(sample, "transcription", "") or "").strip()
+            if text and text not in derived:
+                derived[text] = {"doc_id": text, "text": text}
+        return list(derived.values())
 
 
 def _load_corpus_entries(path: str) -> List[Dict[str, Any]]:
@@ -214,7 +221,9 @@ def list_dataset_runtime_specs() -> List[DatasetRuntimeSpec]:
             source="dataset_name",
             description="Built-in admed_voice dataset",
             required_fields=("data.dataset_name",),
-            supports_corpus=False,
+            # Retrieval corpus is derived from the samples' transcriptions
+            # (AudioSamplesQueryDataset.get_corpus), matching the CLI.
+            supports_corpus=True,
         ),
         DatasetRuntimeSpec(
             id="loader_local",

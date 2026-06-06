@@ -26,7 +26,6 @@ from .results import EvaluationResults
 
 __all__ = [
     "EvaluationResults",
-    # Main evaluation function (single engine; sample-wise engine removed)
     "evaluate_phased",
     "evaluate_from_bundle",
     # Metric functions (re-exported from ir_metrics/stt_metrics)

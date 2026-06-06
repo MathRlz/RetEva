@@ -1,21 +1,21 @@
 {% set p = preset|default({}) %}
 <form id="config-form">
-  <section class="step">
-    <h3>Preset</h3>
+  <details class="step" open>
+    <summary>Preset</summary>
     <label class="field">
       <span>Start from preset</span>
       <select name="name"
-              hx-get="/ui/preset" hx-target="#config-form-wrap" hx-include="this" hx-trigger="change">
+              hx-get="/ui/preset" hx-target="#config-form-wrap" hx-include="#config-form" hx-trigger="change">
         <option value="">— none —</option>
         {% for name in options.presets %}
         <option value="{{ name }}">{{ name }}</option>
         {% endfor %}
       </select>
     </label>
-  </section>
+  </details>
 
-  <section class="step">
-    <h3>Pipeline mode</h3>
+  <details class="step" open>
+    <summary>Pipeline mode</summary>
     <label class="field">
       <span>Mode</span>
       <select name="pipeline_mode"
@@ -25,17 +25,17 @@
         {% endfor %}
       </select>
     </label>
-  </section>
+  </details>
 
-  <section class="step">
-    <h3>Models</h3>
+  <details class="step" open>
+    <summary>Models</summary>
     <div id="model-fields" class="grid">
       {% include "_models.html" %}
     </div>
-  </section>
+  </details>
 
-  <section class="step">
-    <h3>Dataset</h3>
+  <details class="step" open>
+    <summary>Dataset</summary>
     <div class="grid">
       <label class="field">
         <span>Dataset</span>
@@ -51,10 +51,10 @@
       <label class="field"><span>Batch size</span><input type="number" name="batch_size" value="{{ p.get('batch_size', 8) }}"></label>
       <label class="field"><span>Trace limit</span><input type="number" name="trace_limit" value="{{ p.get('trace_limit', 0) }}"></label>
     </div>
-  </section>
+  </details>
 
-  <section class="step">
-    <h3>Retrieval &amp; output</h3>
+  <details class="step">
+    <summary>Retrieval &amp; output</summary>
     <div class="grid">
       <label class="field">
         <span>Vector DB</span>
@@ -76,30 +76,36 @@
       <label class="field"><span>Experiment name</span><input name="experiment_name" value="{{ p.get('experiment_name','webui_experiment') }}"></label>
       <label class="field"><span>Output dir</span><input name="output_dir" value="{{ p.get('output_dir','evaluation_results/webui') }}"></label>
     </div>
-  </section>
+  </details>
 
-  <section class="step">
-    <h3>TTS audio synthesis</h3>
+  <details class="step">
+    <summary>TTS audio synthesis</summary>
     <div class="grid">
-      <label class="field"><span><input type="checkbox" name="audio_synthesis_enabled"> Enable TTS</span></label>
+      <label class="field"><span><input type="checkbox" name="audio_synthesis_enabled"
+             {{ 'checked' if p.get('audio_synthesis_enabled') == 'on' else '' }}> Enable TTS</span></label>
       <label class="field">
         <span>TTS provider</span>
         <select name="tts_provider">
           {% for t in options.tts_providers %}
-          <option value="{{ t }}">{{ t }}</option>
+          <option value="{{ t }}" {{ 'selected' if t == p.get('tts_provider') else '' }}>{{ t }}</option>
           {% endfor %}
         </select>
       </label>
+      <label class="field"><span>TTS language</span><input name="tts_language" value="{{ p.get('tts_language','') }}"></label>
+      <label class="field"><span>TTS voice</span><input name="tts_voice" value="{{ p.get('tts_voice','') }}"></label>
     </div>
-  </section>
+  </details>
+
+  <label class="field"><span><input type="checkbox" name="quick_test"> Quick test (cap to 20 samples)</span></label>
 </form>
 
-<div class="row">
-  <button hx-post="/ui/validate" hx-include="#config-form" hx-target="#status" class="secondary">Validate</button>
-  <button hx-post="/ui/graph" hx-include="#config-form" hx-target="#graph" class="secondary">Preview DAG</button>
-  <button hx-post="/ui/run" hx-include="#config-form" hx-target="#run-area">Run experiment</button>
-  <span class="htmx-indicator muted">working…</span>
+<div class="action-bar">
+  <div class="row">
+    <button hx-post="/ui/validate" hx-include="#config-form" hx-target="#output" class="secondary">Validate</button>
+    <button hx-post="/ui/graph" hx-include="#config-form" hx-target="#output" class="secondary">Preview DAG</button>
+    <button hx-post="/ui/yaml" hx-include="#config-form" hx-target="#output" class="secondary">View YAML</button>
+    <button hx-post="/ui/run" hx-include="#config-form" hx-target="#output">Run experiment</button>
+    <span class="htmx-indicator muted">working…</span>
+  </div>
 </div>
-<div id="status"></div>
-<div id="graph"></div>
-<div id="run-area"></div>
+<div id="output"></div>

@@ -81,7 +81,6 @@ Example error handling::
         print(f"Evaluation failed: {e}")
 """
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Sequence, Optional
 
@@ -89,7 +88,7 @@ import yaml
 
 from .config import EvaluationConfig
 from .errors import ConfigurationError, EvaluatorError
-from .config.model_presets import get_preset, list_presets
+from .config.model_presets import list_presets
 from .evaluation.results import EvaluationResults
 from .services import (
     run_evaluation as _service_run_evaluation,
@@ -348,27 +347,80 @@ def quick_evaluate(
     audio_path = Path(audio_dir)
     if not audio_path.exists():
         raise ConfigurationError(f"Audio directory not found: {audio_dir}")
-    
-    # Resolve model types via registry + convenience shortcuts for abbreviated names.
-    # Importing models here triggers @register_* decorators so the registry is populated.
+
+    asr_type, emb_type = _resolve_model_shortcuts(model, embedding)
+    config_dict = _build_quick_eval_config_dict(
+        audio_path, asr_type, emb_type, model, embedding,
+        model_size, embedding_size, k, batch_size, trace_limit, corpus_path, kwargs,
+    )
+
+    try:
+        config = EvaluationConfig.from_dict(config_dict)
+        config = config.with_auto_devices()
+    except ConfigurationError:
+        raise
+    except (ValueError, TypeError, KeyError, OSError) as e:
+        raise ConfigurationError(
+            f"Failed to create config: {e}. "
+            "Tip: verify model/data/vector_db overrides and audio/corpus paths."
+        ) from e
+
+    return run_evaluation(config)
+
+
+# Convenience abbreviations accepted by quick_evaluate for model/embedding names.
+_ASR_SHORTCUTS: Dict[str, str] = {"wav2vec": "wav2vec2"}
+_EMB_SHORTCUTS: Dict[str, str] = {"jina": "jina_v4", "bge": "bge_m3"}
+
+
+def _resolve_model_shortcuts(model: str, embedding: str) -> tuple:
+    """Resolve abbreviated model/embedding names to registered types (or raise)."""
+    # Importing models triggers @register_* decorators so the registries are populated.
     from .models import asr_registry, text_embedding_registry
 
-    _ASR_SHORTCUTS: Dict[str, str] = {"wav2vec": "wav2vec2"}
-    _EMB_SHORTCUTS: Dict[str, str] = {"jina": "jina_v4", "bge": "bge_m3"}
-
     asr_name = model.lower()
-    asr_type = _ASR_SHORTCUTS.get(asr_name) or (asr_name if asr_registry.is_registered(asr_name) else None)
+    asr_type = _ASR_SHORTCUTS.get(asr_name) or (
+        asr_name if asr_registry.is_registered(asr_name) else None
+    )
     if asr_type is None:
         available = sorted(set(asr_registry.list_types()) | set(_ASR_SHORTCUTS))
         raise ConfigurationError(f"Unknown ASR model '{model}'. Available: {', '.join(available)}")
 
     emb_name = embedding.lower()
-    emb_type = _EMB_SHORTCUTS.get(emb_name) or (emb_name if text_embedding_registry.is_registered(emb_name) else None)
+    emb_type = _EMB_SHORTCUTS.get(emb_name) or (
+        emb_name if text_embedding_registry.is_registered(emb_name) else None
+    )
     if emb_type is None:
         available = sorted(set(text_embedding_registry.list_types()) | set(_EMB_SHORTCUTS))
-        raise ConfigurationError(f"Unknown embedding model '{embedding}'. Available: {', '.join(available)}")
+        raise ConfigurationError(
+            f"Unknown embedding model '{embedding}'. Available: {', '.join(available)}"
+        )
+    return asr_type, emb_type
 
-    # Build config — size-based, no hardcoded HF names
+
+def _apply_quick_eval_overrides(config_dict: Dict[str, Any], kwargs: Dict[str, Any]) -> None:
+    """Fold quick_evaluate **kwargs into the config dict (section_subkey notation)."""
+    for key, value in kwargs.items():
+        parts = key.split('_', 1)
+        if len(parts) == 2 and parts[0] in ('model', 'data', 'cache', 'vector'):
+            section = parts[0]
+            if section == 'vector':
+                section = 'vector_db'
+                sub_key = parts[1].replace('db_', '', 1) if parts[1].startswith('db_') else parts[1]
+            else:
+                sub_key = parts[1]
+            config_dict.setdefault(section, {})[sub_key] = value
+        else:
+            config_dict[key] = value
+
+
+def _build_quick_eval_config_dict(
+    audio_path: Path, asr_type: str, emb_type: str, model: str, embedding: str,
+    model_size: Optional[str], embedding_size: Optional[str],
+    k: int, batch_size: int, trace_limit: int, corpus_path: Optional[str],
+    kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Assemble the EvaluationConfig dict for quick_evaluate (size-based, no HF names)."""
     model_section: Dict[str, Any] = {
         "pipeline_mode": "asr_text_retrieval",
         "asr_model_type": asr_type,
@@ -388,45 +440,14 @@ def quick_evaluate(
             "prepared_dataset_dir": str(audio_path) if audio_path.is_dir() else None,
             "questions_path": str(audio_path) if audio_path.is_file() else None,
         },
-        "vector_db": {
-            "type": "inmemory",
-            "k": k,
-            "retrieval_mode": "dense",
-        },
-        "cache": {
-            "enabled": True,
-        },
+        "vector_db": {"type": "inmemory", "k": k, "retrieval_mode": "dense"},
+        "cache": {"enabled": True},
     }
-    
     if corpus_path:
         config_dict["data"]["corpus_path"] = corpus_path
-    
-    # Apply any additional overrides
-    for key, value in kwargs.items():
-        parts = key.split('_', 1)
-        if len(parts) == 2 and parts[0] in ('model', 'data', 'cache', 'vector'):
-            section = parts[0]
-            if section == 'vector':
-                section = 'vector_db'
-                sub_key = parts[1].replace('db_', '', 1) if parts[1].startswith('db_') else parts[1]
-            else:
-                sub_key = parts[1]
-            config_dict.setdefault(section, {})[sub_key] = value
-        else:
-            config_dict[key] = value
-    
-    try:
-        config = EvaluationConfig.from_dict(config_dict)
-        config = config.with_auto_devices()
-    except ConfigurationError:
-        raise
-    except (ValueError, TypeError, KeyError, OSError) as e:
-        raise ConfigurationError(
-            f"Failed to create config: {e}. "
-            "Tip: verify model/data/vector_db overrides and audio/corpus paths."
-        ) from e
-    
-    return run_evaluation(config)
+
+    _apply_quick_eval_overrides(config_dict, kwargs)
+    return config_dict
 
 
 def run_evaluation(config: EvaluationConfig, progress_callback=None) -> EvaluationResults:

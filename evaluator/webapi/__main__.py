@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Sequence
 
 import uvicorn
+
+# Dump a Python+C traceback on native crashes (SIGSEGV) when debugging.
+if os.environ.get("EVALUATOR_FAULTHANDLER") == "1":
+    import faulthandler
+    faulthandler.enable()
 
 
 def build_parser() -> argparse.ArgumentParser:

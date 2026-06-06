@@ -1,0 +1,20 @@
+{% if jobs %}
+<table>
+  <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Phase</th><th>Submitted</th></tr></thead>
+  <tbody>
+    {% for j in jobs %}
+    <tr class="clickable"
+        hx-get="/ui/jobs/{{ j.job_id }}/status" hx-target="#job-detail" hx-trigger="click">
+      <td>{{ j.job_id[:8] }}</td>
+      <td>{{ j.job_type }}</td>
+      <td>{{ j.status }}</td>
+      <td>{{ (j.last_progress or {}).get('phase', '') }}</td>
+      <td class="muted">{{ j.submitted_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="muted">Click a job for details. Auto-refreshes every 3s.</p>
+{% else %}
+<p class="muted">No jobs yet. Run an experiment from Config &amp; Run.</p>
+{% endif %}

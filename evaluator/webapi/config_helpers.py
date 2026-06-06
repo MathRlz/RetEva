@@ -12,6 +12,7 @@ from evaluator.datasets import (
 from evaluator.pipeline import build_stage_graph
 from evaluator.pipeline.factory import check_backend_dependencies
 from evaluator.services import ModelServiceProvider
+from evaluator.webapi.utils import with_provider
 
 
 def deep_merge_dict(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
@@ -36,11 +37,7 @@ def nested_config(config: EvaluationConfig) -> Dict[str, Any]:
 
 def create_config_options(provider_factory: Callable[[], ModelServiceProvider]) -> Dict[str, Any]:
     """Build form options for config creator UI."""
-    provider = provider_factory()
-    try:
-        raw_models = provider.list_available_models()
-    finally:
-        provider.shutdown()
+    raw_models = with_provider(provider_factory, lambda p: p.list_available_models())
 
     def _normalize_model_entries(entries: Any) -> List[Dict[str, str]]:
         normalized: List[Dict[str, str]] = []

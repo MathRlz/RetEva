@@ -1,0 +1,65 @@
+experiment_name: pubmed_qa_hybrid_judge
+output_dir: evaluation_results
+
+cache:
+  enabled: true
+  cache_dir: .cache
+  cache_asr_features: true
+  cache_transcriptions: true
+  cache_embeddings: true
+  cache_vector_db: true
+
+logging:
+  console_level: INFO
+  file_level: DEBUG
+
+model:
+  pipeline_mode: asr_text_retrieval
+  asr_model_type: whisper
+  asr_model_name: openai/whisper-medium
+  asr_device: cuda:0
+  text_emb_model_type: jina_v4
+  text_emb_model_name: jinaai/jina-embeddings-v4
+  text_emb_device: cuda:1
+
+data:
+  dataset_name: pubmed_qa
+  questions_path: data/pubmed_qa/questions_with_audio.jsonl
+  corpus_path: data/pubmed_qa/corpus_documents.jsonl
+  strict_validation: true
+  trace_limit: 50
+  batch_size: 16
+  num_workers: 0
+
+audio_synthesis:
+  enabled: false
+  provider: espeak
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: data/pubmed_qa/audio
+
+judge:
+  enabled: true
+  api_base: https://api.openai.com/v1/chat/completions
+  model: gpt-4o-mini
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.0
+  max_cases: 50
+  timeout_s: 60
+
+vector_db:
+  type: inmemory
+  k: 10
+  gpu_id: 0
+  retrieval_mode: hybrid
+  hybrid_dense_weight: 0.6
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  reranker_mode: token_overlap
+  reranker_top_k: 30
+  reranker_weight: 0.35
+
+checkpoint_enabled: true
+checkpoint_interval: 100
+resume_from_checkpoint: true

@@ -10,6 +10,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+def _model_matches(config_json: str, filters: Dict[str, str]) -> bool:
+    """True when the run's config model fields equal every requested filter."""
+    try:
+        model = (json.loads(config_json) or {}).get("model", {}) or {}
+    except (TypeError, ValueError):
+        return False
+    return all(str(model.get(key) or "") == value for key, value in filters.items())
+
+
 @dataclass(frozen=True)
 class LeaderboardRow:
     run_id: int
@@ -134,10 +143,12 @@ class ExperimentStore:
         limit: int = 20,
         dataset_name: Optional[str] = None,
         pipeline_mode: Optional[str] = None,
+        name: Optional[str] = None,
+        model_filters: Optional[Dict[str, str]] = None,
     ) -> List[LeaderboardRow]:
         sql = """
             SELECT id, experiment_name, dataset_name, pipeline_mode, metrics_json,
-                   duration_seconds, created_at
+                   duration_seconds, created_at, config_json
             FROM runs
         """
         clauses: List[str] = []
@@ -148,6 +159,9 @@ class ExperimentStore:
         if pipeline_mode:
             clauses.append("pipeline_mode = ?")
             params.append(pipeline_mode)
+        if name:
+            clauses.append("LOWER(experiment_name) LIKE ?")
+            params.append(f"%{name.lower()}%")
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         # Fetch a generous pre-limit so Python filtering by metric presence
@@ -155,10 +169,14 @@ class ExperimentStore:
         pre_limit = max(limit * 10, 500)
         sql += f" ORDER BY created_at DESC LIMIT {pre_limit}"
 
+        active_model_filters = {k: v for k, v in (model_filters or {}).items() if v}
+
         rows: List[LeaderboardRow] = []
         with closing(self._connect()) as conn, conn:
             result_rows = conn.execute(sql, params).fetchall()
-        for run_id, exp_name, ds_name, mode, metrics_json, duration, created_at in result_rows:
+        for run_id, exp_name, ds_name, mode, metrics_json, duration, created_at, config_json in result_rows:
+            if active_model_filters and not _model_matches(config_json, active_model_filters):
+                continue
             metrics = json.loads(metrics_json)
             value = metrics.get(metric_name)
             if value is None:
@@ -181,6 +199,60 @@ class ExperimentStore:
             )
         rows.sort(key=lambda row: row.metric_value, reverse=True)
         return rows[:limit]
+
+    def available_metrics(self) -> List[str]:
+        """Return the sorted union of numeric metric names across all runs."""
+        names: set = set()
+        with closing(self._connect()) as conn, conn:
+            for (metrics_json,) in conn.execute("SELECT metrics_json FROM runs").fetchall():
+                try:
+                    metrics = json.loads(metrics_json)
+                except (TypeError, ValueError):
+                    continue
+                for key, value in (metrics or {}).items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        names.add(key)
+        return sorted(names)
+
+    def filter_options(self) -> Dict[str, List[str]]:
+        """Distinct values for the Results filter dropdowns (datasets/modes/models)."""
+        datasets: set = set()
+        modes: set = set()
+        asr: set = set()
+        text_emb: set = set()
+        audio_emb: set = set()
+        with closing(self._connect()) as conn, conn:
+            for ds_name, mode, config_json in conn.execute(
+                "SELECT dataset_name, pipeline_mode, config_json FROM runs"
+            ).fetchall():
+                if ds_name:
+                    datasets.add(ds_name)
+                if mode:
+                    modes.add(mode)
+                try:
+                    model = (json.loads(config_json) or {}).get("model", {}) or {}
+                except (TypeError, ValueError):
+                    model = {}
+                if model.get("asr_model_type"):
+                    asr.add(model["asr_model_type"])
+                if model.get("text_emb_model_type"):
+                    text_emb.add(model["text_emb_model_type"])
+                if model.get("audio_emb_model_type"):
+                    audio_emb.add(model["audio_emb_model_type"])
+        return {
+            "datasets": sorted(datasets),
+            "pipeline_modes": sorted(modes),
+            "asr_models": sorted(asr),
+            "text_emb_models": sorted(text_emb),
+            "audio_emb_models": sorted(audio_emb),
+        }
+
+    def delete_run(self, run_id: int) -> bool:
+        """Delete a run row. Returns True if a row was removed."""
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def list_runs(
         self,

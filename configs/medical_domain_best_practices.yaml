@@ -1,0 +1,101 @@
+# Medical Domain Best Practices Configuration
+# Optimized settings for medical literature retrieval
+
+experiment_name: "medical_best_practices"
+
+dataset:
+  name: "pubmed_qa"
+  path: "data/pubmed_qa"
+
+vector_db:
+  type: "chroma"
+  collection_name: "medical_optimized"
+  
+  # Hybrid retrieval works best for medical terminology
+  retrieval_mode: "hybrid"
+  hybrid_alpha: 0.7  # Favor dense slightly, but include BM25 for exact term matching
+  fusion_method: "rrf"
+  
+  # Retrieval parameters
+  top_k: 10
+  
+  # BM25 tuned for medical text (technical terms benefit from exact matching)
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  
+  # Embedding Fusion (if using audio + text)
+  embedding_fusion:
+    enabled: false  # Enable if you have audio data
+    method: "weighted"
+    audio_weight: 0.4
+    text_weight: 0.6  # Favor text for medical terminology
+    normalize: true
+  
+  # Reranking improves precision
+  use_reranking: true
+  reranking_model: "cross-encoder/ms-marco-MiniLM-L-12-v2"
+
+# Query Optimization for Medical Queries
+query_optimization:
+  enabled: true
+  method: "rewrite"
+  num_iterations: 1  # One iteration is often sufficient
+  
+  llm:
+    provider: "openai"
+    model: "gpt-3.5-turbo"
+    api_key: "${OPENAI_API_KEY}"
+    temperature: 0.7
+  
+  # Medical-specific prompt
+  rewrite_prompt: |
+    You are a medical librarian. Rewrite this query using standard medical terminology 
+    (prefer ICD-10, SNOMED CT, or UMLS terms when applicable).
+    
+    Query: "{query}"
+    Context: {context}
+    
+    Rewritten query with medical terminology:
+  
+  cache_llm_calls: true
+
+# Query Expansion with Medical Thesaurus
+query_expansion:
+  enabled: true
+  method: "synonym"
+  source: "umls"  # Use UMLS Metathesaurus for medical synonyms
+  max_synonyms: 5
+  synonym_weight: 0.3
+  boost_original: 2.0  # Original terms are most important
+
+# Diversity for comprehensive medical information
+vector_db:
+  diversity:
+    enabled: true
+    method: "aspect"
+    aspects:
+      - "etiology"      # Causes
+      - "diagnosis"     # Diagnostic criteria
+      - "treatment"     # Treatment options
+      - "prognosis"     # Outcomes
+      - "prevention"    # Preventive measures
+    min_docs_per_aspect: 1
+
+evaluation:
+  metrics:
+    - "mrr"
+    - "ndcg"
+    - "map"
+    - "recall"
+  
+  ndcg_k: 10
+  recall_k: [5, 10, 20]
+
+output:
+  results_dir: "evaluation_results/medical_best_practices"
+  save_json: true
+  generate_plots: true
+
+logging:
+  level: "INFO"
+  show_progress_bars: true
