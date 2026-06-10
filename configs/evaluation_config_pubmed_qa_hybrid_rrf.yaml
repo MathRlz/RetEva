@@ -1,36 +1,54 @@
-experiment_name: pubmed_qa_hybrid_rrf
-output_dir: evaluation_results
-
-cache:
-  enabled: true
-  cache_dir: .cache
-  cache_asr_features: true
-  cache_transcriptions: true
-  cache_embeddings: true
-  cache_vector_db: true
-
-logging:
-  console_level: INFO
-  file_level: DEBUG
-
-model:
-  pipeline_mode: asr_text_retrieval
-  asr_model_type: whisper
-  asr_model_name: openai/whisper-medium
-  asr_device: cuda:0
-  text_emb_model_type: jina_v4
-  text_emb_model_name: jinaai/jina-embeddings-v4
-  text_emb_device: cuda:1
-
-data:
-  dataset_name: pubmed_qa
-  questions_path: data/pubmed_qa/questions_with_audio.jsonl
-  corpus_path: data/pubmed_qa/corpus_documents.jsonl
-  strict_validation: true
+experiment:
+  name: pubmed_qa_hybrid_rrf
+  output_dir: evaluation_results
+dataset:
+  id: pubmed_qa
+  questions: data/pubmed_qa/questions_with_audio.jsonl
+  corpus: data/pubmed_qa/corpus_documents.jsonl
   trace_limit: 100
   batch_size: 16
+data:
+  strict_validation: true
   num_workers: 0
-
+graph:
+  mode: asr_text_retrieval
+vector_db:
+  bm25_k1: 1.5
+  bm25_b: 0.75
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-medium
+    device: cuda:0
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    device: cuda:1
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 10
+    gpu_id: 0
+    mode: hybrid
+    fusion:
+      dense_weight: 0.5
+      method: rrf
+      rrf_k: 60
+    reranker:
+      mode: none
+      top_k: 30
+      weight: 0.35
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG
 audio_synthesis:
   enabled: false
   provider: espeak
@@ -38,21 +56,6 @@ audio_synthesis:
   sample_rate: 16000
   seed: 42
   output_dir: data/pubmed_qa/audio
-
-vector_db:
-  type: inmemory
-  k: 10
-  gpu_id: 0
-  retrieval_mode: hybrid
-  hybrid_dense_weight: 0.5
-  hybrid_fusion_method: rrf  # Use Reciprocal Rank Fusion instead of weighted
-  rrf_k: 60  # RRF k parameter (higher = more weight to top results)
-  bm25_k1: 1.5
-  bm25_b: 0.75
-  reranker_mode: none
-  reranker_top_k: 30
-  reranker_weight: 0.35
-
 checkpoint_enabled: true
 checkpoint_interval: 100
 resume_from_checkpoint: true

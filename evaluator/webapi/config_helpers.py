@@ -9,7 +9,7 @@ from evaluator.datasets import (
     resolve_dataset_profile,
     validate_dataset_runtime_config,
 )
-from evaluator.pipeline import build_stage_graph
+from evaluator.pipeline import build_graph_for_config, get_stage_node_def
 from evaluator.pipeline.factory import check_backend_dependencies
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.utils import with_provider
@@ -35,7 +35,9 @@ def nested_config(config: EvaluationConfig) -> Dict[str, Any]:
     }
 
 
-def create_config_options(provider_factory: Callable[[], ModelServiceProvider]) -> Dict[str, Any]:
+def create_config_options(
+    provider_factory: Callable[[], ModelServiceProvider],
+) -> Dict[str, Any]:
     """Build form options for config creator UI."""
     raw_models = with_provider(provider_factory, lambda p: p.list_available_models())
 
@@ -60,7 +62,13 @@ def create_config_options(provider_factory: Callable[[], ModelServiceProvider]) 
     if isinstance(raw_models, dict):
         for family, entries in raw_models.items():
             normalized_models[str(family)] = _normalize_model_entries(entries)
-    for required_family in ("asr", "text_embedding", "audio_embedding", "tts", "reranker"):
+    for required_family in (
+        "asr",
+        "text_embedding",
+        "audio_embedding",
+        "tts",
+        "reranker",
+    ):
         normalized_models.setdefault(required_family, [])
 
     defaults = EvaluationConfig()
@@ -78,22 +86,29 @@ def create_config_options(provider_factory: Callable[[], ModelServiceProvider]) 
             "startup_mode": ["lazy", "eager"],
             "offload_policy": ["on_finish", "never"],
         },
-        "tts_providers": sorted({entry["type"] for entry in normalized_models.get("tts", [])}),
+        "tts_providers": sorted(
+            {entry["type"] for entry in normalized_models.get("tts", [])}
+        ),
         "models": normalized_models,
         "defaults": nested_config(defaults),
     }
 
 
 def graph_preview(config: EvaluationConfig) -> Dict[str, Any]:
-    profile = resolve_dataset_profile(config.data.dataset_name, config.data.dataset_type)
-    graph = build_stage_graph(
-        str(config.model.pipeline_mode),
-        embedding_fusion_enabled=bool(config.embedding_fusion.enabled),
+    profile = resolve_dataset_profile(
+        config.data.dataset_name, config.data.dataset_type
     )
+    graph = build_graph_for_config(config)
     return {
         "mode": graph.mode,
         "nodes": [
-            {"id": node.id, "stage": node.stage, "depends_on": list(node.depends_on)}
+            {
+                "id": node.id,
+                "stage": node.stage,
+                "depends_on": list(node.depends_on),
+                "inputs": list(get_stage_node_def(node.stage).inputs),
+                "outputs": list(get_stage_node_def(node.stage).outputs),
+            }
             for node in graph.nodes
         ],
         "levels": [[node.id for node in level] for level in graph.topological_levels()],
@@ -105,19 +120,47 @@ def graph_preview(config: EvaluationConfig) -> Dict[str, Any]:
             "supports_generation": profile.supports_generation,
             "evaluation_mode": profile.evaluation_mode,
             "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
-            "pipeline_mode_supported": profile.supports_pipeline_mode(str(config.model.pipeline_mode)),
+            "pipeline_mode_supported": profile.supports_pipeline_mode(
+                str(config.model.pipeline_mode)
+            ),
         },
     }
 
 
-def load_config(payload_config: Dict[str, Any], *, auto_devices: bool) -> EvaluationConfig:
+def node_catalogue() -> Dict[str, Any]:
+    """The registered stage-node types + their I/O contract (E2): what the visual builder's
+    palette offers and how ports connect. Each entry = ``{type, model_field, inputs, outputs,
+    optional_inputs, param_defaults}`` — ports connect when an output artifact name matches a
+    consumer's input name (the same rule the auto-wiring uses)."""
+    from ..pipeline.stage_graph import _NODE_REGISTRY
+
+    return {
+        "nodes": [
+            {
+                "type": stage,
+                "model_field": d.model_field,
+                "inputs": list(d.inputs),
+                "outputs": list(d.outputs),
+                "optional_inputs": list(d.optional_inputs),
+                "param_defaults": dict(d.param_defaults),
+            }
+            for stage, d in sorted(_NODE_REGISTRY.items())
+        ]
+    }
+
+
+def load_config(
+    payload_config: Dict[str, Any], *, auto_devices: bool
+) -> EvaluationConfig:
     config = EvaluationConfig.from_dict(payload_config)
     if auto_devices:
         config = config.with_auto_devices()
     return config
 
 
-def prepare_run_config(payload_config: Dict[str, Any], *, auto_devices: bool) -> EvaluationConfig:
+def prepare_run_config(
+    payload_config: Dict[str, Any], *, auto_devices: bool
+) -> EvaluationConfig:
     config = load_config(payload_config, auto_devices=auto_devices)
     check_backend_dependencies(config.vector_db)
     validate_dataset_runtime_config(

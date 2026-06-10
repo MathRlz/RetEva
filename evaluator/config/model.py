@@ -54,25 +54,26 @@ class ModelConfig:
     
     def auto_configure_devices(self) -> None:
         """Auto-configure device assignments based on hardware availability.
-        
-        Sets asr_device, text_emb_device, and audio_emb_device to available devices.
-        Avoids assigning cuda:1 if only 1 GPU is available.
+
+        Picks from the *compute-usable* CUDA indices (unsupported archs / iGPUs are
+        filtered out), so indices are not assumed contiguous. With 2+ usable GPUs,
+        text embedding goes on the second to spread load; otherwise everything shares
+        the first usable GPU, or CPU when none are usable.
         """
-        import evaluator.config as config_module
-        gpu_count = config_module.get_available_gpu_count()
-        
-        if gpu_count == 0:
-            # No GPUs available, use CPU for all
+        from ..devices.capability import usable_gpu_indices
+
+        devs = usable_gpu_indices()
+
+        if not devs:
+            # No usable GPUs, use CPU for all
             self.asr_device = "cpu"
             self.text_emb_device = "cpu"
             self.audio_emb_device = "cpu"
-        elif gpu_count == 1:
-            # Only one GPU, put everything on cuda:0
-            self.asr_device = "cuda:0"
-            self.text_emb_device = "cuda:0"
-            self.audio_emb_device = "cuda:0"
-        else:
-            # Multiple GPUs: distribute models (ASR on 0, text emb on 1, audio on 0)
-            self.asr_device = "cuda:0"
-            self.text_emb_device = "cuda:1"
-            self.audio_emb_device = "cuda:0"
+            return
+
+        primary = f"cuda:{devs[0]}"
+        secondary = f"cuda:{devs[1]}" if len(devs) > 1 else primary
+        # ASR + audio on the primary GPU; text embedding spread to the second when present.
+        self.asr_device = primary
+        self.audio_emb_device = primary
+        self.text_emb_device = secondary

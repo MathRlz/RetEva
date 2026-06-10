@@ -2,7 +2,9 @@ import json
 import os
 from typing import Dict, Optional
 
-_BUILTIN_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "term_weights")
+_BUILTIN_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "resources", "term_weights"
+)
 
 
 def load_term_weights(domain: str, path: Optional[str] = None) -> Dict[str, float]:
@@ -29,4 +31,6 @@ def load_term_weights(domain: str, path: Optional[str] = None) -> Dict[str, floa
     with open(target, encoding="utf-8") as fh:
         data = json.load(fh)
 
-    return {str(k).lower(): float(v) for k, v in data.items() if not str(k).startswith("_")}
+    return {
+        str(k).lower(): float(v) for k, v in data.items() if not str(k).startswith("_")
+    }

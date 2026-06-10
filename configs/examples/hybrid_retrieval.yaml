@@ -1,107 +1,64 @@
-# =============================================================================
-# Hybrid Retrieval with Reranking Configuration
-# =============================================================================
-#
-# This is the highest-accuracy configuration, combining multiple retrieval
-# strategies for optimal results.
-#
-# Retrieval strategy:
-#   1. Dense retrieval: Semantic similarity using neural embeddings
-#   2. Sparse retrieval: Lexical matching using BM25
-#   3. Hybrid fusion: Combine dense + sparse using Reciprocal Rank Fusion (RRF)
-#   4. Reranking: Cross-encoder reranker for final scoring
-#
-# When to use:
-#   - When accuracy is more important than speed
-#   - When queries may contain specific terms (names, codes) that benefit from BM25
-#   - For production evaluation benchmarks
-#
-# =============================================================================
-
-experiment_name: hybrid_retrieval_best
-output_dir: evaluation_results
-
+experiment:
+  name: hybrid_retrieval_best
+  output_dir: evaluation_results
+dataset:
+  id: pubmed_qa
+  questions: data/pubmed_qa/questions_with_audio.jsonl
+  corpus: data/pubmed_qa/corpus_documents.jsonl
+  batch_size: 16
+data:
+  strict_validation: true
+  num_workers: 0
+  test_size: 0.0
+graph:
+  mode: asr_text_retrieval
+vector_db:
+  bm25_k1: 1.5
+  bm25_b: 0.75
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-large-v3
+    adapter: null
+    device: cuda:0
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    adapter: null
+    device: cuda:1
+  audio_embedding:
+    model: null
+    name: null
+    device: cuda:0
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 10
+    mode: hybrid
+    fusion:
+      method: rrf
+      dense_weight: 0.5
+      rrf_k: 60
+    reranker:
+      mode: cross_encoder
+      enabled: true
+      top_k: 30
+      weight: 0.35
+      model: cross-encoder/ms-marco-MiniLM-L-6-v2
+      device: cuda:0
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    max_size_gb: null
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    log_dir: logs
+    console_level: INFO
+    file_level: DEBUG
 checkpoint_enabled: true
 checkpoint_interval: 100
 resume_from_checkpoint: true
-
-cache:
-  enabled: true
-  cache_dir: .cache
-  max_size_gb: null
-  cache_asr_features: true
-  cache_transcriptions: true
-  cache_embeddings: true
-  cache_vector_db: true
-
-logging:
-  log_dir: logs
-  console_level: INFO
-  file_level: DEBUG
-
-model:
-  pipeline_mode: asr_text_retrieval
-  
-  # === ASR Model ===
-  # Use larger Whisper model for best transcription quality
-  asr_model_type: whisper
-  asr_model_name: openai/whisper-large-v3  # Best accuracy
-  asr_adapter_path: null
-  asr_device: cuda:0
-  
-  # === Text Embedding Model ===
-  # Jina v4 provides excellent semantic understanding
-  text_emb_model_type: jina_v4
-  text_emb_model_name: jinaai/jina-embeddings-v4
-  text_emb_adapter_path: null
-  text_emb_device: cuda:1                   # Separate GPU if available
-  
-  audio_emb_model_type: null
-  audio_emb_model_name: null
-  audio_emb_device: cuda:0
-
-data:
-  dataset_name: pubmed_qa
-  questions_path: data/pubmed_qa/questions_with_audio.jsonl
-  corpus_path: data/pubmed_qa/corpus_documents.jsonl
-  strict_validation: true
-  batch_size: 16
-  num_workers: 0
-  test_size: 0.0
-
-# ----- Hybrid Retrieval Settings -----
-vector_db:
-  type: inmemory
-  k: 10                        # Final number of results to return
-  
-  # Retrieval mode: "dense", "sparse", or "hybrid"
-  retrieval_mode: hybrid
-  
-  # ----- Hybrid Fusion Settings -----
-  # How to combine dense and sparse scores
-  hybrid_fusion_method: rrf    # "weighted" or "rrf" (Reciprocal Rank Fusion)
-  
-  # For weighted fusion: weight given to dense scores (1 - this = sparse weight)
-  hybrid_dense_weight: 0.5
-  
-  # RRF k parameter: controls how much to favor top-ranked results
-  # Higher k = more even weighting across ranks
-  # Lower k = more weight to top results
-  rrf_k: 60
-  
-  # ----- BM25 Sparse Retrieval Settings -----
-  # k1: Term frequency saturation parameter (1.2-2.0 typical)
-  bm25_k1: 1.5
-  # b: Document length normalization (0-1, 0.75 typical)
-  bm25_b: 0.75
-  
-  # ----- Reranking Settings -----
-  # Reranking uses a cross-encoder to rescore the top candidates
-  reranker_mode: cross_encoder  # "none", "token_overlap", or "cross_encoder"
-  reranker_enabled: true
-  reranker_top_k: 30            # Number of candidates to rerank
-  reranker_weight: 0.35         # Weight of reranker score in final ranking
-  
-  # Cross-encoder model for reranking
-  reranker_model: cross-encoder/ms-marco-MiniLM-L-6-v2
-  reranker_device: cuda:0       # Device for reranker (null = auto-detect)

@@ -18,6 +18,7 @@ from .._sonar_base import SonarPipelineMixin, SONAR_INSTALL_HINT
     'sonar',
     default_name='text_sonar_basic_encoder',
     description='SONAR multilingual text encoder (shared text/speech space, 1024-d)',
+    embedding_space='sonar',  # shared with sonar_speech → cross-modal retrieval valid
 )
 class SonarTextModel(SonarPipelineMixin, TextEmbeddingModel):
     """SONAR multilingual text encoder."""

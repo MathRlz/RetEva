@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 
 def _make_client(config: QueryOptimizationConfig) -> LLMClient:
-    return LLMClient(config.to_llm_config())
+    return LLMClient(config.to_llm_config(), component="query_optimization")
 
 
 def _hash_request(system_prompt: str, user_prompt: str, model: str, temperature: float) -> str:

@@ -1,55 +1,42 @@
-# Embedding Fusion: Balanced Audio and Text Configuration
-# Use this configuration when both audio features and text semantics are equally important
-
-experiment_name: "fusion_balanced_experiment"
-
-dataset:
-  name: "medical_audio"
-  path: "data/medical_audio"
-  loader: "local"
-
+experiment:
+  name: fusion_balanced_experiment
 vector_db:
-  type: "chroma"
-  collection_name: "medical_fusion_balanced"
-  
-  # Dense retrieval mode
-  retrieval_mode: "dense"
+  collection_name: medical_fusion_balanced
   top_k: 10
-  
-  # Embedding Fusion Configuration
   embedding_fusion:
     enabled: true
-    method: "weighted"
-    
-    # Balanced weights: 50/50 audio and text
+    method: weighted
     audio_weight: 0.5
     text_weight: 0.5
-    
-    # Normalization (recommended)
     normalize: true
-    
-    # Audio model
-    audio_model: "wav2vec2-base"
-    
-    # Text model
-    text_model: "sentence-transformers/all-MiniLM-L6-v2"
-
+    audio_model: wav2vec2-base
+    text_model: sentence-transformers/all-MiniLM-L6-v2
+nodes:
+  corpus_index:
+    store: chroma
+  retrieval:
+    mode: dense
+runtime:
+  logging:
+    show_progress_bars: true
+    console_level: INFO
+dataset:
+  name: medical_audio
+  path: data/medical_audio
+  loader: local
 evaluation:
   metrics:
-    - "mrr"
-    - "ndcg"
-    - "map"
-    - "recall"
-  
+  - mrr
+  - ndcg
+  - map
+  - recall
   ndcg_k: 10
-  recall_k: [5, 10, 20]
-
+  recall_k:
+  - 5
+  - 10
+  - 20
 output:
-  results_dir: "evaluation_results/fusion_balanced"
+  results_dir: evaluation_results/fusion_balanced
   save_json: true
   save_csv: true
   generate_plots: true
-
-logging:
-  level: "INFO"
-  show_progress_bars: true

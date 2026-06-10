@@ -1,4 +1,4 @@
-"""Advanced benchmark exports."""
+"""Tier-3: timing / benchmark helpers and report export utilities."""
 
 from ..benchmarks import (
     Timer,

@@ -29,11 +29,17 @@
 
     {% if result %}
       <div>
-        {% for k in ['MRR','MAP','Recall@1','Recall@5','WER','CER'] %}
+        {# headline metrics first (when present), then any other numeric keys (incl. per-branch) #}
+        {% set headline = ['MRR','MAP','Recall@1','Recall@5','WER','CER'] %}
+        {% for k in headline %}
           {% if result.get(k) is number %}<span class="chip">{{ k }}: {{ '%.4f'|format(result.get(k)) }}</span>{% endif %}
         {% endfor %}
+        {% for k, v in result.items() %}
+          {% if v is number and k not in headline and not k.endswith('_ci') %}<span class="chip">{{ k }}: {{ '%.4f'|format(v) }}</span>{% endif %}
+        {% endfor %}
       </div>
-      {% set traces = result.get('query_traces') or [] %}
+      {# G4: prefer report.traces, fall back to the legacy top-level key #}
+      {% set traces = ((result.get('report') or {}).get('traces') or {}).get('query_traces') or result.get('query_traces') or [] %}
       {% if traces %}
         <h4>Per-query traces</h4>
         {% for t in traces[:20] %}

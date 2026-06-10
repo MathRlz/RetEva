@@ -1,62 +1,49 @@
-# Evaluation configuration for CLAP-style model
-# This model uses dual-path architecture with cross-attention + contrastive heads
-# For retrieval, it uses the contrastive head (independent encoding)
-
-experiment_name: clap_style_admed_voice
-output_dir: evaluation_results
-
+experiment:
+  name: clap_style_admed_voice
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  batch_size: 32
+data:
+  num_workers: 4
+  test_size: 0.0
+graph:
+  mode: audio_text_retrieval
+nodes:
+  asr:
+    model: null
+    name: null
+    adapter: null
+    device: cuda:1
+  text_embedding:
+    model: clap_text
+    name: null
+    adapter: null
+    device: cuda:1
+  audio_embedding:
+    model: clap_style
+    name: null
+    model_path: ../clap_style_model/outputs/clap_fleurs_admed/best_model.pt
+    device: cuda:1
+    dim: 512
+    dropout: 0.1
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 10
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    max_size_gb: null
+    cache_asr_features: false
+    cache_transcriptions: false
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    log_dir: logs
+    console_level: INFO
+    file_level: DEBUG
 checkpoint_enabled: true
 checkpoint_interval: 50
 resume_from_checkpoint: true
-
-cache:
-  enabled: true
-  cache_dir: .cache
-  max_size_gb: null
-  cache_asr_features: false
-  cache_transcriptions: false
-  cache_embeddings: true  # Cache text embeddings for DB
-  cache_vector_db: true
-
-logging:
-  log_dir: logs
-  console_level: INFO
-  file_level: DEBUG
-
-model:
-  # CRITICAL: audio_text_retrieval mode for direct audio-to-text retrieval
-  pipeline_mode: audio_text_retrieval
-  
-  # No ASR needed
-  asr_model_type: null
-  asr_model_name: null
-  asr_adapter_path: null
-  asr_device: cuda:1
-  
-  # Text embedder - using CLAP's text encoder (multimodal)
-  # IMPORTANT: clap_text tells the factory to use the same CLAP model for text encoding
-  text_emb_model_type: clap_text
-  text_emb_model_name: null  # Not used, shared with audio model
-  text_emb_adapter_path: null
-  text_emb_device: cuda:1
-  
-  # CLAP-style audio embedding model (also handles text via multimodal interface)
-  audio_emb_model_type: clap_style
-  audio_emb_model_name: null  # Not used, model determines from checkpoint
-  audio_emb_model_path: ../clap_style_model/outputs/clap_fleurs_admed/best_model.pt
-  audio_emb_device: cuda:1
-  
-  # These are not used for clap_style (model determines from checkpoint)
-  audio_emb_dim: 512  # Will be overridden by model config
-  audio_emb_dropout: 0.1  # Not used
-
-data:
-  dataset_name: admed_voice
-  batch_size: 32
-  num_workers: 4
-  test_size: 0.0  # Use full test set
-
-vector_db:
-  type: inmemory  # or 'faiss'
-  k: 10
-

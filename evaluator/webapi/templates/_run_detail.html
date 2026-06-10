@@ -1,10 +1,14 @@
 {% set r = run %}
 {% set m = r.metrics or {} %}
 {% set lat = m.get('latency') or {} %}
-{% set traces = m.get('query_traces') or [] %}
+{# G4: read from the report first (the source of truth), legacy top-level keys as fallback #}
+{% set report = m.get('report') or {} %}
+{% set rtraces = report.get('traces') or {} %}
+{% set rjudge = report.get('judge') or {} %}
+{% set traces = rtraces.get('query_traces') or m.get('query_traces') or [] %}
 {% set speakers = m.get('per_speaker') or {} %}
-{% set judge = m.get('llm_judge') or {} %}
-{% set fail = m.get('retrieval_failure_analysis') or {} %}
+{% set judge = rjudge.get('llm_judge') or m.get('llm_judge') or {} %}
+{% set fail = rtraces.get('retrieval_failure_analysis') or m.get('retrieval_failure_analysis') or {} %}
 <div class="panel" style="margin-top:12px">
   <h3>Run {{ r.run_id }} — {{ r.experiment_name }}</h3>
   <div class="row muted">
@@ -24,6 +28,57 @@
       {% endif %}
     {% endfor %}
   </div>
+
+  {# --- Per-branch report: branches, deltas, impact, provenance (M5) --- #}
+  {% set report = m.get('report') or {} %}
+  {% set branches = report.get('branches') or {} %}
+  {% if branches %}
+  <details open>
+    <summary><strong>Branches</strong> ({{ branches|length }})</summary>
+    {% for bname, bmetrics in branches.items() %}
+      <div style="margin:6px 0">
+        <strong>{{ bname }}</strong>
+        {% for mname, stats in bmetrics.items() %}
+          {% if stats is mapping and stats.get('mean') is number %}
+            <span class="chip">{{ mname }}: {{ '%.4f'|format(stats['mean']) }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endfor %}
+    {% set deltas = report.get('deltas') or {} %}
+    {% if deltas %}
+    <div class="muted" style="margin-top:6px">Cross-branch Δ (branch − baseline):</div>
+    {% for pair, dmetrics in deltas.items() %}
+      <div><span class="muted">{{ pair }}:</span>
+        {% for mname, stats in dmetrics.items() %}
+          {% if stats is mapping and stats.get('mean_delta') is number %}
+            <span class="chip">Δ{{ mname }}: {{ '%+.4f'|format(stats['mean_delta']) }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endfor %}
+    {% endif %}
+    {% set impact = report.get('retrieval_wer_impact') or {} %}
+    {% for pair, imetrics in impact.items() %}
+      <div><span class="muted">Retrieval-WER-Impact {{ pair }}:</span>
+        {% for mname, stats in imetrics.items() %}
+          {% if stats is mapping and stats.get('mean') is number %}
+            <span class="chip">{{ mname }}: {{ '%+.4f'|format(stats['mean']) }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endfor %}
+    {% set prov = report.get('provenance') or {} %}
+    {% if prov %}
+    <div class="muted" style="margin-top:6px">
+      provenance: config_hash={{ prov.get('config_hash') }}
+      {% if prov.get('seed') is not none %}· seed={{ prov.get('seed') }}{% endif %}
+      {% if prov.get('git_commit') %}· git={{ prov.get('git_commit') }}{% endif %}
+      {% if prov.get('models') %}· models={{ prov.get('models') }}{% endif %}
+    </div>
+    {% endif %}
+  </details>
+  {% endif %}
 
   {# --- Per-stage latency breakdown (R2) --- #}
   {% if lat %}
@@ -127,6 +182,19 @@
         {% endfor %}
       </tbody>
     </table>
+  </details>
+  {% endif %}
+
+  {# --- Execution DAG that produced this run (from its stored config) --- #}
+  {% if levels %}
+  <details>
+    <summary>Execution DAG</summary>
+    {% set io = node_io|default({}) %}
+    {% for level in levels %}
+    <div class="graph-level">
+      {% for node in level %}<span class="graph-node" title="{{ io.get(node, '') }}">{{ node }}{% if io.get(node) %}<br><small class="muted">{{ io.get(node) }}</small>{% endif %}</span>{% endfor %}
+    </div>
+    {% endfor %}
   </details>
   {% endif %}
 

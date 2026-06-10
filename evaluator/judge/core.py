@@ -151,7 +151,7 @@ def run_llm_judging(
     if max_cases < 0:
         raise RuntimeError("LLM judge max_cases must be >= 0 when judge is enabled")
 
-    client = LLMClient(judge_config.to_llm_config())
+    client = LLMClient(judge_config.to_llm_config(), component="judge")
 
     _sys_p = system_prompt or getattr(judge_config, "system_prompt", None)
     _user_t = user_prompt_template or getattr(judge_config, "user_prompt_template", None)

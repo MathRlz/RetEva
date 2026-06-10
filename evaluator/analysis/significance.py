@@ -436,3 +436,23 @@ def format_comparison_report(comparison: Dict[str, Any]) -> str:
     lines.append("=" * 70)
     
     return "\n".join(lines)
+
+
+def benjamini_hochberg(p_values: List[float]) -> List[float]:
+    """Benjamini-Hochberg FDR-adjusted p-values (q-values), in input order (S4).
+
+    Controls the false-discovery rate across the whole family of cross-branch delta
+    tests, so a panel of ΔRecall/ΔWER comparisons can't accumulate false positives.
+    Returns one q-value per input p-value, monotone-corrected and clamped to ≤1."""
+    m = len(p_values)
+    if m == 0:
+        return []
+    order = sorted(range(m), key=lambda i: p_values[i])
+    q = [0.0] * m
+    prev = 1.0
+    for rank in range(m - 1, -1, -1):
+        i = order[rank]
+        val = p_values[i] * m / (rank + 1)
+        prev = min(prev, val)
+        q[i] = min(prev, 1.0)
+    return q

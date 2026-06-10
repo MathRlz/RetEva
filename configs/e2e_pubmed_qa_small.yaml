@@ -1,0 +1,40 @@
+# CI-sized real-model end-to-end smoke (task T4). Tiny: 5 samples, small models,
+# self-contained TTS (facebook/mms-tts-eng) so no external voice files. Single GPU
+# (cuda:0) — GPU 1 on the box is an unsupported iGPU. Used by tests/test_e2e_real_model.py.
+experiment:
+  name: e2e_pubmed_qa_small
+  output_dir: evaluation_results/e2e
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: false   # force real compute both runs (the reproducibility check is the point)
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/e2e/audio

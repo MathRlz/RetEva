@@ -1,49 +1,41 @@
-# Hybrid Retrieval with Reciprocal Rank Fusion (RRF)
-# Combines dense embeddings and BM25 sparse retrieval
-
-experiment_name: "hybrid_rrf_experiment"
-
-dataset:
-  name: "pubmed_qa"
-  path: "data/pubmed_qa"
-
+experiment:
+  name: hybrid_rrf_experiment
 vector_db:
-  type: "chroma"
-  collection_name: "pubmed_hybrid"
-  
-  # Hybrid Retrieval Mode
-  retrieval_mode: "hybrid"
-  
-  # RRF Fusion Method (better than weighted for combining ranked lists)
-  fusion_method: "rrf"
-  rrf_k: 60  # RRF constant (default: 60, higher = more emphasis on top ranks)
-  
-  # Retrieval parameters
+  collection_name: pubmed_hybrid
+  fusion_method: rrf
   top_k: 10
-  
-  # BM25 Parameters (tuned for medical text)
-  bm25_k1: 1.5      # Term frequency saturation (default: 1.5)
-  bm25_b: 0.75      # Length normalization (default: 0.75)
-  bm25_epsilon: 0.25  # IDF floor (prevents zero IDF)
-
+  bm25_k1: 1.5
+  bm25_b: 0.75
+  bm25_epsilon: 0.25
+nodes:
+  corpus_index:
+    store: chroma
+  retrieval:
+    mode: hybrid
+    fusion:
+      rrf_k: 60
+runtime:
+  logging:
+    show_progress_bars: true
+    console_level: INFO
+dataset:
+  name: pubmed_qa
+  path: data/pubmed_qa
 evaluation:
   metrics:
-    - "mrr"
-    - "ndcg"
-    - "map"
-    - "recall"
-    - "precision"
-  
+  - mrr
+  - ndcg
+  - map
+  - recall
+  - precision
   ndcg_k: 10
-  recall_k: [5, 10, 20]
+  recall_k:
+  - 5
+  - 10
+  - 20
   precision_k: 10
-
 output:
-  results_dir: "evaluation_results/hybrid_rrf"
+  results_dir: evaluation_results/hybrid_rrf
   save_json: true
   save_csv: true
   generate_plots: true
-
-logging:
-  level: "INFO"
-  show_progress_bars: true

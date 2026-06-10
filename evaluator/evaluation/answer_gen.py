@@ -1,4 +1,5 @@
 """Answer generation using retrieved context (RAG Phase 4.5)."""
+
 from __future__ import annotations
 
 import logging
@@ -65,7 +66,10 @@ def generate_single_answer(
         tmpl = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
         msgs = [
             {"role": "system", "content": sys_p},
-            {"role": "user", "content": tmpl.format(question=question, context=context)},
+            {
+                "role": "user",
+                "content": tmpl.format(question=question, context=context),
+            },
         ]
         answer = client.call(msgs)
 
@@ -74,7 +78,10 @@ def generate_single_answer(
         tmpl = config.prompt_template or _COT_PROMPT_TEMPLATE
         msgs = [
             {"role": "system", "content": sys_p},
-            {"role": "user", "content": tmpl.format(question=question, context=context)},
+            {
+                "role": "user",
+                "content": tmpl.format(question=question, context=context),
+            },
         ]
         answer = client.call(msgs)
 
@@ -117,7 +124,9 @@ def generate_single_answer(
                 "role": "user",
                 "content": (
                     f"Question: {question}\n\n"
-                    "Partial answers:\n" + "\n".join(f"- {a}" for a in partials) + "\n\nFinal answer:"
+                    "Partial answers:\n"
+                    + "\n".join(f"- {a}" for a in partials)
+                    + "\n\nFinal answer:"
                 ),
             },
         ]
@@ -135,7 +144,9 @@ def _tokenize(text: str) -> set:
     return set(re.findall(r"[a-z0-9]+", text.lower()))
 
 
-def _compute_hallucination_rate(answer: str, retrieved_payloads: List[Dict[str, Any]]) -> float:
+def _compute_hallucination_rate(
+    answer: str, retrieved_payloads: List[Dict[str, Any]]
+) -> float:
     """Fraction of answer tokens not present in retrieved context (simple token-overlap heuristic)."""
     context_text = " ".join(
         p.get("text", p.get("content", "")) for p in retrieved_payloads
@@ -187,7 +198,7 @@ def generate_answers(
     """
     from tqdm import tqdm
 
-    client = LLMClient(config.to_llm_config())
+    client = LLMClient(config.to_llm_config(), component="answer_gen")
 
     all_query_ids, all_relevant, all_results_with_scores = traces_data
     n = len(all_query_texts)
@@ -199,6 +210,8 @@ def generate_answers(
     rouge2_list: List[float] = []
     rougeL_list: List[float] = []
     hallucination_list: List[float] = []
+    dosage_safety_list: List[float] = []
+    context_recall_list: List[float] = []
     failed = 0
 
     for i in tqdm(range(n), desc="Generating answers"):
@@ -214,10 +227,16 @@ def generate_answers(
             gen = generate_single_answer(question, retrieved_payloads, config, client)
         except Exception as exc:
             logger.warning("Answer generation failed for query %s: %s", query_id, exc)
-            gen = {"generated_answer": "", "method": config.method, "context_doc_ids": []}
+            gen = {
+                "generated_answer": "",
+                "method": config.method,
+                "context_doc_ids": [],
+            }
             failed += 1
 
-        hal_rate = _compute_hallucination_rate(gen["generated_answer"], retrieved_payloads)
+        hal_rate = _compute_hallucination_rate(
+            gen["generated_answer"], retrieved_payloads
+        )
         hallucination_list.append(hal_rate)
 
         detail: Dict[str, Any] = {
@@ -234,7 +253,11 @@ def generate_answers(
 
         if config.compute_rouge and config.reference_metadata_field:
             ref_answer = _lookup_reference(
-                query_id, all_relevant, i, corpus_lookup, config.reference_metadata_field
+                query_id,
+                all_relevant,
+                i,
+                corpus_lookup,
+                config.reference_metadata_field,
             )
             if ref_answer and gen["generated_answer"]:
                 detail["reference_answer"] = ref_answer
@@ -246,6 +269,18 @@ def generate_answers(
                     rougeL_list.append(rouge["rougeL"])
                 except Exception as exc:
                     logger.warning("ROUGE computation failed for %s: %s", query_id, exc)
+                # RAG-generation metrics (C4): dose safety vs reference + grounding recall.
+                from ..metrics.rag import context_recall, drug_dosage_safety
+
+                contexts = [
+                    p.get("text", p.get("content", "")) for p in retrieved_payloads
+                ]
+                safety = drug_dosage_safety(gen["generated_answer"], ref_answer)
+                crecall = context_recall(ref_answer, contexts)
+                detail["drug_dosage_safety"] = safety
+                detail["context_recall"] = crecall
+                dosage_safety_list.append(safety)
+                context_recall_list.append(crecall)
 
         details.append(detail)
 
@@ -253,7 +288,11 @@ def generate_answers(
         return sum(xs) / len(xs) if xs else None
 
     if failed > 0:
-        logger.warning("Answer generation: %d/%d queries failed (empty answers included in metrics)", failed, n)
+        logger.warning(
+            "Answer generation: %d/%d queries failed (empty answers included in metrics)",
+            failed,
+            n,
+        )
     return {
         "model": config.model,
         "method": config.method,
@@ -264,6 +303,8 @@ def generate_answers(
         "mean_rouge2": _mean(rouge2_list),
         "mean_rougeL": _mean(rougeL_list),
         "mean_hallucination_rate": _mean(hallucination_list),
+        "mean_drug_dosage_safety": _mean(dosage_safety_list),
+        "mean_context_recall": _mean(context_recall_list),
     }
 
 

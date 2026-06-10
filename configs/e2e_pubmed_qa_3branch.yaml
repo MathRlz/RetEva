@@ -1,0 +1,51 @@
+# C5: the thesis's 3-branch compare graph — ref (ASR oracle) / asr (raw whisper) /
+# corr (asr + rule query-correction) — each terminal metrics, cross-branch deltas reported.
+# CSE collapses the shared prefix (dataset_source, corpus_index, tts) to one run.
+experiment:
+  name: e2e_pubmed_qa_3branch
+  output_dir: evaluation_results/e2e
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  branches:
+    - id: ref
+      asr: {oracle: true}
+      query_correction: {enabled: false}
+    - id: asr
+      query_correction: {enabled: false}
+    - id: corr
+      query_correction: {enabled: true, method: rule}
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 5
+query_correction:
+  enabled: true       # insert the node into the base template; branches set per-branch enabled
+  method: rule
+runtime:
+  cache:
+    enabled: false
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/e2e/audio

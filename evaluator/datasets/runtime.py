@@ -44,7 +44,9 @@ class AudioSamplesQueryDataset(QueryDataset):
         trace_limit: int = 0,
         corpus_entries: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        self.samples = samples[:trace_limit] if trace_limit and trace_limit > 0 else samples
+        self.samples = (
+            samples[:trace_limit] if trace_limit and trace_limit > 0 else samples
+        )
         self.corpus_entries = corpus_entries or []
 
     def __len__(self) -> int:
@@ -54,7 +56,11 @@ class AudioSamplesQueryDataset(QueryDataset):
         sample = self.samples[idx]
         metadata = dict(getattr(sample, "metadata", {}) or {})
         sample_id = str(getattr(sample, "sample_id", "") or f"sample_{idx}")
-        gt_ids = metadata.get("groundtruth_doc_ids") or metadata.get("relevant_doc_ids") or []
+        gt_ids = (
+            metadata.get("groundtruth_doc_ids")
+            or metadata.get("relevant_doc_ids")
+            or []
+        )
         if isinstance(gt_ids, str):
             gt_ids = [gt_ids]
         if not isinstance(gt_ids, list):
@@ -260,7 +266,9 @@ def resolve_dataset_runtime_spec(config: Any) -> DatasetRuntimeSpec:
     )
 
 
-def validate_dataset_runtime_config(config: Any, *, retrieval_required: bool = False) -> DatasetRuntimeSpec:
+def validate_dataset_runtime_config(
+    config: Any, *, retrieval_required: bool = False
+) -> DatasetRuntimeSpec:
     """Validate dataset runtime requirements and return resolved runtime spec."""
     spec = resolve_dataset_runtime_spec(config)
     missing = [
@@ -288,8 +296,77 @@ def load_runtime_dataset(config: Any) -> QueryDataset:
     supported without any changes here.
     """
     from .descriptor import resolve_dataset_descriptor
+
     descriptor = resolve_dataset_descriptor(config.data)
     errors = descriptor.validate_data_config(config.data)
     if errors:
         raise ConfigurationError("; ".join(errors))
     return descriptor.load(config.data)
+
+
+def load_runtime_datasets(config: Any) -> "Dict[str, QueryDataset]":
+    """Load every entry of a multi-source ``data.datasets`` map → ``{id: QueryDataset}`` (B1).
+
+    Each entry already holds ``DataConfig`` field names (``questions_path``/``corpus_path``/…, from
+    ``graph_config._DATASET_FIELDS``) plus an optional ``role``; a per-entry ``DataConfig`` is built
+    by overlaying those fields onto ``config.data`` and loaded via :func:`load_runtime_dataset`.
+    Returns ``{}`` in single-source mode (no ``datasets`` map) — the scalar ``config.data`` fields
+    drive the single load as before, so single-source runs are unchanged."""
+    from dataclasses import replace
+
+    sources = getattr(getattr(config, "data", None), "datasets", None)
+    if not sources:
+        return {}
+    out: "Dict[str, QueryDataset]" = {}
+    for sid, entry in sources.items():
+        fields = {
+            k: v for k, v in (entry or {}).items() if k not in ("role", "datasets")
+        }
+        sub_data = replace(config.data, datasets=None, **fields)
+        sub_config = replace(config, data=sub_data)
+        out[str(sid)] = load_runtime_dataset(sub_config)
+    return out
+
+
+def _corpus_doc_ids(dataset: Any) -> set:
+    if not hasattr(dataset, "get_corpus"):
+        return set()
+    try:
+        return {str(d.get("doc_id", "")) for d in dataset.get_corpus()} - {""}
+    except Exception:
+        return set()
+
+
+def _relevant_doc_ids(dataset: Any) -> set:
+    out: set = set()
+    for q in getattr(dataset, "questions", None) or []:
+        for d in getattr(q, "groundtruth_doc_ids", None) or []:
+            out.add(str(d))
+    return out
+
+
+def validate_dataset_join(
+    questions_dataset: Any, corpus_dataset: Any
+) -> "Dict[str, Any]":
+    """Check the cross-dataset join contract (B5): do the questions' relevant `doc_id`s overlap
+    the corpus's `doc_id`s? IR metrics are only meaningful when they do — disjoint namespaces mean
+    every relevant doc is absent from the corpus, so Recall/NDCG/… would be a misleading 0 rather
+    than "not applicable". Returns ``{overlap, n_relevant, n_corpus, disjoint, warning}``; the caller
+    disables IR metrics (QA/judge still run) when ``disjoint``."""
+    relevant = _relevant_doc_ids(questions_dataset)
+    corpus = _corpus_doc_ids(corpus_dataset)
+    overlap = relevant & corpus
+    disjoint = bool(relevant) and bool(corpus) and not overlap
+    warning = ""
+    if disjoint:
+        warning = (
+            f"Disjoint doc_id namespaces: {len(relevant)} relevant ids share 0 with "
+            f"{len(corpus)} corpus ids — IR metrics disabled (QA/judge still run)."
+        )
+    return {
+        "overlap": len(overlap),
+        "n_relevant": len(relevant),
+        "n_corpus": len(corpus),
+        "disjoint": disjoint,
+        "warning": warning,
+    }

@@ -42,6 +42,8 @@ from .runtime import (
     resolve_dataset_runtime_spec,
     validate_dataset_runtime_config,
     load_runtime_dataset,
+    load_runtime_datasets,
+    validate_dataset_join,
 )
 from .types import (
     EvalDataset,
@@ -96,4 +98,6 @@ __all__ = [
     "resolve_dataset_runtime_spec",
     "validate_dataset_runtime_config",
     "load_runtime_dataset",
+    "load_runtime_datasets",
+    "validate_dataset_join",
 ]

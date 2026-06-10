@@ -22,6 +22,7 @@ from .attention_pool import _resample_to_16k
     'sonar_speech',
     default_name='sonar_speech_encoder_eng',
     description='SONAR speech encoder — same 1024-d space as SONAR text (zero-shot cross-modal)',
+    embedding_space='sonar',  # shared with sonar text encoder → cross-modal retrieval valid
 )
 class SonarSpeechModel(SonarPipelineMixin, AudioEmbeddingModel):
     """SONAR speech encoder for zero-shot cross-modal retrieval."""

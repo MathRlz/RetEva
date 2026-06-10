@@ -10,11 +10,11 @@ Main Components:
 
 Usage:
     from evaluator.metrics import compute_metrics, compute_wer
-    
+
     # IR metrics
     metrics = compute_metrics(relevance_dict, k_values=[1, 5, 10])
     print(f"MRR: {metrics['MRR']:.4f}")
-    
+
     # STT metrics
     wer = compute_wer(reference, hypothesis)
     print(f"WER: {wer:.2%}")
@@ -43,10 +43,12 @@ from .stt import (
     term_weighted_wer,
 )
 
-from .aggregate import (
+from .ir_aggregate import (
     compute_ir_metrics,
     log_ir_metrics,
 )
+
+from .selection import select_metrics_for_dataset_type
 
 from .diagnostics import (
     first_relevant_rank_distribution,
@@ -82,4 +84,6 @@ __all__ = [
     "embedding_alignment",
     "per_speaker_breakdown",
     "judge_calibration",
+    # Metric selection
+    "select_metrics_for_dataset_type",
 ]

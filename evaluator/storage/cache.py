@@ -3,7 +3,6 @@ import hashlib
 import json
 import logging
 import sqlite3
-from contextlib import closing
 import numpy as np
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
@@ -49,8 +48,7 @@ class CacheManager:
         self.audio_embeddings_dir = self.cache_dir / "audio_embeddings"
         self.vector_db_dir = self.cache_dir / "vector_dbs"
         self.checkpoints_dir = self.cache_dir / "checkpoints"
-        self.synthesized_audio_dir = self.cache_dir / "synthesized_audio"
-
+        
         # Centralized mapping for cache directories (replaces if-elif chains)
         self._cache_dirs: Dict[str, Path] = {
             "asr_features": self.asr_features_dir,
@@ -59,22 +57,16 @@ class CacheManager:
             "audio_embeddings": self.audio_embeddings_dir,
             "vector_db": self.vector_db_dir,
             "checkpoints": self.checkpoints_dir,
-            "synthesized_audio": self.synthesized_audio_dir,
         }
         
         if self.enabled:
             for dir_path in self._cache_dirs.values():
-                try:
-                    dir_path.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
-                    # A single unwritable category shouldn't crash the whole cache; that
-                    # category just degrades to no-op (get returns None, writes are skipped).
-                    logger.warning("Could not create cache dir %s: %s", dir_path, exc)
+                dir_path.mkdir(parents=True, exist_ok=True)
             self._initialize_manifest_db()
 
     def _initialize_manifest_db(self) -> None:
         """Initialize SQLite cache manifest index."""
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with sqlite3.connect(self.manifest_db_path) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS cache_entries (
@@ -131,7 +123,7 @@ class CacheManager:
         timestamp = datetime.now().isoformat()
         file_size = artifact_path.stat().st_size if artifact_path.exists() else 0
         checksum = _file_checksum(artifact_path) if artifact_path.exists() else None
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with sqlite3.connect(self.manifest_db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO cache_entries(
@@ -183,7 +175,7 @@ class CacheManager:
 
         path: Optional[Path] = None
         stored_checksum: Optional[str] = None
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with sqlite3.connect(self.manifest_db_path) as conn:
             row = conn.execute(
                 """
                 SELECT artifact_path, checksum FROM cache_entries
@@ -205,7 +197,7 @@ class CacheManager:
                     path.unlink(missing_ok=True)
                 else:
                     # Touch updated_at for LRU ordering
-                    with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+                    with sqlite3.connect(self.manifest_db_path) as conn:
                         conn.execute(
                             "UPDATE cache_entries SET updated_at = ? "
                             "WHERE cache_type = ? AND cache_key = ?",
@@ -214,7 +206,7 @@ class CacheManager:
                         conn.commit()
                     return path
             # stale or corrupted manifest entry: remove
-            with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+            with sqlite3.connect(self.manifest_db_path) as conn:
                 conn.execute(
                     "DELETE FROM cache_entries WHERE cache_type = ? AND cache_key = ?",
                     (cache_type, cache_key),
@@ -236,174 +228,74 @@ class CacheManager:
         base_dir = self._cache_dirs[cache_type]
         return base_dir / f"{cache_key}{extension}"
 
-    def _read_json_file(self, path: Path) -> Dict[str, Any]:
-        with open(path, 'r') as f:
-            return json.load(f)
-
-    def _write_json_file(self, path: Path, payload: Dict[str, Any], *, indent: Optional[int] = None) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w') as f:
-            json.dump(payload, f, indent=indent)
-
-    def _load_json_cache(self, cache_type: str, cache_key: str, extension: str) -> Optional[Dict[str, Any]]:
-        if not self.enabled:
-            return None
-        fallback_path = self._get_cache_path(cache_type, cache_key, extension)
-        resolved = self._resolve_manifest_path(cache_type, cache_key, fallback_path)
-        if resolved is not None and resolved.exists():
-            return self._read_json_file(resolved)
-        return None
-
-    def _save_json_cache(
-        self,
-        cache_type: str,
-        cache_key: str,
-        extension: str,
-        payload: Dict[str, Any],
-        *,
-        stage: str,
-        model_name: Optional[str] = None,
-        input_hash: Optional[str] = None,
-        config_hash: Optional[str] = None,
-        payload_hash: Optional[str] = None,
-        indent: Optional[int] = None,
-    ) -> None:
-        if not self.enabled:
-            return
-        cache_path = self._get_cache_path(cache_type, cache_key, extension)
-        self._write_json_file(cache_path, payload, indent=indent)
-        self._upsert_manifest_entry(
-            cache_type=cache_type,
-            cache_key=cache_key,
-            artifact_path=cache_path,
-            stage=stage,
-            model_name=model_name,
-            input_hash=input_hash,
-            config_hash=config_hash,
-            payload_hash=payload_hash,
-        )
-
-    def _load_numpy_cache(self, cache_type: str, cache_key: str, extension: str) -> Optional[np.ndarray]:
-        if not self.enabled:
-            return None
-        fallback_path = self._get_cache_path(cache_type, cache_key, extension)
-        resolved = self._resolve_manifest_path(cache_type, cache_key, fallback_path)
-        if resolved is not None and resolved.exists():
-            return np.load(resolved)
-        return None
-
-    def _save_numpy_cache(
-        self,
-        cache_type: str,
-        cache_key: str,
-        extension: str,
-        array: np.ndarray,
-        *,
-        stage: str,
-        model_name: Optional[str] = None,
-        input_hash: Optional[str] = None,
-        config_hash: Optional[str] = None,
-        payload_hash: Optional[str] = None,
-    ) -> None:
-        if not self.enabled:
-            return
-        cache_path = self._get_cache_path(cache_type, cache_key, extension)
-        np.save(cache_path, array)
-        self._upsert_manifest_entry(
-            cache_type=cache_type,
-            cache_key=cache_key,
-            artifact_path=cache_path,
-            stage=stage,
-            model_name=model_name,
-            input_hash=input_hash,
-            config_hash=config_hash,
-            payload_hash=payload_hash,
-        )
-
-    def _load_npz_cache(self, cache_type: str, cache_key: str, extension: str) -> Optional[Dict[str, np.ndarray]]:
-        if not self.enabled:
-            return None
-        fallback_path = self._get_cache_path(cache_type, cache_key, extension)
-        resolved = self._resolve_manifest_path(cache_type, cache_key, fallback_path)
-        if resolved is None or not resolved.exists():
-            return None
-        with np.load(resolved) as data:
-            return {"features": data["features"], "attention_mask": data["attention_mask"]}
-
-    def _save_npz_cache(
-        self,
-        cache_type: str,
-        cache_key: str,
-        extension: str,
-        *,
-        stage: str,
-        model_name: Optional[str] = None,
-        input_hash: Optional[str] = None,
-        config_hash: Optional[str] = None,
-        payload_hash: Optional[str] = None,
-        **arrays: np.ndarray,
-    ) -> None:
-        if not self.enabled:
-            return
-        cache_path = self._get_cache_path(cache_type, cache_key, extension)
-        np.savez_compressed(cache_path, **arrays)
-        self._upsert_manifest_entry(
-            cache_type=cache_type,
-            cache_key=cache_key,
-            artifact_path=cache_path,
-            stage=stage,
-            model_name=model_name,
-            input_hash=input_hash,
-            config_hash=config_hash,
-            payload_hash=payload_hash,
-        )
-
     def get_asr_features(self, audio_hash: str, model_name: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """Retrieve cached ASR features (features, attention_mask)."""
-        cache_key = model_key(audio_hash, model_name)
-        data = self._load_npz_cache("asr_features", cache_key, ".npz")
-        if data is None:
+        if not self.enabled:
             return None
-        return data["features"], data["attention_mask"]
+        
+        cache_key = model_key(audio_hash, model_name)
+        fallback_path = self._get_cache_path("asr_features", cache_key, ".npz")
+        features_path = self._resolve_manifest_path("asr_features", cache_key, fallback_path)
+        
+        if features_path is not None and features_path.exists():
+            data = np.load(features_path)
+            return data['features'], data['attention_mask']
+        return None
     
     def set_asr_features(self, audio_hash: str, model_name: str, 
                         features: np.ndarray, attention_mask: np.ndarray):
         """Cache ASR features."""
+        if not self.enabled:
+            return
+        
         cache_key = model_key(audio_hash, model_name)
-        self._save_npz_cache(
+        features_path = self._get_cache_path("asr_features", cache_key, ".npz")
+        
+        np.savez_compressed(features_path, features=features, attention_mask=attention_mask)
+        self._upsert_manifest_entry(
             cache_type="asr_features",
             cache_key=cache_key,
-            extension=".npz",
+            artifact_path=features_path,
             stage="asr_features",
             model_name=model_name,
             input_hash=audio_hash,
-            features=features,
-            attention_mask=attention_mask,
         )
     
     def get_transcription(self, audio_hash: str, model_name: str, language: Optional[str] = None) -> Optional[str]:
         """Retrieve cached transcription."""
-        cache_key = transcription_key(audio_hash, model_name, language)
-        payload = self._load_json_cache("transcriptions", cache_key, ".json")
-        if payload is None:
+        if not self.enabled:
             return None
-        return payload.get("transcription")
+        
+        cache_key = transcription_key(audio_hash, model_name, language)
+        fallback_path = self._get_cache_path("transcriptions", cache_key, ".json")
+        trans_path = self._resolve_manifest_path("transcriptions", cache_key, fallback_path)
+        
+        if trans_path is not None and trans_path.exists():
+            with open(trans_path, 'r') as f:
+                data = json.load(f)
+                return data['transcription']
+        return None
     
     def set_transcription(self, audio_hash: str, model_name: str, 
                          transcription: str, language: Optional[str] = None):
         """Cache transcription."""
+        if not self.enabled:
+            return
+        
         cache_key = transcription_key(audio_hash, model_name, language)
-        payload = {
-            'transcription': transcription,
-            'model_name': model_name,
-            'language': language,
-            'timestamp': datetime.now().isoformat(),
-        }
-        self._save_json_cache(
+        trans_path = self._get_cache_path("transcriptions", cache_key, ".json")
+        
+        with open(trans_path, 'w') as f:
+            json.dump({
+                'transcription': transcription,
+                'model_name': model_name,
+                'language': language,
+                'timestamp': datetime.now().isoformat()
+            }, f)
+        self._upsert_manifest_entry(
             cache_type="transcriptions",
             cache_key=cache_key,
-            extension=".json",
-            payload=payload,
+            artifact_path=trans_path,
             stage="transcription",
             model_name=model_name,
             input_hash=audio_hash,
@@ -412,51 +304,83 @@ class CacheManager:
     
     def get_embedding(self, text: str, model_name: str) -> Optional[np.ndarray]:
         """Retrieve cached text embedding."""
+        if not self.enabled:
+            return None
+        
         cache_key = embedding_key(text, model_name)
-        return self._load_numpy_cache("embeddings", cache_key, ".npy")
+        fallback_path = self._get_cache_path("embeddings", cache_key, ".npy")
+        emb_path = self._resolve_manifest_path("embeddings", cache_key, fallback_path)
+        
+        if emb_path is not None and emb_path.exists():
+            return np.load(emb_path)
+        return None
     
     def set_embedding(self, text: str, model_name: str, embedding: np.ndarray):
         """Cache text embedding."""
+        if not self.enabled:
+            return
+        
         cache_key = embedding_key(text, model_name)
-        self._save_numpy_cache(
+        emb_path = self._get_cache_path("embeddings", cache_key, ".npy")
+        
+        np.save(emb_path, embedding)
+        self._upsert_manifest_entry(
             cache_type="embeddings",
             cache_key=cache_key,
-            extension=".npy",
-            array=embedding,
+            artifact_path=emb_path,
             stage="text_embedding",
             model_name=model_name,
             input_hash=text,
         )
     
-    def get_embeddings_batch(self, texts: List[str], model_name: str) -> List[Optional[np.ndarray]]:
-        """Retrieve cached embeddings for a batch of texts.
-
-        Returns a list parallel to ``texts`` where each element is the cached
-        embedding or ``None`` if not cached.  Callers should only embed the
-        ``None`` slots rather than re-embedding the entire batch.
-        """
+    def get_embeddings_batch(self, texts: list[str], model_name: str) -> Optional[np.ndarray]:
+        """Retrieve cached embeddings for a batch of texts."""
         if not self.enabled:
-            return [None] * len(texts)
-        return [self.get_embedding(text, model_name) for text in texts]
+            return None
+        
+        embeddings = []
+        for text in texts:
+            emb = self.get_embedding(text, model_name)
+            if emb is None:
+                return None  # If any is missing, return None
+            embeddings.append(emb)
+        
+        return np.array(embeddings)
     
-    def set_embeddings_batch(self, texts: List[str], model_name: str, embeddings: np.ndarray):
+    def set_embeddings_batch(self, texts: list[str], model_name: str, embeddings: np.ndarray):
         """Cache embeddings for a batch of texts."""
+        if not self.enabled:
+            return
+        
         for text, embedding in zip(texts, embeddings):
             self.set_embedding(text, model_name, embedding)
     
     def get_audio_embedding(self, audio_hash: str, model_name: str) -> Optional[np.ndarray]:
         """Retrieve cached audio embedding."""
+        if not self.enabled:
+            return None
+        
         cache_key = audio_embedding_key(audio_hash, model_name)
-        return self._load_numpy_cache("audio_embeddings", cache_key, ".npy")
+        fallback_path = self._get_cache_path("audio_embeddings", cache_key, ".npy")
+        emb_path = self._resolve_manifest_path("audio_embeddings", cache_key, fallback_path)
+        
+        if emb_path is not None and emb_path.exists():
+            return np.load(emb_path)
+        return None
     
     def set_audio_embedding(self, audio_hash: str, model_name: str, embedding: np.ndarray):
         """Cache audio embedding."""
+        if not self.enabled:
+            return
+        
         cache_key = audio_embedding_key(audio_hash, model_name)
-        self._save_numpy_cache(
+        emb_path = self._get_cache_path("audio_embeddings", cache_key, ".npy")
+        
+        np.save(emb_path, embedding)
+        self._upsert_manifest_entry(
             cache_type="audio_embeddings",
             cache_key=cache_key,
-            extension=".npy",
-            array=embedding,
+            artifact_path=emb_path,
             stage="audio_embedding",
             model_name=model_name,
             input_hash=audio_hash,
@@ -464,93 +388,57 @@ class CacheManager:
     
     def get_vector_db(self, db_key: str) -> Optional[Tuple[np.ndarray, list[str]]]:
         """Retrieve cached vector database (vectors, texts)."""
-        vectors = self._load_numpy_cache("vector_db", db_key, "_vectors.npy")
-        metadata_path = self._get_cache_path("vector_db", db_key, "_metadata.json")
-        if vectors is None or not metadata_path.exists():
+        if not self.enabled:
             return None
-        metadata = self._read_json_file(metadata_path)
-        return vectors, metadata['texts']
+        
+        fallback_vectors_path = self._get_cache_path("vector_db", db_key, "_vectors.npy")
+        vectors_path = self._resolve_manifest_path("vector_db", db_key, fallback_vectors_path)
+        metadata_path = self._get_cache_path("vector_db", db_key, "_metadata.json")
+        
+        if vectors_path is not None and vectors_path.exists() and metadata_path.exists():
+            vectors = np.load(vectors_path)
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            return vectors, metadata['texts']
+        return None
     
     def set_vector_db(self, db_key: str, vectors: np.ndarray, texts: list[str]):
         """Cache vector database."""
         if not self.enabled:
             return
+        
+        vectors_path = self._get_cache_path("vector_db", db_key, "_vectors.npy")
         metadata_path = self._get_cache_path("vector_db", db_key, "_metadata.json")
-        self._save_numpy_cache(
+        
+        np.save(vectors_path, vectors)
+        with open(metadata_path, 'w') as f:
+            json.dump({
+                'texts': texts,
+                'num_vectors': len(vectors),
+                'vector_dim': vectors.shape[1] if len(vectors) > 0 else 0,
+                'timestamp': datetime.now().isoformat()
+            }, f)
+        self._upsert_manifest_entry(
             cache_type="vector_db",
             cache_key=db_key,
-            extension="_vectors.npy",
-            array=vectors,
+            artifact_path=vectors_path,
             stage="vector_db",
             input_hash=db_key,
         )
-        payload = {
-            'texts': texts,
-            'num_vectors': len(vectors),
-            'vector_dim': vectors.shape[1] if len(vectors) > 0 else 0,
-            'timestamp': datetime.now().isoformat(),
-        }
-        self._write_json_file(metadata_path, payload)
-
-    def delete_vector_db(self, db_key: str) -> bool:
-        """Delete a cached vector DB (artifacts + manifest entry).
-
-        Returns True if anything was removed. Used to drop the index cache tied to a
-        specific run (its ``db_key`` is stored in the run's metadata).
-        """
-        removed = False
-        # Deterministic artifact paths (_vectors.npy + _metadata.json).
-        for extension in ("_vectors.npy", "_metadata.json"):
-            path = self._get_cache_path("vector_db", db_key, extension)
-            if path.exists():
-                path.unlink(missing_ok=True)
-                removed = True
-        # Manifest row (the .npy is tracked there; remove it and its artifact too).
-        if self.manifest_db_path.exists():
-            with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
-                row = conn.execute(
-                    "SELECT artifact_path FROM cache_entries "
-                    "WHERE cache_type='vector_db' AND cache_key=?",
-                    (db_key,),
-                ).fetchone()
-                if row and row[0]:
-                    artifact = Path(row[0])
-                    if artifact.exists():
-                        artifact.unlink(missing_ok=True)
-                        removed = True
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_type='vector_db' AND cache_key=?",
-                    (db_key,),
-                )
-                conn.commit()
-                removed = removed or cursor.rowcount > 0
-        return removed
-
+    
     def get_checkpoint(self, experiment_id: str) -> Optional[Dict[str, Any]]:
         """Load evaluation checkpoint."""
-        return self._load_json_cache("checkpoints", experiment_id, ".json")
-
-    # ── Synthesized (TTS) audio ───────────────────────────────────────
-    def synthesized_audio_path(self, cache_key: str) -> Path:
-        """Path where a synthesized-audio WAV for *cache_key* lives in the cache."""
-        return self._get_cache_path("synthesized_audio", cache_key, ".wav")
-
-    def get_synthesized_audio(self, cache_key: str) -> Optional[Path]:
-        """Return the cached WAV path for *cache_key* if present (and caching enabled)."""
         if not self.enabled:
             return None
-        path = self.synthesized_audio_path(cache_key)
-        return path if path.exists() else None
-
-    def register_synthesized_audio(self, cache_key: str, path: Path) -> None:
-        """Record a synthesized-audio WAV in the manifest (for stats + clear_all/clear_type)."""
-        if not self.enabled:
-            return
-        self._upsert_manifest_entry(
-            cache_type="synthesized_audio", cache_key=cache_key,
-            artifact_path=path, stage="synthesis",
-        )
-
+        
+        fallback_path = self._get_cache_path("checkpoints", experiment_id, ".json")
+        checkpoint_path = self._resolve_manifest_path("checkpoints", experiment_id, fallback_path)
+        
+        if checkpoint_path is not None and checkpoint_path.exists():
+            with open(checkpoint_path, 'r') as f:
+                return json.load(f)
+        return None
+    
     def get_unique_texts(
         self,
         dataset_name: Optional[str] = None,
@@ -560,6 +448,9 @@ class CacheManager:
         preprocessing_fingerprint: Optional[str] = None,
     ) -> Optional[List[str]]:
         """Retrieve cached unique texts for a dataset."""
+        if not self.enabled:
+            return None
+
         if dataset_fingerprint is not None:
             cache_key = unique_texts_manifest_key(
                 dataset_fp=dataset_fingerprint,
@@ -571,11 +462,16 @@ class CacheManager:
             raise ValueError(
                 "Provide either dataset_fingerprint or both dataset_name and dataset_size"
             )
+        cache_path = self._get_cache_path("vector_db", f"unique_texts_{cache_key}", ".json")
+        
         manifest_key = f"unique_texts_{cache_key}"
-        payload = self._load_json_cache("vector_db", manifest_key, ".json")
-        if payload is None:
-            return None
-        return payload.get("unique_texts")
+        resolved = self._resolve_manifest_path("vector_db", manifest_key, cache_path)
+        if resolved is not None and resolved.exists():
+            cache_path = resolved
+            with open(cache_path, 'r') as f:
+                data = json.load(f)
+                return data['unique_texts']
+        return None
     
     def set_unique_texts(
         self,
@@ -613,33 +509,40 @@ class CacheManager:
                 "Provide either dataset_fingerprint or both dataset_name and dataset_size"
             )
 
-        payload = {
-            **metadata,
-            'unique_texts': unique_texts,
-            'num_unique': len(unique_texts),
-            'timestamp': datetime.now().isoformat(),
-        }
-        self._save_json_cache(
+        cache_path = self._get_cache_path("vector_db", f"unique_texts_{cache_key}", ".json")
+        
+        with open(cache_path, 'w') as f:
+            json.dump({
+                **metadata,
+                'unique_texts': unique_texts,
+                'num_unique': len(unique_texts),
+                'timestamp': datetime.now().isoformat()
+            }, f, indent=2)
+        self._upsert_manifest_entry(
             cache_type="vector_db",
             cache_key=f"unique_texts_{cache_key}",
-            extension=".json",
-            payload=payload,
+            artifact_path=cache_path,
             stage="unique_texts",
             input_hash=dataset_fingerprint or dataset_name,
             config_hash=preprocessing_fingerprint,
-            indent=2,
         )
     
     def set_checkpoint(self, experiment_id: str, checkpoint_data: Dict[str, Any]):
         """Save evaluation checkpoint."""
-        self._save_json_cache(
+        if not self.enabled:
+            return
+        
+        checkpoint_path = self._get_cache_path("checkpoints", experiment_id, ".json")
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(checkpoint_path, 'w') as f:
+            json.dump(checkpoint_data, f, indent=2)
+        self._upsert_manifest_entry(
             cache_type="checkpoints",
             cache_key=experiment_id,
-            extension=".json",
-            payload=checkpoint_data,
+            artifact_path=checkpoint_path,
             stage="checkpoint",
             input_hash=experiment_id,
-            indent=2,
         )
     
     def get_cache_stats(self) -> Dict[str, Any]:
@@ -738,7 +641,7 @@ class CacheManager:
             shutil.rmtree(cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
             if self.enabled and self.manifest_db_path.exists():
-                with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+                with sqlite3.connect(self.manifest_db_path) as conn:
                     conn.execute("DELETE FROM cache_entries WHERE cache_type = ?", (cache_type,))
                     conn.commit()
             logger.info(f"Cleared {file_count} files from {cache_type} cache")
@@ -747,7 +650,7 @@ class CacheManager:
         """Return total size of cached artifacts tracked by manifest."""
         if not self.enabled or not self.manifest_db_path.exists():
             return 0
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with sqlite3.connect(self.manifest_db_path) as conn:
             row = conn.execute(
                 "SELECT COALESCE(SUM(file_size_bytes), 0) FROM cache_entries"
             ).fetchone()
@@ -763,7 +666,7 @@ class CacheManager:
             return
 
         evicted = 0
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with sqlite3.connect(self.manifest_db_path) as conn:
             rows = conn.execute(
                 """
                 SELECT cache_type, cache_key, artifact_path,
@@ -811,7 +714,7 @@ class CacheManager:
         cleared_count = 0
 
         if self.enabled and self.manifest_db_path.exists():
-            with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+            with sqlite3.connect(self.manifest_db_path) as conn:
                 rows = conn.execute(
                     """
                     SELECT cache_type, cache_key, artifact_path

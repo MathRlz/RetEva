@@ -1,7 +1,7 @@
-"""Typed result object returned by ``evaluate_phased``.
+"""Typed result object returned by ``run_graph``.
 
 The evaluation result was historically a plain ``dict[str, Any]`` that accreted
-~40 heterogeneous keys, so consumers had to guess names. ``PhasedResults`` is a
+~40 heterogeneous keys, so consumers had to guess names. ``RunResults`` is a
 ``dict`` **subclass**: it behaves exactly like the old dict (``results["MRR"]``,
 ``.get(...)``, ``.update(...)``, iteration, ``json.dumps`` all work unchanged, so
 nothing downstream breaks and it is its own serialized form at the edge), but it
@@ -22,11 +22,17 @@ Key groups (all optional — present only for the relevant mode / enabled featur
     features    answer_generation, query_traces, llm_judge,
                 judge_vs_Recall5_correlation, judge_vs_MRR_correlation
     oracle      oracle_MRR, oracle_Recall@5, oracle_NDCG@5, asr_degradation_factor
+
+Boundary vs :class:`~evaluator.evaluation.results.EvaluationResults` (T1): ``RunResults`` is
+the **internal** metrics payload the executor returns (a plain mapping at the engine edge);
+``EvaluationResults`` is the **public** wrapper the API builds from it, adding the
+``EvaluationConfig`` + run metadata + JSON file I/O. Kept separate by design (see that class).
 """
+
 from typing import Any, Dict, List, Optional, Tuple
 
 
-class PhasedResults(dict):
+class RunResults(dict):
     """Dict of evaluation metrics with typed accessors for the common keys."""
 
     # --- meta ---

@@ -1,6 +1,6 @@
 """Aggregate metric helpers for retrieval evaluation."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from .ir import reciprocal_rank, average_precision, recall_at_k, ndcg_at_k
 
@@ -8,7 +8,7 @@ from .ir import reciprocal_rank, average_precision, recall_at_k, ndcg_at_k
 def compute_ir_metrics(
     all_retrieved: List[List[str]],
     all_relevant: List[Dict[str, int]],
-    k_values: Optional[List[int]] = None,
+    k_values: List[int] = None,
 ) -> Dict[str, float]:
     """Compute aggregated IR metrics from retrieved and relevant items."""
     if k_values is None:
@@ -47,7 +47,7 @@ def compute_ir_metrics(
     return results
 
 
-def log_ir_metrics(results: Dict[str, float], logger, k_values: Optional[List[int]] = None):
+def log_ir_metrics(results: Dict[str, float], logger, k_values: List[int] = None):
     """Log IR metrics in a formatted way."""
     if k_values is None:
         k_values = [1, 5, 10]

@@ -1,4 +1,4 @@
-"""Advanced model exports."""
+"""Tier-3: model implementation classes (ASR / text / audio embedding)."""
 
 from ..models import ASRModel, TextEmbeddingModel, AudioEmbeddingModel
 from ..models import WhisperModel, Wav2Vec2Model

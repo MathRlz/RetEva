@@ -1,41 +1,43 @@
-experiment_name: m4t_asr_pubmed_qa_large
-output_dir: evaluation_results
-
-cache:
-  enabled: true
-  cache_dir: .cache
-  cache_asr_features: true
-  cache_transcriptions: true
-  cache_embeddings: true
-  cache_vector_db: true
-
-logging:
-  console_level: INFO
-  file_level: DEBUG
-
-model:
-  pipeline_mode: asr_text_retrieval
-  # SeamlessM4T-v2 multilingual ASR. tgt_lang defaults to "eng"; set asr_params
-  # tgt_lang to the source language for same-language ASR, or keep "eng" to
-  # translate non-English speech into English text before retrieval.
-  asr_model_type: seamless_m4t
-  asr_model_name: facebook/seamless-m4t-v2-large
-  asr_params:
-    tgt_lang: eng
-  asr_device: cpu
-  text_emb_model_type: labse
-  text_emb_device: cpu
-
-data:
-  dataset_name: pubmed_qa
-  questions_path: examples/data/pubmedqa/questions.json
-  corpus_path: examples/data/pubmedqa/corpus.json
-  strict_validation: false
+experiment:
+  name: m4t_asr_pubmed_qa_large
+  output_dir: evaluation_results
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmedqa/questions.json
+  corpus: examples/data/pubmedqa/corpus.json
   trace_limit: 5
   batch_size: 4
+data:
+  strict_validation: false
   num_workers: 0
-
-# Questions are text-only; synthesize audio with MMS TTS so the ASR stage has input.
+graph:
+  mode: asr_text_retrieval
+nodes:
+  asr:
+    model: seamless_m4t
+    name: facebook/seamless-m4t-v2-large
+    params:
+      tgt_lang: eng
+    device: cpu
+  text_embedding:
+    model: labse
+    device: cpu
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 10
+    gpu_id: 0
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG
 audio_synthesis:
   enabled: true
   provider: mms
@@ -44,12 +46,6 @@ audio_synthesis:
   sample_rate: 16000
   seed: 42
   output_dir: examples/data/pubmedqa/audio
-
-vector_db:
-  type: inmemory
-  k: 10
-  gpu_id: 0
-
 checkpoint_enabled: true
 checkpoint_interval: 100
 resume_from_checkpoint: true

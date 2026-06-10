@@ -1,4 +1,5 @@
 """Audio synthesis from text using TTS models."""
+
 from typing import Optional, List
 import numpy as np
 import hashlib
@@ -6,16 +7,18 @@ import os
 from pathlib import Path
 import logging
 
+from tqdm import tqdm
+
 logger = logging.getLogger(__name__)
 
 
 class AudioSynthesizer:
     """Base class for text-to-speech synthesis with caching support."""
-    
+
     def __init__(self, config):
         """
         Initialize audio synthesizer.
-        
+
         Args:
             config: AudioSynthesisConfig instance with TTS settings.
         """
@@ -40,7 +43,7 @@ class AudioSynthesizer:
 
         self.provider = self._create_provider()
         logger.info(f"Initialized TTS model: {config.provider}")
-    
+
     def _create_provider(self):
         """Factory method to create TTS model backend based on config.
 
@@ -60,15 +63,15 @@ class AudioSynthesizer:
                 f"Unknown TTS provider: {provider_name}. Supported providers: {available}"
             ) from exc
         return provider_cls(self.config)
-    
+
     def synthesize(self, text: str, output_path: Optional[str] = None) -> np.ndarray:
         """
         Synthesize audio from text.
-        
+
         Args:
             text: Text to synthesize.
             output_path: Optional path to save audio file.
-            
+
         Returns:
             audio_array: Float32 waveform in [-1, 1] range.
         """
@@ -99,27 +102,29 @@ class AudioSynthesizer:
         # Synthesize
         logger.debug("TTS synthesizing: '%s...'", text[:60])
         audio = self.provider.synthesize(text)
-        provider_sr = int(getattr(self.provider, "output_sample_rate", self.config.sample_rate))
+        provider_sr = int(
+            getattr(self.provider, "output_sample_rate", self.config.sample_rate)
+        )
         audio = self._resample_if_needed(audio, provider_sr)
-        
+
         # Normalize to [-1, 1]
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
-        
+
         max_val = np.abs(audio).max()
         if max_val > 0:
             audio = audio / max_val
-        
+
         # Cache
         if self.cache_dir:
             self._save_to_cache(cache_key, audio)
             logger.debug(f"Cached audio (key: {cache_key[:16]}...)")
-        
+
         # Save to file if requested (skip if already written by caller or prior run)
         if output_path and not os.path.exists(output_path):
             self._save_audio(output_path, audio)
             logger.debug(f"Saved audio to: {output_path}")
-        
+
         return audio
 
     def _resample_if_needed(self, audio: np.ndarray, source_sr: int) -> np.ndarray:
@@ -142,39 +147,36 @@ class AudioSynthesizer:
         except (ValueError, RuntimeError) as e:
             logger.warning(f"Audio resampling failed ({source_sr}->{target_sr}): {e}")
             return audio
-    
+
     def synthesize_batch(
-        self, 
-        texts: List[str], 
-        output_dir: Optional[str] = None
+        self, texts: List[str], output_dir: Optional[str] = None
     ) -> List[np.ndarray]:
         """
         Batch synthesis with progress tracking.
-        
+
         Args:
             texts: List of texts to synthesize.
             output_dir: Optional directory to save audio files.
-            
+
         Returns:
             List of audio arrays.
         """
         results = []
         total = len(texts)
-        
+
         logger.info(f"Synthesizing {total} texts...")
-        
-        for i, text in enumerate(texts):
+
+        for i, text in tqdm(
+            enumerate(texts), total=total, desc="TTS synthesis", unit="clip"
+        ):
             output_path = None
             if output_dir:
                 os.makedirs(output_dir, exist_ok=True)
                 output_path = os.path.join(output_dir, f"synth_{i:05d}.wav")
-            
+
             audio = self.synthesize(text, output_path)
             results.append(audio)
-            
-            if (i + 1) % 10 == 0 or (i + 1) == total:
-                logger.info(f"Synthesized {i + 1}/{total} texts")
-        
+
         logger.info(f"Batch synthesis complete: {total} texts")
         self.log_cache_stats()
         return results
@@ -186,11 +188,12 @@ class AudioSynthesizer:
             return
         logger.info(
             "TTS cache stats: %d/%d hits (%.0f%%), %d synthesized",
-            self._cache_hits, total,
+            self._cache_hits,
+            total,
             100.0 * self._cache_hits / total,
             self._cache_misses,
         )
-    
+
     def _get_cache_key(self, text: str) -> str:
         """Generate cache key from text and config settings."""
         config_str = (
@@ -202,8 +205,8 @@ class AudioSynthesizer:
             f"{self.config.sample_rate}"
         )
         combined = f"{text}_{config_str}"
-        return hashlib.sha256(combined.encode('utf-8')).hexdigest()
-    
+        return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+
     def _load_from_cache(self, cache_key: str) -> Optional[np.ndarray]:
         """Load audio from cache."""
         cache_path = self.cache_dir / f"{cache_key}.npy"
@@ -214,7 +217,7 @@ class AudioSynthesizer:
                 logger.warning(f"Failed to load from cache: {e}")
                 return None
         return None
-    
+
     def _save_to_cache(self, cache_key: str, audio: np.ndarray):
         """Save audio to cache."""
         try:
@@ -222,11 +225,12 @@ class AudioSynthesizer:
             np.save(cache_path, audio)
         except OSError as e:
             logger.warning(f"Failed to save to cache: {e}")
-    
+
     def _load_audio(self, path: str) -> Optional[np.ndarray]:
         """Load audio from WAV file, return None on failure."""
         try:
             import soundfile as sf
+
             audio, _ = sf.read(path, dtype="float32")
             return audio
         except Exception as e:
@@ -237,6 +241,7 @@ class AudioSynthesizer:
         """Save audio to WAV file."""
         try:
             import soundfile as sf
+
             sf.write(path, audio, self.config.sample_rate)
         except ImportError:
             logger.warning("soundfile not installed, cannot save audio to WAV")

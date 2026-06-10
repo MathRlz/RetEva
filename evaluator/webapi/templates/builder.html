@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.css">
+<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.js"></script>
+<style>
+  #builder { display: flex; gap: 12px; }
+  #palette { width: 180px; flex: 0 0 auto; }
+  #palette button { display: block; width: 100%; margin: 2px 0; text-align: left; }
+  #canvas { flex: 1 1 auto; height: 520px; border: 1px solid #ccc; position: relative; }
+  #sidepanel { width: 280px; flex: 0 0 auto; }
+  #spec { width: 100%; height: 180px; font-family: monospace; font-size: 12px; }
+  .node-title { font-weight: bold; padding: 4px; }
+</style>
+{% endblock %}
+{% block body %}
+<div class="panel">
+  <h2>Pipeline builder</h2>
+  <p class="muted">Drag node types from the palette, connect matching ports (output artifact →
+    same-named input), edit params, then export the node-centric graph or validate it.</p>
+  <div id="builder">
+    <div id="palette"><h3>Nodes</h3><div id="palette-list">loading…</div></div>
+    <div id="canvas"></div>
+    <div id="sidepanel">
+      <h3>Graph</h3>
+      <label>mode
+        <select id="mode">
+          <option>asr_text_retrieval</option>
+          <option>audio_emb_retrieval</option>
+          <option>audio_text_retrieval</option>
+          <option>asr_only</option>
+        </select>
+      </label>
+      <div class="row">
+        <button id="btn-export" type="button">Export YAML</button>
+        <button id="btn-validate" type="button">Validate</button>
+      </div>
+      <div id="param-panel"><em>select a node to edit params</em></div>
+      <textarea id="spec" readonly placeholder="exported node-centric graph appears here"></textarea>
+      <div id="validation"></div>
+    </div>
+  </div>
+</div>
+<script>
+const editor = new Drawflow(document.getElementById('canvas'));
+editor.start();
+let CATALOGUE = {};
+
+// E2: palette comes from the registered node types + their I/O contract.
+fetch('/api/graph/nodes').then(r => r.json()).then(d => {
+  const list = document.getElementById('palette-list'); list.innerHTML = '';
+  d.nodes.forEach(n => {
+    CATALOGUE[n.type] = n;
+    const b = document.createElement('button');
+    b.textContent = n.type;
+    b.title = `in: ${n.inputs.join(', ') || '—'}\nout: ${n.outputs.join(', ') || '—'}`;
+    b.onclick = () => addNode(n);
+    list.appendChild(b);
+  });
+});
+
+// E3: drop a node with one port per declared input/output artifact.
+let counter = {};
+function addNode(spec) {
+  counter[spec.type] = (counter[spec.type] || 0) + 1;
+  const id = spec.type + (counter[spec.type] > 1 ? '_' + counter[spec.type] : '');
+  const html = `<div class="node-title">${id}</div>`;
+  editor.addNode(id, spec.inputs.length, spec.outputs.length, 40, 40, spec.type,
+                 {type: spec.type, params: {}}, html);
+}
+
+// E4/E5: serialize the canvas → node-centric {mode, nodes:[{id,type,params}], edges:[{from,to}]}.
+function exportSpec() {
+  const dr = editor.export().drawflow.Home.data;
+  const nodes = [], edges = [];
+  Object.values(dr).forEach(n => {
+    nodes.push({id: n.name, type: n.data.type, params: n.data.params || {}});
+    Object.values(n.outputs || {}).forEach(out =>
+      (out.connections || []).forEach(c => {
+        const to = dr[c.node]; if (to) edges.push({from: n.name, to: to.name});
+      }));
+  });
+  return {mode: document.getElementById('mode').value, nodes, edges};
+}
+
+// E3: per-node param form — select a node to edit its params (seeded from param_defaults).
+editor.on('nodeSelected', (id) => {
+  const node = editor.getNodeFromId(id);
+  const cat = CATALOGUE[node.data.type] || {};
+  const keys = Object.keys({...(cat.param_defaults || {}), ...(node.data.params || {})});
+  const panel = document.getElementById('param-panel');
+  panel.innerHTML = `<h4>${node.name} <small>(${node.data.type})</small></h4>` +
+    (keys.length ? '' : '<em>no params</em>');
+  keys.forEach(k => {
+    const val = (node.data.params || {})[k] ?? (cat.param_defaults || {})[k] ?? '';
+    const row = document.createElement('label');
+    row.textContent = k + ' ';
+    const inp = document.createElement('input');
+    inp.value = val;
+    inp.onchange = () => {
+      node.data.params = node.data.params || {};
+      node.data.params[k] = inp.value;
+      editor.updateNodeDataFromId(id, node.data);
+    };
+    row.appendChild(inp); panel.appendChild(row);
+  });
+});
+
+document.getElementById('btn-export').onclick = () => {
+  document.getElementById('spec').value = JSON.stringify(exportSpec(), null, 2);
+};
+document.getElementById('btn-validate').onclick = () => {
+  const spec = exportSpec();
+  fetch('/api/graph/build', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(spec)})
+    .then(r => r.json().then(j => ({ok: r.ok, j})))
+    .then(({ok, j}) => {
+      document.getElementById('validation').innerHTML = ok
+        ? `<p class="ok">Valid ✓ — ${j.levels.length} levels</p>`
+        : `<p class="error">${j.detail}</p>`;
+    });
+};
+</script>
+{% endblock %}

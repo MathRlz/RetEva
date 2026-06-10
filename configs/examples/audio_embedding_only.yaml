@@ -1,83 +1,50 @@
-# =============================================================================
-# Direct Audio Embedding Retrieval Configuration
-# =============================================================================
-#
-# This configuration bypasses ASR entirely, using a model that converts
-# audio directly to embeddings for retrieval.
-#
-# Pipeline flow:
-#   1. Audio input is directly encoded to embeddings (no transcription)
-#   2. Audio embeddings are compared against text embeddings in the corpus
-#
-# Advantages:
-#   - No ASR error propagation
-#   - Potentially faster (single model instead of two)
-#   - Can capture acoustic information lost in text
-#
-# Requirements:
-#   - Pre-trained audio embedding model (e.g., CLAP-style or custom model)
-#   - Text embedding model for the corpus (must be compatible)
-#
-# =============================================================================
-
-experiment_name: audio_embedding_retrieval
-output_dir: evaluation_results
-
+experiment:
+  name: audio_embedding_retrieval
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  batch_size: 32
+data:
+  num_workers: 4
+  test_size: 0.0
+graph:
+  mode: audio_text_retrieval
+nodes:
+  asr:
+    model: null
+    name: null
+    adapter: null
+    device: cuda:0
+  text_embedding:
+    model: clap_text
+    name: null
+    adapter: null
+    device: cuda:0
+  audio_embedding:
+    model: clap_style
+    name: null
+    model_path: path/to/your/model.pt
+    device: cuda:0
+    dim: 512
+    dropout: 0.1
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 10
+    mode: dense
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    max_size_gb: null
+    cache_asr_features: false
+    cache_transcriptions: false
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    log_dir: logs
+    console_level: INFO
+    file_level: DEBUG
 checkpoint_enabled: true
 checkpoint_interval: 50
 resume_from_checkpoint: true
-
-cache:
-  enabled: true
-  cache_dir: .cache
-  max_size_gb: null
-  
-  # For audio embedding mode, we don't need ASR caches
-  cache_asr_features: false
-  cache_transcriptions: false
-  cache_embeddings: true       # Cache audio and text embeddings
-  cache_vector_db: true
-
-logging:
-  log_dir: logs
-  console_level: INFO
-  file_level: DEBUG
-
-model:
-  # Use audio_text_retrieval for direct audio-to-text retrieval
-  # This compares audio embeddings against text embeddings
-  pipeline_mode: audio_text_retrieval
-  
-  # === ASR Model (not used) ===
-  asr_model_type: null
-  asr_model_name: null
-  asr_adapter_path: null
-  asr_device: cuda:0
-  
-  # === Text Embedding Model ===
-  # Required for encoding the corpus documents
-  # Use clap_text if your audio model is CLAP-style (shared embedding space)
-  text_emb_model_type: clap_text       # Uses same model as audio encoder
-  text_emb_model_name: null            # Shared with audio model
-  text_emb_adapter_path: null
-  text_emb_device: cuda:0
-  
-  # === Audio Embedding Model ===
-  # The model that directly encodes audio to embeddings
-  audio_emb_model_type: clap_style     # Options: clap_style, attention_pool
-  audio_emb_model_name: null           # Determined from checkpoint
-  audio_emb_model_path: path/to/your/model.pt  # Path to pre-trained model
-  audio_emb_device: cuda:0
-  audio_emb_dim: 512                   # Embedding dimension (model-dependent)
-  audio_emb_dropout: 0.1
-
-data:
-  dataset_name: admed_voice
-  batch_size: 32               # Can often use larger batches without ASR
-  num_workers: 4
-  test_size: 0.0
-
-vector_db:
-  type: inmemory
-  k: 10                        # Retrieve top 10 results
-  retrieval_mode: dense

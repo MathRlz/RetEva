@@ -1,6 +1,6 @@
 """Evaluation package - modular evaluation functions."""
 
-from .metrics import (
+from ..metrics import (
     reciprocal_rank,
     recall_at_k,
     precision_at_k,
@@ -20,14 +20,13 @@ from .helpers import (
 )
 from ..metrics import compute_ir_metrics, log_ir_metrics
 
-from .phased import evaluate_phased, evaluate_from_bundle
+from .executor import run_graph, run_from_bundle
 from .results import EvaluationResults
-
 
 __all__ = [
     "EvaluationResults",
-    "evaluate_phased",
-    "evaluate_from_bundle",
+    "run_graph",
+    "run_from_bundle",
     # Metric functions (re-exported from ir_metrics/stt_metrics)
     "reciprocal_rank",
     "recall_at_k",

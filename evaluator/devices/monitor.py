@@ -43,11 +43,11 @@ class GPUMonitor:
         return self._cuda_available
     
     def get_device_count(self) -> int:
-        """Return the number of available CUDA devices."""
+        """Return the number of compute-usable CUDA devices."""
         if not self.cuda_available:
             return 0
-        import torch
-        return torch.cuda.device_count()
+        from .capability import usable_gpu_count
+        return usable_gpu_count()
     
     def get_memory_usage(self, device_idx: int) -> Optional[MemoryInfo]:
         """Get memory usage for a specific GPU.
@@ -90,7 +90,8 @@ class GPUMonitor:
         
         try:
             import torch
-            for idx in range(torch.cuda.device_count()):
+            from .capability import usable_gpu_indices
+            for idx in usable_gpu_indices():
                 props = torch.cuda.get_device_properties(idx)
                 gpus.append(GPUInfo(
                     index=idx,
@@ -99,7 +100,7 @@ class GPUMonitor:
                 ))
         except (ImportError, RuntimeError, ValueError, OSError):
             return gpus
-        
+
         return gpus
     
     def is_available(self, device: str) -> bool:
@@ -129,8 +130,8 @@ class GPUMonitor:
         else:
             device_idx = 0
         
-        import torch
-        return device_idx < torch.cuda.device_count()
+        from .capability import is_usable_index
+        return is_usable_index(device_idx)
 
 
 # Global monitor instance for convenience

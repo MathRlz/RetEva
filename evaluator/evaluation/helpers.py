@@ -6,11 +6,11 @@ This module contains utility functions used across evaluation functions:
 - DataLoader collate functions
 - IR metric aggregation
 """
+
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from ..pipeline import RetrievalPayload
 from ..models.retrieval.contracts import ScoredRetrievalResult, normalize_search_results
-
 
 # Human-readable label per pipeline mode (used for log messages).
 PIPELINE_MODE_LABELS: Dict[str, str] = {
@@ -63,7 +63,7 @@ def _payload_to_key(payload: Union[RetrievalPayload, str]) -> str:
 
 
 def _search_results_to_keys(
-    results: Iterable[Union[ScoredRetrievalResult, Tuple[Any, float]]]
+    results: Iterable[Union[ScoredRetrievalResult, Tuple[Any, float]]],
 ) -> List[str]:
     """Convert mixed retrieval result entries to canonical relevance keys."""
     normalized = normalize_search_results(list(results))
@@ -72,7 +72,7 @@ def _search_results_to_keys(
 
 def _build_relevant_from_item(item: Dict[str, Any]) -> Dict[str, int]:
     """Build relevance mapping from dataset item with backwards compatibility.
-    
+
     Supports multiple formats:
     - relevance_grades dict: {doc_id: grade} for graded relevance
     - groundtruth_doc_ids list: [doc_id, ...] for binary relevance
@@ -96,7 +96,7 @@ def collate_fn(batch):
 
 def asr_collate_fn(batch):
     """Collate function that groups audio data for audio embedding mode.
-    
+
     Returns a dictionary with:
     - audio_arrays: List of audio tensors
     - sampling_rates: List of sampling rates
@@ -104,11 +104,11 @@ def asr_collate_fn(batch):
     - language: Language code from first batch item
     """
     import torch
-    
+
     audio_arrays = []
     sampling_rates = []
     transcriptions = []
-    
+
     for item in batch:
         audio = item["audio_array"]
         if not isinstance(audio, torch.Tensor):
@@ -116,12 +116,12 @@ def asr_collate_fn(batch):
         audio_arrays.append(audio)
         sampling_rates.append(item["sampling_rate"])
         transcriptions.append(item["transcription"])
-    
+
     return {
         "audio_arrays": audio_arrays,
         "sampling_rates": sampling_rates,
         "transcriptions": transcriptions,
-        "language": batch[0].get("language", None)
+        "language": batch[0].get("language", None),
     }
 
 

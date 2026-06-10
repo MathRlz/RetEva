@@ -1,6 +1,7 @@
 """Data configuration."""
-from dataclasses import dataclass
-from typing import Optional, Dict, Union
+
+from dataclasses import dataclass, field
+from typing import Any, Optional, Dict, Union
 
 from ..config.types import DatasetType, to_enum
 
@@ -9,11 +10,11 @@ from ..config.types import DatasetType, to_enum
 class DataConfig:
     """
     Configuration for dataset loading and processing.
-    
+
     Specifies dataset sources, paths, processing options, and batch settings.
     Supports multiple dataset sources including local files, HuggingFace datasets,
     and custom loaders.
-    
+
     Attributes:
         dataset_name: Name/identifier of the dataset. Default: "admed_voice".
         questions_path: Path to questions/queries file. Optional.
@@ -24,7 +25,7 @@ class DataConfig:
         batch_size: Batch size for processing. Default: 32.
         num_workers: Number of data loading workers. Default: 0.
         test_size: Fraction of data for test split (0.0 = no split). Default: 0.0.
-        
+
         dataset_source: Source type. Default: "local".
             Options: "local", "huggingface", "custom".
         huggingface_dataset: HuggingFace dataset identifier. Optional.
@@ -36,7 +37,7 @@ class DataConfig:
         default_language: Default language code. Default: "en".
         max_samples: Maximum samples to load. Optional.
         sample_rate: Target sample rate for resampling. Optional.
-    
+
     Examples:
         >>> config = DataConfig(
         ...     dataset_name="pubmed",
@@ -50,6 +51,7 @@ class DataConfig:
         ...     huggingface_subset="en"
         ... )
     """
+
     dataset_name: str = "admed_voice"
     questions_path: Optional[str] = None
     corpus_path: Optional[str] = None
@@ -59,7 +61,7 @@ class DataConfig:
     batch_size: int = 32
     num_workers: int = 0
     test_size: float = 0.0
-    
+
     # Dataset loader configuration
     dataset_source: str = "local"  # local, huggingface, custom
     huggingface_dataset: Optional[str] = None  # HF dataset identifier
@@ -71,10 +73,17 @@ class DataConfig:
     default_language: str = "en"  # Default language code
     max_samples: Optional[int] = None  # Maximum samples to load
     sample_rate: Optional[int] = None  # Target sample rate for resampling
-    
+
     # Dataset type for automatic metric selection
     dataset_type: Optional[Union[str, DatasetType]] = None
-    
+
+    # Multi-dataset graphs (B4): id -> per-source spec. Each entry holds DataConfig
+    # field names (questions_path, corpus_path, dataset_name, ...) plus an optional
+    # `role` (corpus/questions/both). A `dataset_source` node references an entry by id
+    # via its `dataset` param; the per-source loader (B1) builds one loaded dataset per
+    # entry. None / empty = single-dataset mode (the scalar fields above are used).
+    datasets: Optional[Dict[str, Dict[str, Any]]] = field(default=None)
+
     def __post_init__(self):
         """Normalize dataset_type to enum if provided."""
         if self.dataset_type is not None and isinstance(self.dataset_type, str):
@@ -84,6 +93,7 @@ class DataConfig:
         """Return the DatasetDescriptor for this config, or None if unresolvable."""
         try:
             from evaluator.datasets.descriptor import resolve_dataset_descriptor
+
             return resolve_dataset_descriptor(self)
         except Exception:
             return None

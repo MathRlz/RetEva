@@ -1,48 +1,47 @@
-experiment_name: sonar_crossmodal_pubmed_qa
-output_dir: evaluation_results
-
-# SONAR zero-shot cross-modal retrieval: audio queries and the text corpus are
-# embedded by SONAR speech / text encoders into the SAME 1024-d space, so audio
-# retrieves against text directly — no trained projection head.
-# Requires: pip install -e '.[sonar]'  (pulls sonar-space + fairseq2)
-
-cache:
-  enabled: true
-  cache_dir: .cache
-  cache_asr_features: true
-  cache_transcriptions: true
-  cache_embeddings: true
-  cache_vector_db: true
-
-logging:
-  console_level: INFO
-  file_level: DEBUG
-
-model:
-  pipeline_mode: audio_text_retrieval
-  asr_model_type: null
-  # SONAR speech encoder (language-specific: sonar_speech_encoder_<lang>)
-  audio_emb_model_type: sonar_speech
-  audio_emb_model_name: sonar_speech_encoder_eng
-  audio_emb_dim: 1024
-  audio_emb_device: cpu
-  # SONAR text encoder — same 1024-d space as the speech encoder
-  text_emb_model_type: sonar
-  text_emb_model_name: text_sonar_basic_encoder
-  text_emb_params:
-    source_lang: eng_Latn
-  text_emb_device: cpu
-
-data:
-  dataset_name: pubmed_qa
-  questions_path: examples/data/pubmed_qa_small/questions.json
-  corpus_path: examples/data/pubmed_qa_small/corpus.json
-  strict_validation: false
+experiment:
+  name: sonar_crossmodal_pubmed_qa
+  output_dir: evaluation_results
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
   trace_limit: 5
   batch_size: 4
+data:
+  strict_validation: false
   num_workers: 0
-
-# Questions are text-only; synthesize audio with MMS TTS for the SONAR speech encoder.
+graph:
+  mode: audio_text_retrieval
+nodes:
+  asr:
+    model: null
+  audio_embedding:
+    model: sonar_speech
+    name: sonar_speech_encoder_eng
+    dim: 1024
+    device: cpu
+  text_embedding:
+    model: sonar
+    name: text_sonar_basic_encoder
+    params:
+      source_lang: eng_Latn
+    device: cpu
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 10
+    gpu_id: 0
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG
 audio_synthesis:
   enabled: true
   provider: mms
@@ -51,12 +50,6 @@ audio_synthesis:
   sample_rate: 16000
   seed: 42
   output_dir: examples/data/pubmed_qa_small/audio
-
-vector_db:
-  type: inmemory
-  k: 10
-  gpu_id: 0
-
 checkpoint_enabled: true
 checkpoint_interval: 100
 resume_from_checkpoint: true

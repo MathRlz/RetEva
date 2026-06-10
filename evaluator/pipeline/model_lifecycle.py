@@ -1,6 +1,6 @@
 """Stage-scoped model load/offload for the DAG executor.
 
-The evaluation DAG (``pipeline/stage_graph.py`` + ``evaluation/phased._execute_stage_graph``)
+The evaluation DAG (``pipeline/stage_graph.py`` + ``evaluation/executor/engine.py:_execute_stage_graph``)
 runs stage handlers in topological order. A stage may declare a :class:`ModelSpec`; the
 executor uses :class:`ServiceModelManager` to load that model onto the device before the
 stage runs and to release it after the last stage that needs it — so a TTS model is gone
@@ -10,6 +10,7 @@ model occupies the device.
 The model handle is a lazy service (``start``/``stop``/``move_to_device``/``get``, e.g.
 ``services.model_services.FactoryModelService``).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -68,7 +69,9 @@ class ServiceModelManager:
             stopper()
 
 
-def last_use_positions(specs_in_order: Sequence[Optional[ModelSpec]]) -> Dict[int, ModelSpec]:
+def last_use_positions(
+    specs_in_order: Sequence[Optional[ModelSpec]],
+) -> Dict[int, ModelSpec]:
     """Map each stage position to the spec (if any) that is last used right there.
 
     ``specs_in_order[i]`` is the :class:`ModelSpec` for the i-th stage (or ``None``). The
@@ -84,7 +87,9 @@ def last_use_positions(specs_in_order: Sequence[Optional[ModelSpec]]) -> Dict[in
     return {i: spec_by_key[key] for key, i in last_index.items()}
 
 
-def acquire_for(manager: Optional[ServiceModelManager], spec: Optional[ModelSpec]) -> Any:
+def acquire_for(
+    manager: Optional[ServiceModelManager], spec: Optional[ModelSpec]
+) -> Any:
     """Acquire ``spec`` via ``manager`` if both are present; else return ``None``."""
     if manager is None or spec is None:
         return None

@@ -1,0 +1,45 @@
+# Branched variant of the e2e smoke (T5 validation): two branches — ref (ASR oracle:
+# uses reference text) vs asr (real whisper) — so the executor builds a multi-node level
+# that parallel execution exercises. Single usable GPU here serializes same-device work,
+# but parallel and serial must produce identical per-branch reports.
+experiment:
+  name: e2e_pubmed_qa_branched
+  output_dir: evaluation_results/e2e
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  branches:
+    - id: ref
+      asr: {oracle: true}
+    - id: asr
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: false
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/e2e/audio

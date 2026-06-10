@@ -1,77 +1,47 @@
-# =============================================================================
-# Fast Development Configuration
-# =============================================================================
-#
-# Minimal configuration for quick iteration during development.
-# Use this when:
-#   - Testing code changes
-#   - Debugging pipeline issues
-#   - Running quick sanity checks
-#   - Working without GPU access
-#
-# Trade-offs:
-#   - Uses smaller, faster models
-#   - CPU-only (no CUDA required)
-#   - Reduced batch sizes for lower memory
-#   - Limited samples for faster completion
-#
-# =============================================================================
-
-experiment_name: fast_dev_test
-output_dir: evaluation_results
-
-# ----- Checkpointing -----
-# Enable checkpointing even in dev mode for reproducibility
-checkpoint_enabled: true
-checkpoint_interval: 10        # Checkpoint frequently
-resume_from_checkpoint: true
-
-# ----- Caching -----
-cache:
-  enabled: true
-  cache_dir: .cache
-  max_size_gb: 5.0             # Limit cache size for development
-  cache_asr_features: true
-  cache_transcriptions: true
-  cache_embeddings: true
-  cache_vector_db: true
-
-logging:
-  log_dir: logs
-  console_level: DEBUG         # More verbose for debugging
-  file_level: DEBUG
-
-model:
-  pipeline_mode: asr_text_retrieval
-  
-  # === ASR Model ===
-  # Use tiny/base Whisper for speed
-  asr_model_type: whisper
-  asr_model_name: openai/whisper-tiny    # Fastest, ~39M params
-  # asr_model_name: openai/whisper-base  # Alternative: ~74M params
-  asr_adapter_path: null
-  asr_device: cpu              # CPU for development without GPU
-  
-  # === Text Embedding Model ===
-  text_emb_model_type: labse   # LaBSE is reasonably fast
-  text_emb_model_name: sentence-transformers/LaBSE
-  text_emb_adapter_path: null
-  text_emb_device: cpu         # CPU for development
-  
-  audio_emb_model_type: null
-  audio_emb_model_name: null
-  audio_emb_device: cpu
-
-# ----- Dataset Configuration -----
+experiment:
+  name: fast_dev_test
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  batch_size: 4
 data:
-  dataset_name: admed_voice
-  batch_size: 4                # Small batches for CPU
-  num_workers: 0               # Single-threaded for easier debugging
+  num_workers: 0
   test_size: 0.0
-
-# ----- Vector Database -----
-# Use simple in-memory store for development
-vector_db:
-  type: inmemory               # Simplest option, no external dependencies
-  k: 5
-  retrieval_mode: dense        # Skip hybrid complexity during dev
+graph:
+  mode: asr_text_retrieval
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-tiny
+    adapter: null
+    device: cpu
+  text_embedding:
+    model: labse
+    name: sentence-transformers/LaBSE
+    adapter: null
+    device: cpu
+  audio_embedding:
+    model: null
+    name: null
+    device: cpu
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 5
+    mode: dense
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    max_size_gb: 5.0
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    log_dir: logs
+    console_level: DEBUG
+    file_level: DEBUG
+checkpoint_enabled: true
+checkpoint_interval: 10
+resume_from_checkpoint: true

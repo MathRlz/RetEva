@@ -1,4 +1,4 @@
-"""Advanced constant exports."""
+"""Tier-3: shared constants (embedding dims, defaults, thresholds)."""
 
 from ..constants import (
     MIN_NORM_THRESHOLD,

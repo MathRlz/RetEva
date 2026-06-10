@@ -1,30 +1,21 @@
 """Evaluation orchestration service used by public API."""
 
-from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
-
-import numpy as np
+from typing import Any, Dict, Optional
 
 from ..config import EvaluationConfig
-from ..config.types import enum_to_str
-from ..errors import ConfigurationError
 from ..evaluation.results import EvaluationResults
 from ..logging_config import get_logger, setup_logging
 from ..pipeline import create_pipeline_from_config
 from ..storage.cache import CacheManager
 from ..storage.leaderboard import ExperimentStore
-from ..storage.cache_keys import (
-    dataset_fingerprint,
-    manifest_fingerprint,
-    model_fingerprint,
-    preprocessing_fingerprint,
-    retrieval_fingerprint,
-    vector_db_manifest_key,
-)
 from ..tracking import MLflowTracker, NoOpTracker
-from ..datasets import load_runtime_dataset, resolve_dataset_profile, validate_dataset_runtime_config
+from ..datasets import (
+    load_runtime_dataset,
+    resolve_dataset_profile,
+    validate_dataset_runtime_config,
+)
 from .model_provider import ModelServiceProvider
 
 
@@ -38,92 +29,6 @@ def _create_tracker(config: EvaluationConfig):
             tracking_uri=config.tracking.mlflow_tracking_uri,
         )
     return NoOpTracker()
-
-
-def _resolve_dataset_identity(config: EvaluationConfig) -> tuple[str, Dict[str, Any]]:
-    source: Dict[str, Any]
-    if config.data.prepared_dataset_dir:
-        dataset_dir = Path(config.data.prepared_dataset_dir).resolve()
-        source = {"prepared_dataset_dir": str(dataset_dir)}
-        return f"prepared:{dataset_dir}", source
-    if config.data.questions_path:
-        questions_path = Path(config.data.questions_path).resolve()
-        corpus_path = Path(config.data.corpus_path).resolve() if config.data.corpus_path else None
-        source = {
-            "questions_path": str(questions_path),
-            "corpus_path": str(corpus_path) if corpus_path else None,
-        }
-        return f"questions:{questions_path}|corpus:{corpus_path}", source
-    return "unknown", {}
-
-
-def _corpus_signature(corpus: List[Any]) -> str:
-    normalized = []
-    for doc in corpus:
-        if isinstance(doc, dict):
-            normalized.append(
-                {
-                    "doc_id": doc.get("doc_id"),
-                    "text": doc.get("text"),
-                }
-            )
-        else:
-            normalized.append(str(doc))
-    return manifest_fingerprint({"corpus": normalized})
-
-
-def _retrieval_strategy_dict(vector_db) -> Dict[str, Any]:
-    """Retrieval-strategy fields that affect the vector-DB cache fingerprint."""
-    return {
-        "mode": vector_db.retrieval_mode,
-        "hybrid_dense_weight": vector_db.hybrid_dense_weight,
-        "hybrid_fusion_method": vector_db.hybrid_fusion_method,
-        "rrf_k": vector_db.rrf_k,
-        "bm25_k1": vector_db.bm25_k1,
-        "bm25_b": vector_db.bm25_b,
-        "reranker_mode": vector_db.reranker_mode,
-        "reranker_enabled": vector_db.reranker_enabled,
-        "reranker_model": vector_db.reranker_model,
-        "reranker_weight": vector_db.reranker_weight,
-        "use_mmr": vector_db.use_mmr,
-        "mmr_lambda": vector_db.mmr_lambda,
-        "min_similarity_threshold": vector_db.min_similarity_threshold,
-        "distance_metric": vector_db.distance_metric,
-    }
-
-
-def _vector_db_cache_key(config: EvaluationConfig, retrieval_pipeline: Any, corpus: List[Any]) -> str:
-    dataset_identity, source = _resolve_dataset_identity(config)
-    dataset_fp = dataset_fingerprint(
-        dataset_identity=dataset_identity,
-        trace_limit=config.data.trace_limit,
-        source={
-            **source,
-            "corpus_signature": _corpus_signature(corpus),
-            "corpus_size": len(corpus),
-        },
-    )
-    model_fp = model_fingerprint(
-        model_name=config.model.text_emb_model_name or config.model.text_emb_model_type or "unknown",
-        model_type=config.model.text_emb_model_type,
-        inference={"device": config.model.text_emb_device},
-    )
-    retrieval_fp = retrieval_fingerprint(
-        vector_store_type=enum_to_str(config.vector_db.type),
-        retrieval_strategy=_retrieval_strategy_dict(config.vector_db),
-    )
-    preprocess_fp = preprocessing_fingerprint(
-        {
-            "pipeline_mode": config.model.pipeline_mode,
-            "query_optimization_enabled": config.query_optimization.enabled,
-        }
-    )
-    return vector_db_manifest_key(
-        dataset_fp=dataset_fp,
-        model_fp=model_fp,
-        retrieval_fp=retrieval_fp,
-        preprocessing_fp=preprocess_fp,
-    )
 
 
 def _resolve_profile_snapshot(config: EvaluationConfig) -> Dict[str, Any]:
@@ -145,8 +50,16 @@ def _resolve_profile_snapshot(config: EvaluationConfig) -> Dict[str, Any]:
     }
 
 
-def _evaluate_metrics(config: EvaluationConfig, dataset, bundle, cache_manager, tracker, progress_callback=None):
-    from ..evaluation.phased import evaluate_from_bundle
+def _evaluate_metrics(
+    config: EvaluationConfig,
+    dataset,
+    bundle,
+    cache_manager,
+    tracker,
+    progress_callback=None,
+    load_info=None,
+):
+    from ..evaluation.executor.run import run_from_bundle
 
     with tracker:
         tracker.log_params(
@@ -156,32 +69,18 @@ def _evaluate_metrics(config: EvaluationConfig, dataset, bundle, cache_manager, 
             }
         )
 
-        if config.parallel_enabled:
-            from ..parallel import ParallelEvaluator
-            from ..config import get_available_gpu_count
-
-            num_gpus = get_available_gpu_count()
-            if num_gpus > 1 or config.num_parallel_workers > 1:
-                parallel_evaluator = ParallelEvaluator(
-                    config=config,
-                    num_workers=config.num_parallel_workers or None,
-                )
-                metrics = parallel_evaluator.evaluate_parallel(
-                    dataset=dataset,
-                    k=config.vector_db.k,
-                    batch_size=config.data.batch_size,
-                    trace_limit=config.data.trace_limit,
-                )
-            else:
-                metrics = evaluate_from_bundle(
-                    dataset, bundle, config, cache_manager=cache_manager,
-                    progress_callback=progress_callback,
-                )
-        else:
-            metrics = evaluate_from_bundle(
-                dataset, bundle, config, cache_manager=cache_manager,
-                progress_callback=progress_callback,
-            )
+        # Single execution core: the DAG executor. `config.parallel_enabled` drives the
+        # executor's intra-level per-branch concurrency (read inside the DAG run path);
+        # there is no separate data-parallel bypass (the multiprocess ParallelEvaluator
+        # was retired; the DAG executor is the single in-process parallel path).
+        metrics = run_from_bundle(
+            dataset,
+            bundle,
+            config,
+            cache_manager=cache_manager,
+            progress_callback=progress_callback,
+            load_info=load_info,
+        )
         tracker.log_metrics(metrics)
         return metrics
 
@@ -194,8 +93,12 @@ def _cache_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any
     after_files = after.get("file_counts", {})
     keys = sorted(set(before_sizes.keys()) | set(after_sizes.keys()))
     return {
-        "size_bytes_delta": {k: after_sizes.get(k, 0) - before_sizes.get(k, 0) for k in keys},
-        "file_count_delta": {k: after_files.get(k, 0) - before_files.get(k, 0) for k in keys},
+        "size_bytes_delta": {
+            k: after_sizes.get(k, 0) - before_sizes.get(k, 0) for k in keys
+        },
+        "file_count_delta": {
+            k: after_files.get(k, 0) - before_files.get(k, 0) for k in keys
+        },
     }
 
 
@@ -262,6 +165,26 @@ def _run_core(
         load_info = {}
     logger = get_logger(__name__)
 
+    # Seed all RNGs + request deterministic kernels at the very start, so the whole run
+    # (synthesis, augmentation, models) is reproducible; recorded in report.provenance (S5).
+    from ..evaluation.provenance import set_global_determinism
+
+    run_seed = getattr(getattr(config, "audio_synthesis", None), "seed", None)
+    flags = set_global_determinism(run_seed)
+    logger.info("determinism: %s", flags)
+
+    # Reset the LLM cost accumulator for this run + apply the optional token budget (T8).
+    from ..llm.cost import COST
+
+    budget = int(getattr(getattr(config, "llm", None), "max_tokens_budget", 0) or 0)
+    COST.reset(budget_tokens=budget or None)
+
+    # Fail fast on an embedding-space mismatch (dense retrieval dotting vectors from
+    # different spaces → meaningless scores) before any model loads (A2).
+    from ..models.embedding_space import validate_embedding_spaces
+
+    validate_embedding_spaces(config)
+
     # Prepare the dataset (load + TTS-synthesize missing query audio) BEFORE building the
     # model pipelines, so a TTS model is loaded and fully offloaded before the ASR/embedding
     # models are constructed — they are never co-resident (which avoids the native crash a
@@ -272,28 +195,31 @@ def _run_core(
         cache_manager=cache_manager,
     )
 
-    bundle = create_pipeline_from_config(config, cache_manager, service_provider=service_provider)
+    bundle = create_pipeline_from_config(
+        config, cache_manager, service_provider=service_provider
+    )
     _apply_startup_policy(config, bundle, logger)
     if service_provider is not None:
         _configure_local_llm_runtime(config, service_provider, logger)
 
-    build_corpus_index(
-        config,
-        dataset,
-        bundle.retrieval_pipeline,
-        bundle.text_embedding_pipeline,
-        audio_emb_pipeline=bundle.audio_embedding_pipeline,
-        cache_manager=cache_manager,
-        load_info=load_info,
-    )
+    # Corpus embedding + index build is now the in-graph ``corpus_index`` node (runs
+    # inside run_from_bundle), so it is no longer done eagerly here.
     tracker = _create_tracker(config)
     metrics = _evaluate_metrics(
-        config, dataset, bundle, cache_manager, tracker, progress_callback=progress_callback
+        config,
+        dataset,
+        bundle,
+        cache_manager,
+        tracker,
+        progress_callback=progress_callback,
+        load_info=load_info,
     )
     return metrics, dataset
 
 
-def run_evaluation(config: EvaluationConfig, progress_callback=None) -> EvaluationResults:
+def run_evaluation(
+    config: EvaluationConfig, progress_callback=None
+) -> EvaluationResults:
     """Run complete evaluation lifecycle for a validated config.
 
     Thin wrapper over :func:`_run_core`: provider lifecycle, logging, metadata, and
@@ -323,7 +249,9 @@ def run_evaluation(config: EvaluationConfig, progress_callback=None) -> Evaluati
             raise RuntimeError(f"Failed to create cache manager: {e}") from e
 
         load_info: Dict[str, Any] = {}
-        cache_stats_before = cache_manager.get_cache_stats() if cache_manager.enabled else {}
+        cache_stats_before = (
+            cache_manager.get_cache_stats() if cache_manager.enabled else {}
+        )
 
         try:
             metrics, dataset = _run_core(
@@ -364,7 +292,9 @@ def run_evaluation(config: EvaluationConfig, progress_callback=None) -> Evaluati
             config=config,
             metadata=metadata,
         )
-        store = ExperimentStore(db_path=str(Path(config.output_dir) / "leaderboard.sqlite"))
+        store = ExperimentStore(
+            db_path=str(Path(config.output_dir) / "leaderboard.sqlite")
+        )
         run_id = store.ingest_result(results)
         results.metadata["leaderboard_run_id"] = run_id
         return results
@@ -374,206 +304,16 @@ def run_evaluation(config: EvaluationConfig, progress_callback=None) -> Evaluati
         )
 
 
-def _apply_setup_overrides(config: EvaluationConfig, overrides: Dict[str, Any]) -> EvaluationConfig:
-    """Apply setup overrides to a config copy."""
-    nested_sections = {
-        "cache",
-        "logging",
-        "model",
-        "data",
-        "audio_synthesis",
-        "augmentation",
-        "llm_server",
-        "judge",
-        "query_optimization",
-        "embedding_fusion",
-        "vector_db",
-        "tracking",
-        "device_pool",
-        "service_runtime",
-        "answer_generation",
-        "llm",
-    }
-    section_aliases = {"vector": "vector_db"}
-    top_level_fields = {
-        "experiment_name",
-        "output_dir",
-        "checkpoint_enabled",
-        "checkpoint_interval",
-        "resume_from_checkpoint",
-        "parallel_enabled",
-        "num_parallel_workers",
-    }
-
-    for key, value in overrides.items():
-        # Dotted-path format: "model.asr_device" → config.model.asr_device
-        if "." in key:
-            section_name, _, sub_key = key.partition(".")
-            if section_name in nested_sections or section_name in section_aliases:
-                target = section_aliases.get(section_name, section_name)
-                section = getattr(config, target)
-                setattr(section, sub_key, value)
-                continue
-            if section_name in top_level_fields or not sub_key:
-                raise ConfigurationError(f"Unsupported dotted override key: {key}")
-            raise ConfigurationError(f"Unknown section in dotted override: {section_name!r}")
-
-        if key in top_level_fields:
-            setattr(config, key, value)
-            continue
-        if key in nested_sections and isinstance(value, dict):
-            section = getattr(config, key)
-            for sub_key, sub_value in value.items():
-                setattr(section, sub_key, sub_value)
-            continue
-        # Legacy underscore-prefix format (kept for backward compatibility)
-        matched_section = None
-        sub_key = None
-        for candidate in sorted(nested_sections, key=len, reverse=True):
-            prefix = f"{candidate}_"
-            if key.startswith(prefix):
-                matched_section = candidate
-                sub_key = key[len(prefix):]
-                break
-        if matched_section is None:
-            for alias, target in section_aliases.items():
-                prefix = f"{alias}_"
-                if key.startswith(prefix):
-                    matched_section = target
-                    sub_key = key[len(prefix):]
-                    break
-        if matched_section is not None and sub_key:
-            section = getattr(config, matched_section)
-            setattr(section, sub_key, value)
-            continue
-        raise ConfigurationError(f"Unsupported setup override key: {key}")
-
-    return config
-
-
-def run_evaluation_matrix(
-    base_config: EvaluationConfig,
-    test_setups: Sequence[Dict[str, Any]],
-    baseline_setup_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Run multiple test setups on the same dataset and return aggregated outputs.
-
-    Args:
-        base_config: Base configuration shared across all setups.
-        test_setups: List of setup dicts with optional ``setup_id`` and ``overrides``.
-        baseline_setup_id: ``setup_id`` of the setup to use as the comparison
-            baseline.  Defaults to the first setup in ``test_setups``.
-    """
-    runs: List[Dict[str, Any]] = []
-
-    for idx, setup in enumerate(test_setups):
-        setup_id = setup.get("setup_id") or setup.get("name") or f"setup_{idx + 1:03d}"
-        overrides = setup.get("overrides", {})
-        if not isinstance(overrides, dict):
-            raise ConfigurationError(
-                f"Setup '{setup_id}' must provide dict overrides, got {type(overrides).__name__}"
-            )
-
-        config_variant = deepcopy(base_config)
-        config_variant = _apply_setup_overrides(config_variant, overrides)
-        if "experiment_name" not in overrides:
-            config_variant.experiment_name = f"{base_config.experiment_name}__{setup_id}"
-
-        result = run_evaluation(config_variant)
-        runs.append(
-            {
-                "setup_id": setup_id,
-                "result": result.to_dict(include_config=True),
-            }
-        )
-
-    comparison = _build_comparison_bundle(runs, baseline_setup_id=baseline_setup_id)
-
-    return {
-        "base_experiment_name": base_config.experiment_name,
-        "num_setups": len(test_setups),
-        "runs": runs,
-        "comparison": comparison,
-    }
-
-
-def _build_comparison_bundle(
-    runs: Sequence[Dict[str, Any]],
-    baseline_setup_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Build a stable comparison artifact (baseline deltas + leaderboard)."""
-    if not runs:
-        return {"baseline_setup_id": None, "metric_deltas": [], "leaderboard": []}
-
-    baseline_run = next(
-        (r for r in runs if str(r["setup_id"]) == baseline_setup_id),
-        runs[0],
-    ) if baseline_setup_id else runs[0]
-    baseline_setup_id = str(baseline_run["setup_id"])
-    baseline_metrics = baseline_run["result"]
-
-    def numeric_metrics(result_dict: Dict[str, Any]) -> Dict[str, float]:
-        values: Dict[str, float] = {}
-        for k, v in result_dict.items():
-            if k.startswith("_") or isinstance(v, bool):
-                continue
-            if isinstance(v, (int, float)):
-                values[k] = float(v)
-        return values
-
-    baseline_numeric = numeric_metrics(baseline_metrics)
-    metric_deltas: List[Dict[str, Any]] = []
-    leaderboard_rows: List[Dict[str, Any]] = []
-
-    for row in runs:
-        setup_id = str(row["setup_id"])
-        current_numeric = numeric_metrics(row["result"])
-        shared = sorted(set(baseline_numeric).intersection(current_numeric))
-        deltas = {
-            metric: current_numeric[metric] - baseline_numeric[metric]
-            for metric in shared
-        }
-        metric_deltas.append(
-            {
-                "setup_id": setup_id,
-                "deltas_vs_baseline": deltas,
-            }
-        )
-        leaderboard_rows.append(
-            {
-                "setup_id": setup_id,
-                "metrics": current_numeric,
-            }
-        )
-
-    ranking_metric = "MRR"
-    if not any(ranking_metric in row["metrics"] for row in leaderboard_rows):
-        metric_names: set[str] = set()
-        for row in leaderboard_rows:
-            metric_names.update(row["metrics"].keys())
-        ranking_metric = sorted(metric_names)[0] if metric_names else "MRR"
-
-    leaderboard = sorted(
-        leaderboard_rows,
-        key=lambda r: r["metrics"].get(ranking_metric, float("-inf")),
-        reverse=True,
-    )
-
-    return {
-        "baseline_setup_id": baseline_setup_id,
-        "ranking_metric": ranking_metric,
-        "metric_deltas": metric_deltas,
-        "leaderboard": leaderboard,
-    }
-
-
 def _mode_needs_retrieval(mode) -> bool:
     """Every pipeline mode retrieves except ``asr_only``."""
     return str(mode) != "asr_only"
 
 
 def prepare_dataset(
-    config: EvaluationConfig, *, retrieval_required: bool, cache_manager: CacheManager | None = None
+    config: EvaluationConfig,
+    *,
+    retrieval_required: bool,
+    cache_manager: CacheManager | None = None,
 ):
     """Validate + load the dataset and synthesize any missing query audio.
 
@@ -589,26 +329,46 @@ def prepare_dataset(
     return dataset
 
 
-def _synthesize_query_audio(config: EvaluationConfig, dataset, logger, cache_manager=None) -> None:
-    """Synthesize audio for questions lacking ``audio_path`` (when enabled or needed)."""
+def _synthesize_query_audio(
+    config: EvaluationConfig, dataset, logger, cache_manager=None
+) -> None:
+    """Synthesize audio for questions lacking ``audio_path`` (when enabled or needed).
+
+    When ``audio_synthesis.enabled`` the in-graph ``tts`` node performs synthesis, so
+    this pre-graph path only covers the implicit fallback: questions missing audio with
+    synthesis not explicitly enabled.
+    """
+    if config.audio_synthesis.enabled:
+        return  # handled by the in-graph tts node
     questions_missing_audio = (
         hasattr(dataset, "questions")
         and dataset.questions
         and any(not getattr(q, "audio_path", None) for q in dataset.questions)
     )
-    if not (config.audio_synthesis.enabled or questions_missing_audio):
+    if not questions_missing_audio:
         return
     if questions_missing_audio and not config.audio_synthesis.enabled:
         logger.info("Audio missing for some questions — auto-synthesizing with TTS")
     else:
-        logger.info("Audio synthesis enabled - checking for questions needing synthesis")
+        logger.info(
+            "Audio synthesis enabled - checking for questions needing synthesis"
+        )
     if not (hasattr(dataset, "questions") and dataset.questions):
-        logger.warning("Dataset does not have 'questions' attribute, TTS synthesis skipped")
+        logger.warning(
+            "Dataset does not have 'questions' attribute, TTS synthesis skipped"
+        )
         return
     from ..pipeline.audio.prepare import synthesize_missing_query_audio
-    logger.info("STAGE prepare_dataset: TTS synthesis START (provider=%s)", config.audio_synthesis.provider)
+
+    logger.info(
+        "STAGE prepare_dataset: TTS synthesis START (provider=%s)",
+        config.audio_synthesis.provider,
+    )
     synthesize_missing_query_audio(
-        dataset.questions, config.audio_synthesis, log=logger, cache_manager=cache_manager
+        dataset.questions,
+        config.audio_synthesis,
+        log=logger,
+        cache_manager=cache_manager,
     )
     logger.info("STAGE prepare_dataset: TTS synthesis DONE")
 
@@ -622,125 +382,24 @@ def load_dataset(
     load_info: Dict[str, Any] | None = None,
 ):
     """Back-compat: prepare the dataset (load + synth) then build the corpus index."""
-    dataset = prepare_dataset(config, retrieval_required=(retrieval_pipeline is not None))
+    dataset = prepare_dataset(
+        config, retrieval_required=(retrieval_pipeline is not None)
+    )
     return build_corpus_index(
-        config, dataset, retrieval_pipeline, text_emb_pipeline,
-        audio_emb_pipeline=audio_emb_pipeline, cache_manager=cache_manager, load_info=load_info,
+        config,
+        dataset,
+        retrieval_pipeline,
+        text_emb_pipeline,
+        audio_emb_pipeline=audio_emb_pipeline,
+        cache_manager=cache_manager,
+        load_info=load_info,
     )
 
 
-def build_corpus_index(
-    config: EvaluationConfig,
-    dataset,
-    retrieval_pipeline=None,
-    text_emb_pipeline=None,
-    audio_emb_pipeline=None,
-    cache_manager: CacheManager | None = None,
-    load_info: Dict[str, Any] | None = None,
-):
-    """Embed the corpus and build the retrieval index when the mode retrieves.
-
-    Runs after the model pipelines are built (TTS already offloaded).
-    """
-    from ..pipeline.audio.synthesis import AudioSynthesizer
-
-    logger = get_logger(__name__)
-
-    if retrieval_pipeline is not None and hasattr(dataset, "get_corpus"):
-        corpus = dataset.get_corpus()
-        if not corpus:
-            raise ConfigurationError(
-                "Retrieval mode requires non-empty corpus. Set data.corpus_path "
-                "to JSON/JSONL corpus file with doc_id/text fields."
-            )
-        if corpus and text_emb_pipeline is not None:
-            corpus_texts = [doc.get("text", str(doc)) for doc in corpus]
-            can_use_vector_cache = (
-                cache_manager is not None and config.cache.enabled and config.cache.cache_vector_db
-            )
-            vector_cache_key = (
-                _vector_db_cache_key(config, retrieval_pipeline, corpus)
-                if can_use_vector_cache
-                else None
-            )
-            if can_use_vector_cache and vector_cache_key:
-                cached_db = cache_manager.get_vector_db(vector_cache_key)
-                if cached_db is not None:
-                    vectors, payloads = cached_db
-                    logger.info(
-                        "Loaded cached retrieval index artifacts: vectors=%d",
-                        len(vectors),
-                    )
-                    retrieval_pipeline.build_index(embeddings=vectors, metadata=payloads)
-                    if load_info is not None:
-                        load_info["vector_cache_hit"] = True
-                        load_info["vector_cache_key"] = vector_cache_key
-                        load_info["corpus_size"] = len(corpus)
-                    return dataset
-                if load_info is not None:
-                    load_info["vector_cache_hit"] = False
-                    load_info["vector_cache_key"] = vector_cache_key
-                    load_info["corpus_size"] = len(corpus)
-
-            logger.info("STAGE load_dataset: corpus embedding START (%d docs)", len(corpus_texts))
-            corpus_embeddings = text_emb_pipeline.process_batch(corpus_texts, show_progress=True, desc="Embedding corpus docs")
-            logger.info("STAGE load_dataset: corpus embedding DONE; building index")
-            vectors = np.array(corpus_embeddings)
-            retrieval_pipeline.build_index(embeddings=vectors, metadata=corpus)
-            if can_use_vector_cache and vector_cache_key:
-                cache_manager.set_vector_db(vector_cache_key, vectors, corpus)
-                logger.info("Cached retrieval index artifacts for reuse")
-                if load_info is not None:
-                    load_info["vector_cache_written"] = True
-                    load_info["vector_cache_key"] = vector_cache_key
-                    load_info["corpus_size"] = len(corpus)
-            elif load_info is not None:
-                load_info["vector_cache_hit"] = False
-                load_info["corpus_size"] = len(corpus)
-        elif corpus and audio_emb_pipeline is not None:
-            # audio_emb_retrieval: synthesize TTS audio for corpus docs, then embed via audio model
-            from ..datasets.core import load_audio_file
-            synthesizer = AudioSynthesizer(config.audio_synthesis)
-            corpus_audio_dir = (
-                config.audio_synthesis.output_dir + "/corpus"
-                if config.audio_synthesis.output_dir
-                else None
-            )
-            if corpus_audio_dir:
-                import os
-                os.makedirs(corpus_audio_dir, exist_ok=True)
-
-            audio_arrays, sampling_rates = [], []
-            for doc in corpus:
-                doc_id = doc.get("doc_id", "")
-                audio_path = doc.get("audio_path")
-                if not audio_path:
-                    text = doc.get("text") or doc.get("abstract") or doc.get("title") or str(doc)
-                    if corpus_audio_dir:
-                        audio_path = os.path.join(corpus_audio_dir, f"{doc_id}.wav")
-                    if audio_path and os.path.exists(audio_path):
-                        doc["audio_path"] = audio_path
-                    else:
-                        try:
-                            synthesizer.synthesize(text, output_path=audio_path)
-                            doc["audio_path"] = audio_path
-                        except Exception as e:
-                            logger.warning(f"TTS failed for corpus doc {doc_id}: {e}")
-                            continue
-                if audio_path:
-                    try:
-                        waveform, sr = load_audio_file(audio_path)
-                        audio_arrays.append(waveform.squeeze().numpy())
-                        sampling_rates.append(sr)
-                    except Exception as e:
-                        logger.warning(f"Failed to load corpus audio {audio_path}: {e}")
-
-            if audio_arrays:
-                corpus_embeddings = audio_emb_pipeline.process_batch(audio_arrays, sampling_rates)
-                vectors = np.array(corpus_embeddings)
-                retrieval_pipeline.build_index(embeddings=vectors, metadata=corpus[:len(audio_arrays)])
-                logger.info("Built corpus audio embedding index: %d vectors", len(audio_arrays))
-                synthesizer.log_cache_stats()
-            else:
-                logger.warning("No corpus audio could be synthesized; retrieval index is empty")
-    return dataset
+# Re-exported so existing import paths stay stable after the F4 extraction.
+from .corpus_index import build_corpus_index  # noqa: E402,F401
+from .matrix import (  # noqa: E402,F401
+    _apply_setup_overrides,
+    _build_comparison_bundle,
+    run_evaluation_matrix,
+)

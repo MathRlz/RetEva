@@ -38,6 +38,7 @@ def _is_valid_preset(path: Path) -> bool:
     grid/ablation YAMLs that aren't a single EvaluationConfig fail here and are excluded.
     """
     from .evaluation import EvaluationConfig
+
     try:
         EvaluationConfig.from_yaml(str(path), validate=False)
         return True
@@ -52,11 +53,23 @@ def _apply_auto_devices(preset: Dict[str, Any]) -> None:
     model = preset.setdefault("model", {})
     gpu_count = get_available_gpu_count()
     if gpu_count == 0:
-        devices = {"asr_device": "cpu", "text_emb_device": "cpu", "audio_emb_device": "cpu"}
+        devices = {
+            "asr_device": "cpu",
+            "text_emb_device": "cpu",
+            "audio_emb_device": "cpu",
+        }
     elif gpu_count == 1:
-        devices = {"asr_device": "cuda:0", "text_emb_device": "cuda:0", "audio_emb_device": "cuda:0"}
+        devices = {
+            "asr_device": "cuda:0",
+            "text_emb_device": "cuda:0",
+            "audio_emb_device": "cuda:0",
+        }
     else:
-        devices = {"asr_device": "cuda:0", "text_emb_device": "cuda:1", "audio_emb_device": "cuda:0"}
+        devices = {
+            "asr_device": "cuda:0",
+            "text_emb_device": "cuda:1",
+            "audio_emb_device": "cuda:0",
+        }
     model.update(devices)
 
 
@@ -84,8 +97,13 @@ def get_preset(name: str, auto_devices: bool = True) -> Dict[str, Any]:
         raise ValueError(
             f"Unknown preset '{name}'. Available presets: {', '.join(list_presets())}"
         )
+    from .graph_config import to_legacy_dict
+
     with open(path, "r", encoding="utf-8") as handle:
-        preset: Dict[str, Any] = yaml.safe_load(handle) or {}
+        raw: Dict[str, Any] = yaml.safe_load(handle) or {}
+    # Presets are node-centric YAML; translate to the legacy dict the rest of the
+    # pipeline (and _apply_auto_devices' model.* device fields) expects.
+    preset = to_legacy_dict(raw)
     if auto_devices:
         _apply_auto_devices(preset)
     return preset

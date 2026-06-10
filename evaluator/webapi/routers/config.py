@@ -5,7 +5,10 @@ from typing import Any, Callable, Dict
 from fastapi import APIRouter, HTTPException
 
 from evaluator import ConfigurationError
-from evaluator.pipeline.stage_graph import PIPELINE_MODE_SPECS, resolve_pipeline_mode_spec
+from evaluator.pipeline.stage_graph import (
+    PIPELINE_MODE_SPECS,
+    resolve_pipeline_mode_spec,
+)
 from evaluator.datasets.descriptor import list_registered_datasets, get_descriptor
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.config_helpers import (
@@ -16,16 +19,23 @@ from evaluator.webapi.config_helpers import (
     nested_config,
     prepare_run_config,
 )
-from evaluator.webapi.schemas import ConfigCreateRequest, ErrorResponse, EvaluationJobRequest
+from evaluator.webapi.schemas import (
+    ConfigCreateRequest,
+    ErrorResponse,
+    EvaluationJobRequest,
+)
 
 
-def build_config_router(provider_factory: Callable[[], ModelServiceProvider]) -> APIRouter:
+def build_config_router(
+    provider_factory: Callable[[], ModelServiceProvider],
+) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/presets", summary="List presets")
     def presets() -> Dict[str, list[str]]:
         """Return available preset names for quick config creation."""
         from evaluator import list_presets
+
         return {"presets": list_presets()}
 
     @router.get("/api/config/options", summary="Config form options")
@@ -44,7 +54,8 @@ def build_config_router(provider_factory: Callable[[], ModelServiceProvider]) ->
             except ValueError:
                 continue
             compatible_datasets = [
-                ds_id for ds_id in list_registered_datasets()
+                ds_id
+                for ds_id in list_registered_datasets()
                 if (desc := get_descriptor(ds_id)) and desc.supports_pipeline_mode(mode)
             ]
             modes[mode] = {
@@ -78,7 +89,9 @@ def build_config_router(provider_factory: Callable[[], ModelServiceProvider]) ->
     def validate_config(payload: EvaluationJobRequest) -> Dict[str, Any]:
         """Validate and normalize an EvaluationConfig dict. Returns 400 on invalid config."""
         try:
-            config = prepare_run_config(payload.config, auto_devices=payload.auto_devices)
+            config = prepare_run_config(
+                payload.config, auto_devices=payload.auto_devices
+            )
             return {"config": config.to_dict()}
         except (ConfigurationError, ImportError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -92,6 +105,40 @@ def build_config_router(provider_factory: Callable[[], ModelServiceProvider]) ->
         except ConfigurationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.get("/api/graph/nodes", summary="Stage-node catalogue for the builder")
+    def graph_nodes_endpoint() -> Dict[str, Any]:
+        """The registered node types + I/O contract that the visual builder palette offers (E2)."""
+        from ..config_helpers import node_catalogue
+
+        return node_catalogue()
+
+    @router.post("/api/graph/build", summary="Build + validate a canvas graph spec")
+    def graph_build_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Build the DAG from a builder canvas spec ``{mode, nodes:[{id,type,params}],
+        edges:[{from,to}]}`` and return its topological levels — or a 400 with the error (E4).
+        ``edges`` ([{from,to}]) is folded into the ``{to: [from,…]}`` shape the builder expects.
+        """
+        from ...pipeline import build_graph_from_spec
+
+        nodes = payload.get("nodes") or []
+        mode = payload.get("mode") or "asr_text_retrieval"
+        edges: Dict[str, list] = {}
+        for e in payload.get("edges") or []:
+            if e.get("from") and e.get("to"):
+                edges.setdefault(e["to"], []).append(e["from"])
+        try:
+            graph = build_graph_from_spec(nodes, mode=mode, edges=edges)
+        except Exception as exc:  # noqa: BLE001 — surface any build error as 400
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "mode": graph.mode,
+            "levels": [[n.id for n in level] for level in graph.topological_levels()],
+            "nodes": [
+                {"id": n.id, "stage": n.stage, "depends_on": list(n.depends_on)}
+                for n in graph.nodes
+            ],
+        }
+
     @router.post(
         "/api/config/create",
         summary="Create config from preset + patch",
@@ -101,12 +148,17 @@ def build_config_router(provider_factory: Callable[[], ModelServiceProvider]) ->
         """Create a new config by merging a patch dict over a preset base."""
         try:
             from evaluator import EvaluationConfig
+
             if payload.preset_name:
-                base_config = EvaluationConfig.from_preset(payload.preset_name, validate=False)
+                base_config = EvaluationConfig.from_preset(
+                    payload.preset_name, validate=False
+                )
             else:
                 base_config = EvaluationConfig()
 
-            merged = deep_merge_dict(nested_config(base_config), dict(payload.config_patch))
+            merged = deep_merge_dict(
+                nested_config(base_config), dict(payload.config_patch)
+            )
             config = EvaluationConfig.from_dict(merged)
             if payload.auto_devices:
                 config = config.with_auto_devices()

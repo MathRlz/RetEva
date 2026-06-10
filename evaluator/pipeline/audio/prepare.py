@@ -4,11 +4,14 @@ Used by both the CLI (``cli/commands.py``) and the webapi service
 (``services/evaluation_service.py``) so the two paths synthesize audio
 identically.
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 from typing import Any, List, Optional
+
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -85,20 +88,26 @@ def synthesize_missing_query_audio(
     pending = still_pending
 
     if not pending:
-        log.info("All query audio already available (%d clip(s)); skipping TTS model load", resolved)
+        log.info(
+            "All query audio already available (%d clip(s)); skipping TTS model load",
+            resolved,
+        )
         return resolved
 
     default_lang = getattr(synth_config, "language", "en") or "en"
     log.info(
         "Synthesizing audio for %d text question(s) via TTS provider '%s' (lang=%s)%s",
-        len(pending), synth_config.provider, default_lang,
+        len(pending),
+        synth_config.provider,
+        default_lang,
         " -> cache" if caching else (f" -> {out_dir}" if out_dir else " (in-memory)"),
     )
 
     # CacheManager (or --no-cache) owns caching, so disable the synthesizer's ad-hoc cache.
     base_cfg = (
         dataclasses.replace(synth_config, skip_cache=True)
-        if (caching or no_cache) else synth_config
+        if (caching or no_cache)
+        else synth_config
     )
 
     # One synthesizer per language (a question's own ``language`` wins over the default).
@@ -106,15 +115,22 @@ def synthesize_missing_query_audio(
 
     def _get_synth(lang: str) -> AudioSynthesizer:
         if lang not in synthesizers:
-            cfg = dataclasses.replace(base_cfg, language=lang) if lang != default_lang else base_cfg
+            cfg = (
+                dataclasses.replace(base_cfg, language=lang)
+                if lang != default_lang
+                else base_cfg
+            )
             synthesizers[lang] = AudioSynthesizer(cfg)
         return synthesizers[lang]
 
     done = 0
-    for question in pending:
+    for question in tqdm(pending, desc="TTS synthesis", unit="clip"):
         text = getattr(question, "question_text", None)
         if not text:
-            log.warning("Question %s has no text, skipping synthesis", getattr(question, "question_id", "?"))
+            log.warning(
+                "Question %s has no text, skipping synthesis",
+                getattr(question, "question_id", "?"),
+            )
             continue
         lang = getattr(question, "language", None) or default_lang
         if caching:
@@ -131,7 +147,11 @@ def synthesize_missing_query_audio(
                 cache_manager.register_synthesized_audio(key, Path(output_path))
             done += 1
         except Exception as e:  # keep going; one bad clip shouldn't abort the run
-            log.error("Failed to synthesize audio for question %s: %s", getattr(question, "question_id", "?"), e)
+            log.error(
+                "Failed to synthesize audio for question %s: %s",
+                getattr(question, "question_id", "?"),
+                e,
+            )
 
     for synth in synthesizers.values():
         if hasattr(synth, "log_cache_stats"):
@@ -148,7 +168,12 @@ def synthesize_missing_query_audio(
 def _tts_cache_key(synth_config: Any, question: Any) -> str:
     """Content-based cache key: text + the voice settings that affect the waveform."""
     import hashlib
-    lang = getattr(question, "language", None) or getattr(synth_config, "language", "en") or "en"
+
+    lang = (
+        getattr(question, "language", None)
+        or getattr(synth_config, "language", "en")
+        or "en"
+    )
     parts = [
         str(getattr(synth_config, "provider", "")),
         str(getattr(synth_config, "voice", "")),
@@ -164,9 +189,11 @@ def _tts_cache_key(synth_config: Any, question: Any) -> str:
 def _release_torch_memory() -> None:
     """Drop freed torch tensors promptly (GC + CUDA cache)."""
     import gc
+
     gc.collect()
     try:
         import torch
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception:

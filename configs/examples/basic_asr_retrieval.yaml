@@ -1,86 +1,47 @@
-# =============================================================================
-# Basic ASR + Text Embedding Retrieval Configuration
-# =============================================================================
-#
-# This is the recommended starting configuration for beginners.
-# It uses the traditional pipeline: Speech → ASR → Text → Embeddings → Retrieval
-#
-# Pipeline flow:
-#   1. Audio input is transcribed to text using Whisper ASR
-#   2. Text is converted to embeddings using LaBSE
-#   3. Embeddings are used for retrieval against the document corpus
-#
-# This approach allows debugging ASR and retrieval separately and provides
-# interpretable intermediate results (the transcribed text).
-#
-# =============================================================================
-
-# ----- Experiment Metadata -----
-# Give your experiment a descriptive name for tracking results
-experiment_name: basic_asr_retrieval
-
-# Directory where results (JSON metrics, logs) will be saved
-output_dir: evaluation_results
-
-# ----- Checkpointing -----
-# Enable checkpointing to resume long evaluations after interruptions
-checkpoint_enabled: true
-checkpoint_interval: 50        # Save progress every 50 samples
-resume_from_checkpoint: true   # Resume from last checkpoint if available
-
-# ----- Caching -----
-# Caching speeds up repeated runs by storing intermediate results
-cache:
-  enabled: true                # Master switch for all caching
-  cache_dir: .cache            # Directory for cached data
-  max_size_gb: null            # null = unlimited cache size
-  
-  # Fine-grained cache control:
-  cache_asr_features: true     # Cache audio features (mel spectrograms)
-  cache_transcriptions: true   # Cache ASR text output
-  cache_embeddings: true       # Cache text/audio embeddings
-  cache_vector_db: true        # Cache the built vector index
-
-# ----- Logging -----
-logging:
-  log_dir: logs
-  console_level: INFO          # Show INFO and above in console
-  file_level: DEBUG            # Save DEBUG and above to log files
-
-# ----- Model Configuration -----
-model:
-  # Pipeline mode determines the evaluation flow
-  # Options: "asr_text_retrieval", "audio_emb_retrieval", "asr_only"
-  pipeline_mode: asr_text_retrieval
-  
-  # === ASR Model ===
-  # Whisper is recommended for its accuracy and multilingual support
-  asr_model_type: whisper               # Options: whisper, wav2vec2
-  asr_model_name: openai/whisper-medium # Good balance of speed/accuracy
-  asr_adapter_path: null                # Path to fine-tuned adapter (optional)
-  asr_device: cuda:0                    # GPU device for ASR model
-  
-  # === Text Embedding Model ===
-  # LaBSE provides good multilingual embeddings
-  text_emb_model_type: labse           # Options: labse, jina_v4, bge_m3, nemotron
-  text_emb_model_name: sentence-transformers/LaBSE
-  text_emb_adapter_path: null          # Path to fine-tuned adapter (optional)
-  text_emb_device: cuda:0              # GPU device for embedding model
-  
-  # === Audio Embedding (not used in this mode) ===
-  audio_emb_model_type: null
-  audio_emb_model_name: null
-  audio_emb_device: cuda:0
-
-# ----- Dataset Configuration -----
+experiment:
+  name: basic_asr_retrieval
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  batch_size: 16
 data:
-  dataset_name: admed_voice    # Dataset to evaluate on
-  batch_size: 16               # Number of samples per batch
-  num_workers: 0               # DataLoader workers (0 = main thread)
-  test_size: 0.0               # Use full dataset (no train/test split)
-
-# ----- Vector Database -----
-vector_db:
-  type: inmemory               # Options: inmemory, faiss, faiss_gpu
-  k: 5                         # Number of results to retrieve per query
-  retrieval_mode: dense        # Options: dense, sparse, hybrid
+  num_workers: 0
+  test_size: 0.0
+graph:
+  mode: asr_text_retrieval
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-medium
+    adapter: null
+    device: cuda:0
+  text_embedding:
+    model: labse
+    name: sentence-transformers/LaBSE
+    adapter: null
+    device: cuda:0
+  audio_embedding:
+    model: null
+    name: null
+    device: cuda:0
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 5
+    mode: dense
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    max_size_gb: null
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    log_dir: logs
+    console_level: INFO
+    file_level: DEBUG
+checkpoint_enabled: true
+checkpoint_interval: 50
+resume_from_checkpoint: true

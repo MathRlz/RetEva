@@ -1,101 +1,84 @@
-# Example configuration using local LLM server
-
-experiment_name: "local_llm_evaluation"
-output_dir: "evaluation_results/local_llm"
-
-# Checkpoint configuration
+experiment:
+  name: local_llm_evaluation
+  output_dir: evaluation_results/local_llm
+dataset:
+  id: admed_voice
+  batch_size: 32
+data:
+  num_workers: 4
+  test_size: 0.0
+graph:
+  mode: asr_text_retrieval
+model:
+  audio_emb_adapter_path: null
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-medium
+    adapter: null
+    device: cuda:0
+  text_embedding:
+    model: labse
+    name: sentence-transformers/LaBSE
+    adapter: null
+    device: cuda:0
+  audio_embedding:
+    model: null
+    name: null
+    device: cuda:0
+  corpus_index:
+    store: faiss
+  retrieval:
+    k: 5
+    gpu_id: 0
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    max_size_gb: null
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    log_dir: logs
+    console_level: INFO
+    file_level: DEBUG
 checkpoint_enabled: true
 checkpoint_interval: 50
 resume_from_checkpoint: true
-
-# Cache configuration
-cache:
-  enabled: true
-  cache_dir: .cache
-  max_size_gb: null
-  cache_asr_features: true
-  cache_transcriptions: true
-  cache_embeddings: true
-  cache_vector_db: true
-
-# Logging configuration
-logging:
-  log_dir: logs
-  console_level: INFO
-  file_level: DEBUG
-
-# Enable local LLM server
 llm_server:
   enabled: true
-  backend: "ollama"  # ollama | vllm | llamacpp
-  host: "localhost"
+  backend: ollama
+  host: localhost
   port: 11434
-  model: "mistral:7b-instruct"  # or "biomistral:7b" for medical domain
+  model: mistral:7b-instruct
   auto_start: true
-  gpu_layers: -1  # -1 for all GPU, 0 for CPU only
+  gpu_layers: -1
   timeout_s: 60
-
-# Query optimization using local LLM
 query_optimization:
   enabled: true
-  method: "rewrite"  # rewrite | hyde | decompose | multi_query
+  method: rewrite
   use_local_server: true
-  local_server_url: "http://localhost:11434/v1/chat/completions"
-  llm_model: "mistral:7b-instruct"
-  llm_api_key_env: "DUMMY_KEY"  # Local server doesn't need real key
+  local_server_url: http://localhost:11434/v1/chat/completions
+  llm_model: mistral:7b-instruct
+  llm_api_key_env: DUMMY_KEY
   llm_temperature: 0.3
   max_iterations: 2
-
-# LLM-as-judge using local LLM
 judge:
   enabled: true
   use_local_server: true
-  local_server_url: "http://localhost:11434/v1/chat/completions"
-  model: "mistral:7b-instruct"
-  api_key_env: "DUMMY_KEY"  # Local server doesn't need real key
+  local_server_url: http://localhost:11434/v1/chat/completions
+  model: mistral:7b-instruct
+  api_key_env: DUMMY_KEY
   temperature: 0.0
   max_cases: 50
   judge_aspects:
-    - "relevance"
-    - "accuracy"
-    - "completeness"
-  score_aggregation: "weighted"
+  - relevance
+  - accuracy
+  - completeness
+  score_aggregation: weighted
   aspect_weights:
     relevance: 0.5
     accuracy: 0.3
     completeness: 0.2
-
-# Model configuration
-model:
-  pipeline_mode: asr_text_retrieval
-  
-  # ASR Model
-  asr_model_type: whisper
-  asr_model_name: openai/whisper-medium
-  asr_adapter_path: null
-  asr_device: cuda:0
-  
-  # Text Embedding Model
-  text_emb_model_type: labse
-  text_emb_model_name: sentence-transformers/LaBSE
-  text_emb_adapter_path: null
-  text_emb_device: cuda:0
-  
-  # Audio Embedding Model
-  audio_emb_model_type: null
-  audio_emb_model_name: null
-  audio_emb_adapter_path: null
-  audio_emb_device: cuda:0
-
-# Dataset configuration
-data:
-  dataset_name: admed_voice
-  batch_size: 32
-  num_workers: 4
-  test_size: 0.0
-
-# Vector database configuration
-vector_db:
-  type: faiss
-  k: 5
-  gpu_id: 0

@@ -1,59 +1,52 @@
-# Evaluation Configuration for Attention Pool Audio Model with JINA v4
-# This config uses direct audio-to-text retrieval without ASR
-
-experiment_name: "apm_jina_admed_voice_evaluation"
-output_dir: "evaluation_results"
-
+experiment:
+  name: apm_jina_admed_voice_evaluation
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  batch_size: 32
+data:
+  num_workers: 4
+  test_size: 0.0
+graph:
+  mode: audio_text_retrieval
+model:
+  audio_emb_adapter_path: null
+nodes:
+  asr:
+    model: null
+    name: null
+    adapter: null
+    device: cuda:0
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    adapter: null
+    device: cuda:1
+  audio_embedding:
+    model: attention_pool
+    name: openai/whisper-large
+    model_path: /home/student5/scripts/attention_pool_model/apm_jina_admed_voice.pt
+    dim: 2048
+    dropout: 0.1
+    device: cuda:3
+  corpus_index:
+    store: inmemory
+  retrieval:
+    k: 5
+    gpu_id: 0
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    max_size_gb: null
+    cache_asr_features: false
+    cache_transcriptions: false
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    log_dir: logs
+    console_level: INFO
+    file_level: DEBUG
 checkpoint_enabled: true
 checkpoint_interval: 50
 resume_from_checkpoint: true
-
-cache:
-  enabled: true
-  cache_dir: ".cache"
-  max_size_gb: null
-  cache_asr_features: false  # No ASR in this pipeline
-  cache_transcriptions: false
-  cache_embeddings: true
-  cache_vector_db: true
-
-logging:
-  log_dir: "logs"
-  console_level: "INFO"
-  file_level: "DEBUG"
-
-model:
-  # Pipeline mode - direct audio to text retrieval
-  pipeline_mode: "audio_text_retrieval"
-  
-  # No ASR needed for direct audio embedding
-  asr_model_type: null
-  asr_model_name: null
-  asr_adapter_path: null
-  asr_device: "cuda:0"
-  
-  # Text embedding model - JINA v4 (2048 dimensions)
-  text_emb_model_type: "jina_v4"
-  text_emb_model_name: "jinaai/jina-embeddings-v4"
-  text_emb_adapter_path: null
-  text_emb_device: "cuda:1"
-  
-  # Audio embedding model - Attention Pool Model
-  audio_emb_model_type: "attention_pool"
-  audio_emb_model_name: "openai/whisper-large"
-  audio_emb_adapter_path: null
-  audio_emb_model_path: "/home/student5/scripts/attention_pool_model/apm_jina_admed_voice.pt"
-  audio_emb_dim: 2048
-  audio_emb_dropout: 0.1
-  audio_emb_device: "cuda:3"
-
-data:
-  dataset_name: "admed_voice"
-  batch_size: 32
-  num_workers: 4
-  test_size: 0.0
-
-vector_db:
-  type: "inmemory"
-  k: 5
-  gpu_id: 0

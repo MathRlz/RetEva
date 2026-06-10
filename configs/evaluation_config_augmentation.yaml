@@ -1,61 +1,47 @@
-# Example configuration with audio augmentation for robustness testing
-# Tests ASR performance under various noise conditions
-
-experiment_name: "asr_robustness_test"
-output_dir: "evaluation_results/robustness"
-
-# Model configuration
-model:
-  pipeline_mode: "asr_only"  # ASR-only mode for transcription testing
-  asr_model_type: "whisper"
-  asr_model_name: "openai/whisper-medium"
-  asr_device: "cuda:0"
-
-# Dataset configuration
-data:
-  dataset_type: "audio_transcription"  # ASR benchmark
-  audio_dir: "test_audio/"
-  transcripts_file: "test_audio/transcripts.json"
+experiment:
+  name: asr_robustness_test
+  output_dir: evaluation_results/robustness
+dataset:
+  type: audio_transcription
   batch_size: 16
-  trace_limit: 0  # No limit
-  default_language: "en"
-
-# Audio augmentation settings
+  trace_limit: 0
+  language: en
+data:
+  audio_dir: test_audio/
+  transcripts_file: test_audio/transcripts.json
+graph:
+  mode: asr_only
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-medium
+    device: cuda:0
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+  logging:
+    log_dir: logs
+    console_level: INFO
+    file_level: DEBUG
 augmentation:
   enabled: true
-  
-  # Noise addition
   add_noise: true
-  noise_type: "white"  # Options: white, pink, brown
-  snr_db: 15.0  # Signal-to-noise ratio (lower = more noise)
-  
-  # Speed perturbation
+  noise_type: white
+  snr_db: 15.0
   speed_perturbation: true
-  speed_range: [0.9, 1.1]  # 90% to 110% of original speed
-  
-  # Pitch shifting (optional)
+  speed_range:
+  - 0.9
+  - 1.1
   pitch_shift: false
-  pitch_semitones_range: [-2, 2]
-  
-  # Volume changes (optional)
+  pitch_semitones_range:
+  - -2
+  - 2
   volume_change: false
-  volume_range: [0.8, 1.2]
-  
-  # Codec simulation (optional)
+  volume_range:
+  - 0.8
+  - 1.2
   codec_simulation: false
-  codec: "mp3"
+  codec: mp3
   bitrate: 64
-  
-  # Number of variants per sample
-  n_variants: 3  # Creates 3 augmented versions per audio file
-
-# Cache configuration
-cache:
-  enabled: true
-  cache_dir: ".cache"
-
-# Logging
-logging:
-  log_dir: "logs"
-  console_level: "INFO"
-  file_level: "DEBUG"
+  n_variants: 3

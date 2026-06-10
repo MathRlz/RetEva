@@ -1,62 +1,42 @@
-# Query Optimization: Iterative Rewriting Configuration
-# Use this for progressive query refinement with LLM
-
-experiment_name: "query_rewrite_experiment"
-
-dataset:
-  name: "pubmed_qa"
-  path: "data/pubmed_qa"
-
+experiment:
+  name: query_rewrite_experiment
 vector_db:
-  type: "chroma"
-  collection_name: "pubmed_docs"
-  retrieval_mode: "dense"
+  collection_name: pubmed_docs
   top_k: 10
-
-# Query Optimization with Iterative Rewriting
+nodes:
+  corpus_index:
+    store: chroma
+  retrieval:
+    mode: dense
+runtime:
+  logging:
+    show_progress_bars: true
+    console_level: INFO
+dataset:
+  name: pubmed_qa
+  path: data/pubmed_qa
 query_optimization:
   enabled: true
-  method: "rewrite"
-  
-  # Number of refinement iterations
+  method: rewrite
   num_iterations: 2
-  
-  # LLM Configuration
   llm:
-    provider: "openai"
-    model: "gpt-3.5-turbo"
-    api_key: "${OPENAI_API_KEY}"
+    provider: openai
+    model: gpt-3.5-turbo
+    api_key: ${OPENAI_API_KEY}
     temperature: 0.7
     max_tokens: 256
     timeout: 30
-  
-  # Custom rewrite prompt for medical domain
-  rewrite_prompt: |
-    You are a medical information specialist. Given the following query and retrieved context, 
-    rewrite the query to use precise medical terminology and improve search accuracy.
-    
-    Original Query: "{query}"
-    
-    Retrieved Context:
-    {context}
-    
-    Rewritten Query (concise, medical terminology):
-  
-  # Enable caching to reduce API costs
+  rewrite_prompt: "You are a medical information specialist. Given the following query and retrieved context,\
+    \ \nrewrite the query to use precise medical terminology and improve search accuracy.\n\nOriginal\
+    \ Query: \"{query}\"\n\nRetrieved Context:\n{context}\n\nRewritten Query (concise, medical terminology):\n"
   cache_llm_calls: true
-  cache_ttl: 86400  # 24 hours
-
+  cache_ttl: 86400
 evaluation:
   metrics:
-    - "mrr"
-    - "ndcg"
-    - "map"
-
+  - mrr
+  - ndcg
+  - map
 output:
-  results_dir: "evaluation_results/query_rewrite"
+  results_dir: evaluation_results/query_rewrite
   save_json: true
   generate_plots: true
-
-logging:
-  level: "INFO"
-  show_progress_bars: true

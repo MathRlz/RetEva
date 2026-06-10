@@ -1,8 +1,9 @@
 <section class="step">
   <h4>Execution DAG</h4>
+  {% set io = node_io|default({}) %}
   {% for level in levels %}
   <div class="graph-level">
-    {% for node in level %}<span class="graph-node">{{ node }}</span>{% endfor %}
+    {% for node in level %}<span class="graph-node" title="{{ io.get(node, '') }}">{{ node }}{% if io.get(node) %}<br><small class="muted">{{ io.get(node) }}</small>{% endif %}</span>{% endfor %}
   </div>
   {% endfor %}
 </section>

@@ -2,6 +2,20 @@
 
 This module provides structured result handling for evaluation runs,
 including serialization, loading, and pretty printing capabilities.
+
+Result-type boundary (T1). Two result types coexist on purpose, at different layers:
+
+- :class:`RunResults` (``evaluation/result_schema.py``) is the **internal** result: a
+  ``dict`` subclass of ~40 metric keys with typed accessors, produced by the executor
+  (``run_graph`` / ``run_from_bundle``) and consumed inside the evaluation engine.
+- :class:`EvaluationResults` (here) is the **public** result: a dataclass that wraps the
+  metrics dict together with the ``EvaluationConfig`` and run metadata (timestamps,
+  versions, sample counts) and adds JSON file save/load + pretty printing. The public API
+  (``api.py`` / ``public_api.py``) builds an ``EvaluationResults`` from a ``RunResults``.
+
+So: ``RunResults`` = the metrics payload; ``EvaluationResults`` = that payload + provenance
++ I/O, for callers. They are not merged because the internal dict must stay a plain mapping
+(its own serialized form at the engine edge), while the public type carries config/metadata.
 """
 
 import json
@@ -163,10 +177,7 @@ class EvaluationResults:
         config_data = data.get("_config")
 
         # Extract metrics (everything except _config and _metadata)
-        metrics = {
-            k: v for k, v in data.items()
-            if not k.startswith("_")
-        }
+        metrics = {k: v for k, v in data.items() if not k.startswith("_")}
 
         if config_data is None:
             raise ValueError("Missing _config section in result data")
