@@ -72,9 +72,12 @@ def _stage_augment_audio(s: RunState) -> None:
     os.makedirs(out_dir, exist_ok=True)
 
     from ...datasets.core import load_audio_file
+    from ...utils.progress import progress_iter
 
     out_ids, out_paths = [], []
-    for qid, path in zip(refs.ids, refs.values):
+    for qid, path in progress_iter(
+        zip(refs.ids, refs.values), "Augmenting audio", total=len(refs.ids), unit="clip"
+    ):
         waveform, sr = load_audio_file(path)
         audio = np.asarray(waveform.squeeze().numpy(), dtype=np.float32)
         for variant in range(n_variants):

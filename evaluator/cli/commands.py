@@ -6,7 +6,7 @@ import argparse
 
 from evaluator.config import EvaluationConfig
 from evaluator.storage.cache import CacheManager
-from evaluator.logging_config import setup_logging, log_cache_stats
+from evaluator.logging_config import setup_logging, log_cache_stats, runtime_logger
 from evaluator.evaluation.runner import run_evaluation_from_config
 
 from .parser import parse_args, apply_args_to_config
@@ -49,17 +49,16 @@ def run_evaluation(args: argparse.Namespace) -> None:
         log_dir=config.logging.log_dir,
         console_level=config.logging.get_console_level(),
         file_level=config.logging.get_file_level(),
+        verbosity=config.logging.verbosity,
     )
 
-    logger.info("=" * 60)
-    logger.info("Starting Evaluation")
-    logger.info("=" * 60)
+    logger.info("Starting evaluation: %s", config.experiment_name)
     # Surface the interpreter + native threading stack (diagnoses env-specific native
     # crashes, e.g. a webapi subprocess running a different env than the CLI).
     from evaluator.diagnostics import log_runtime_summary
 
-    log_runtime_summary(logger)
-    logger.info(f"Configuration: {config.to_dict()}")
+    log_runtime_summary(logger)  # routes to the runtime category (verbose+)
+    runtime_logger.debug("Configuration: %s", config.to_dict())
 
     # Initialize cache manager
     cache_manager = CacheManager(

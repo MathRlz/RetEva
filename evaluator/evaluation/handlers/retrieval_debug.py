@@ -10,10 +10,10 @@ from __future__ import annotations
 import numpy as np
 
 from ..helpers import _payload_to_key
-from ...logging_config import get_logger
+from ...logging_config import diag_logger
 from ._common import DEBUG_SAMPLE_LIMIT, MATCH_SYMBOL, MISS_SYMBOL
 
-logger = get_logger(__name__)
+logger = diag_logger
 
 
 def log_retrieval_debug(

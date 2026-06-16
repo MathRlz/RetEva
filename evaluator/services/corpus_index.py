@@ -395,8 +395,11 @@ def embed_corpus_audio(
 
         os.makedirs(corpus_audio_dir, exist_ok=True)
 
+    from ..utils.progress import progress_iter
+
     audio_arrays, sampling_rates = [], []
-    for doc in corpus:
+    # TTS synthesis is slow per doc → always show the bar (min_items=1).
+    for doc in progress_iter(corpus, "Corpus audio (TTS+embed)", unit="doc", min_items=1):
         doc_id = doc.get("doc_id", "")
         audio_path = doc.get("audio_path")
         if not audio_path:

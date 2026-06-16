@@ -90,6 +90,7 @@ def runtime_summary() -> str:
 def log_runtime_summary(logger) -> None:
     """Best-effort log of :func:`runtime_summary` (never raises)."""
     try:
-        logger.info("RUNTIME %s", runtime_summary())
+        from .logging_config import runtime_logger
+        runtime_logger.info("RUNTIME %s", runtime_summary())
     except Exception:
         pass

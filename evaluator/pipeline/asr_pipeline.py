@@ -358,8 +358,6 @@ class ASRPipeline(CacheMixin):
         memory_manager: Any,
     ) -> Tuple[List[str], List[str]]:
         """Run the batch/checkpoint processing loop over the DataLoader."""
-        from tqdm import tqdm
-
         sample_idx = 0
 
         # Use batch processing context manager for optimized memory management
@@ -369,7 +367,11 @@ class ASRPipeline(CacheMixin):
             )
         ) as batch_processor:
             with TimingContext("ASR Dataset Processing", logger):
-                for batch in tqdm(data_loader, desc="ASR Processing", disable=None):
+                from ..utils.progress import progress_iter
+
+                for batch in progress_iter(
+                    data_loader, "ASR Processing", unit="batch", min_items=1
+                ):
                     batch_size_actual = len(batch["transcriptions"])
 
                     # Skip already processed samples (from checkpoint)

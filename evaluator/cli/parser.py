@@ -121,7 +121,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--judge_max_cases", type=int, default=None)
     parser.add_argument("--judge_timeout_s", type=int, default=None)
     parser.add_argument("--judge_temperature", type=float, default=None)
-    
+
+    # Console verbosity (audit Batch F): a named profile; -v/-vv are shorthands.
+    parser.add_argument(
+        "--verbosity", choices=["default", "verbose", "debug"], default=None,
+        help="Console verbosity profile (default: quiet; env EVALUATOR_VERBOSITY)",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0,
+        help="-v = verbose, -vv = debug (overrides --verbosity)",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -207,8 +217,20 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
         args: Parsed command-line arguments.
         config: EvaluationConfig object to modify in-place.
     """
+    import os
+
     from ..config import DevicePoolConfig
     from ..config.model_fields import MODEL_FAMILY_FIELDS
+
+    # Console verbosity (Batch F): -vv > -v > --verbosity > EVALUATOR_VERBOSITY env > config.
+    verbose_count = getattr(args, "verbose", 0) or 0
+    verbosity = (
+        "debug" if verbose_count >= 2
+        else "verbose" if verbose_count == 1
+        else getattr(args, "verbosity", None) or os.environ.get("EVALUATOR_VERBOSITY")
+    )
+    if verbosity:
+        config.logging.verbosity = verbosity
 
     # Capture model types before overrides so we can detect a family whose type changed.
     old_types = {

@@ -22,7 +22,7 @@ from ...pipeline import (
     RetrievalPipelineProtocol,
 )
 from ...storage.cache import CacheManager
-from ...logging_config import get_logger, log_cache_stats
+from ...logging_config import get_logger, log_cache_stats, node_logger
 from ...metrics.domain_terms import load_term_weights
 from ...pipeline.run_graph import _build_run_graph
 from ..helpers import detect_pipeline_mode, PIPELINE_MODE_LABELS
@@ -202,7 +202,7 @@ def run_graph(
     stage_levels = [
         [node.id for node in level] for level in stage_graph.topological_levels()
     ]
-    logger.info("Execution DAG mode=%s levels=%s", mode, stage_levels)
+    node_logger.info("Execution DAG mode=%s levels=%s", mode, stage_levels)
     logger.info(f"Dataset size: {len(dataset)}, Batch size: {batch_size}, k: {k}")
     # Pre-flight (M3): fail a typo'd/unregistered node type before any heavy work.
     validate_graph_handlers(stage_graph)

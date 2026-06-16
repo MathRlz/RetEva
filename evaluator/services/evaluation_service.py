@@ -221,6 +221,7 @@ def run_evaluation(
                 console_level=config.logging.get_console_level(),
                 file_level=config.logging.get_file_level(),
                 experiment_name=config.experiment_name,
+                verbosity=config.logging.verbosity,
             )
         except Exception as e:
             raise RuntimeError(f"Failed to setup logging: {e}") from e

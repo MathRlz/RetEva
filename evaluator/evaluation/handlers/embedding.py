@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from tqdm import tqdm
 from torch.utils.data import DataLoader
 
 from ..stage_registry import register_stage_handler
@@ -53,7 +52,9 @@ def _embed_all_audio(dataset, audio_embedding_pipeline, batch_size, num_workers)
         collate_fn=collate_fn,
     )
     with TimingContext("Audio Embedding Phase", logger):
-        for batch in tqdm(dataloader, desc="Audio embedding", disable=None):
+        from ...utils.progress import progress_iter
+
+        for batch in progress_iter(dataloader, "Audio embedding", unit="batch", min_items=1):
             audio_list = [item["audio_array"] for item in batch]
             sampling_rates = [item["sampling_rate"] for item in batch]
             transcriptions = [item["transcription"] for item in batch]

@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict
 
 from ..stage_registry import get_stage_spec
-from ...logging_config import get_logger
+from ...logging_config import get_logger, node_logger
 from .state import RunState
 
 logger = get_logger(__name__)
@@ -31,7 +31,7 @@ def _run_one_node(
     state.current_node = node  # so handlers put/get artifacts by node id
     # Node-granular console marker (replaces the old per-phase banners, N2): every DAG
     # node announces itself by id + stage, so the log tracks the graph, not fixed phases.
-    logger.info("▶ node %s (stage=%s, level=%d)", node.id, node.stage, level)
+    node_logger.info("▶ node %s (stage=%s, level=%d)", node.id, node.stage, level)
     if sink is not None:
         sink.emit("node_start", node=node.id, level=level, stage=node.stage)
     _t = time.perf_counter()
@@ -125,7 +125,7 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
             for model in offloads.get(pos, ()):
                 try:
                     state.service_provider.release_model_instance(model)
-                    logger.info("offloaded model after stage '%s'", node.stage)
+                    node_logger.info("offloaded model after stage '%s'", node.stage)
                 except Exception as exc:  # never let offload break the run
                     logger.warning(
                         "offload after stage '%s' failed: %s", node.stage, exc
@@ -162,7 +162,7 @@ def _setup_run_journal(state: "RunState", flat_nodes) -> tuple:
             try:
                 restore_state(state, blob)
                 start_level = last_level + 1
-                logger.info("resuming run from level %d (journal %s)", start_level, key)
+                node_logger.info("resuming run from level %d (journal %s)", start_level, key)
             except Exception as exc:
                 logger.warning("journal restore failed (%s); running fresh", exc)
                 start_level = 0

@@ -87,8 +87,10 @@ def _build_query_traces(
     references = s.get_artifact(
         "reference_transcription", default=[]
     )  # bus-only (M1d-2)
+    from ...utils.progress import progress_iter
+
     traces = []
-    for i in range(limit):
+    for i in progress_iter(range(limit), "Building query traces", total=limit, unit="query"):
         retrieved = [
             {"doc_key": _payload_to_key(payload), "score": float(score)}
             for payload, score in results_with_scores[i]
