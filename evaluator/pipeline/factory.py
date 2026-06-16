@@ -348,6 +348,11 @@ def create_pipeline_from_config(
     # Create models based on mode
     if mode == "audio_emb_retrieval":
         audio_emb_pipeline = AudioEmbeddingPipeline(_make_audio_emb(), cache_manager)
+        # Cross-modal corpus: with a text embedder configured, the corpus is text-embedded
+        # into the shared space (audio query vs text corpus — the APM self-retrieval setup).
+        # Without one, corpus_embedding falls back to the audio-corpus path (TTS + audio-embed).
+        if mcfg.text_emb_model_type:
+            text_emb_pipeline = TextEmbeddingPipeline(_make_text_emb(), cache_manager)
         retrieval_pipeline = _create_retrieval_pipeline(config, cache_manager, reranker)
 
     elif mode == "audio_text_retrieval":

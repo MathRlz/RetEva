@@ -140,8 +140,11 @@ def _publish_source_itemsets(s: RunState, dataset: Any) -> None:
         return
     ids = [r["id"] for r in rows]
     if len(set(ids)) != len(ids):
+        dupes = len(ids) - len(set(ids))
         logger.warning(
-            "dataset_source: duplicate question_ids — skipping keyed ItemSet publish"
+            "dataset_source: %d duplicate question_ids — ground truth NOT published, so "
+            "WER/CER + retrieval metrics will be EMPTY. Give the dataset unique sample_ids.",
+            dupes,
         )
         return
 

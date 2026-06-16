@@ -45,7 +45,14 @@ class HaniMedicalDataset(AudioTranscriptionDataset):
                 max_samples=getattr(data, "max_samples", None),
                 default_language=getattr(data, "default_language", "en"),
             )
-            samples.extend(loader.load())
+            split_samples = loader.load()
+            if len(hf_splits) > 1:
+                # The HF loader restarts its positional sample_id at 0 per split, so a
+                # multi-split union ("both") would collide ids — and duplicate question_ids
+                # make dataset_source drop ALL ground truth. Namespace by split.
+                for sm in split_samples:
+                    sm.sample_id = f"{hf_split}:{sm.sample_id}"
+            samples.extend(split_samples)
         return AudioSamplesQueryDataset(
             samples, trace_limit=getattr(data, "trace_limit", 0)
         )

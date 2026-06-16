@@ -285,6 +285,30 @@ def _translate_graph(
             if "role" not in params and str(ds_id) in role_by_dataset_id:
                 params["role"] = role_by_dataset_id[str(ds_id)]
                 item["params"] = params
+        # Self-contained list form: a config-bearing node (asr / *_embedding / vector_db /
+        # retrieval) may carry its config inline in params (mirroring the nodes: map). Fold
+        # those into model / vector_db and strip them so the graph node stays structural (the
+        # runtime per-node override is for branches, not the base model). Transform/sink nodes
+        # (augmenter, augment_audio, dataset_sink, dataset_source) keep their params — read at
+        # runtime via graph_override. No-op for the plain-string list form (back-compat).
+        graph_vdb: Dict[str, Any] = {}
+        for item in node_ids:
+            if not isinstance(item, dict):
+                continue
+            ntype, nparams = item.get("type"), item.get("params") or {}
+            if not nparams:
+                continue
+            if ntype in _MODEL_NODE_FIELDS:
+                model.update(_map_keys(nparams, _MODEL_NODE_FIELDS[ntype], f"graph.nodes.{ntype}.params"))
+                item["params"] = {}
+            elif ntype == "vector_db":
+                graph_vdb.update(_vector_db_node_to_config(nparams))
+                item["params"] = {}
+            elif ntype == "retrieval":
+                graph_vdb.update(_retrieval_to_vector_db(nparams))
+                item["params"] = {}
+        if graph_vdb:
+            legacy["vector_db"] = {**legacy.get("vector_db", {}), **graph_vdb}
         # edges: list of {from, to} → {to: [from, ...]} for build_graph_from_spec
         edges: Dict[str, list] = {}
         for edge in graph.get("edges", []) or []:

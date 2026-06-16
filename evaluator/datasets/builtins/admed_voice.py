@@ -52,11 +52,21 @@ class AdmedVoiceDataset(AudioTranscriptionDataset):
         samples = []
         for idx, row in df.reset_index(drop=True).iterrows():
             waveform, sr = load_audio_file(row["file_path"])
+            # admed filenames repeat across category/speaker dirs (the unique key is the full
+            # path) — bare-filename sample_ids collide, and duplicate question_ids make
+            # dataset_source drop ALL ground truth (→ empty WER/CER + IR metrics). Build a
+            # unique id from the path components.
+            uid_parts = [
+                str(row[c])
+                for c in ("source", "cat_code", "rec_place", "speaker_id", "filename")
+                if c in row and row[c] is not None
+            ]
+            sample_id = "_".join(uid_parts) if uid_parts else str(idx)
             samples.append(AudioSample(
                 audio_array=waveform.squeeze().numpy(),
                 sampling_rate=sr,
                 transcription=str(row["phrase"]),
-                sample_id=str(row.get("filename", str(idx))),
+                sample_id=sample_id,
                 language="pl",
                 metadata={"speaker_id": str(row["speaker_id"])} if "speaker_id" in row else {},
             ))
