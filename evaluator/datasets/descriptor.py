@@ -21,6 +21,16 @@ if TYPE_CHECKING:
     from .core import QueryDataset
 
 
+def resolve_split(data: "DataConfig", default: Optional[str] = None) -> Optional[str]:
+    """The effective split for *data*: the general ``data.split``, else the HF-specific
+    ``huggingface_split``, else *default* (typically the descriptor's ``default_split``)."""
+    return (
+        getattr(data, "split", None)
+        or getattr(data, "huggingface_split", None)
+        or default
+    )
+
+
 # ── Default metric sets per evaluation mode ───────────────────────────
 
 METRICS_BY_MODE: Dict[str, Sequence[str]] = {
@@ -168,15 +178,16 @@ class DatasetDescriptor:
         return self.load_fn(data_config)
 
     def _validate_split(self, data: "DataConfig") -> List[str]:
-        """Reject a configured split the dataset doesn't declare (no-op without splits)."""
+        """Reject a configured split the dataset doesn't declare (no-op without splits).
+        ``both`` (the union of every declared split) is always accepted."""
         if not self.splits:
             return []
-        chosen = getattr(data, "huggingface_split", None)
-        if chosen in (None, "") or chosen in set(self.splits):
+        chosen = resolve_split(data)
+        if chosen in (None, "", "both") or chosen in set(self.splits):
             return []
         return [
             f"dataset '{self.id}' has no split '{chosen}' "
-            f"(available: {', '.join(self.splits)})"
+            f"(available: {', '.join(self.splits)}, both)"
         ]
 
 

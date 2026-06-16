@@ -4,13 +4,14 @@ Dataset loading utilities.
 Environment Variables:
     EVALUATOR_DATA_DIR: Base directory for all datasets. Falls back to current
                         working directory if not set.
-    ADMED_VOICE_PATH: Override path for the admed_voice dataset. If not set,
-                      uses EVALUATOR_DATA_DIR/admed_voice.
+    ADMED_VOICE_PATH: Override path for the admed_voice dataset. Lowest precedence —
+                      the config ``dataset.path`` (data.data_path) wins when set; if
+                      neither is set, uses EVALUATOR_DATA_DIR/admed_voice.
 """
 
 from ..core.structures import QuerySample, Document, TranscriptionResult, BenchmarkQuestion, CorpusDocument
 from ..datasets.utils import DatasetLoader
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import os
 import numpy as np
 from torch.utils.data import Dataset
@@ -147,24 +148,29 @@ class QueryDataset(ABC):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         pass
 
-def get_admed_voice_path() -> Path:
+def get_admed_voice_path(base_path: Optional[Union[str, Path]] = None) -> Path:
     """Get path to admed_voice dataset.
-    
-    Returns ADMED_VOICE_PATH env var if set, otherwise EVALUATOR_DATA_DIR/admed_voice.
+
+    Precedence: explicit *base_path* (the config ``dataset.path``) > ``ADMED_VOICE_PATH``
+    env var > ``EVALUATOR_DATA_DIR``/admed_voice.
     """
+    if base_path:
+        return Path(base_path)
     env_path = os.environ.get("ADMED_VOICE_PATH")
     if env_path:
         return Path(env_path)
     return get_data_dir() / "admed_voice"
 
 
-def load_admed_voice_corpus(test_size: float = 0.3):
+def load_admed_voice_corpus(
+    test_size: float = 0.3, base_path: Optional[Union[str, Path]] = None
+):
     def get_duration_in_seconds(duration_str):
         h, m, s = map(float, duration_str.split(":"))
         return h * 3600 + m * 60 + s
 
-    admed_voice_base = get_admed_voice_path()
-    
+    admed_voice_base = get_admed_voice_path(base_path)
+
     def get_file_path(example):
         source = example["source"]
         if source == "natural":

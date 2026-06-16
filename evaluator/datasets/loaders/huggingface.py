@@ -8,6 +8,16 @@ import numpy as np
 from .base import AudioSample
 
 
+def _to_mono(audio: np.ndarray) -> np.ndarray:
+    """Downmix multi-channel audio to a 1-D mono array (the ASR feature extractors
+    require 1-D per clip; a stereo ``(channels, samples)`` clip otherwise survives
+    ``.squeeze()`` and breaks Whisper's batched padding). The channel axis is the
+    smaller dimension (channels ≪ samples)."""
+    if audio.ndim > 1:
+        audio = audio.mean(axis=int(np.argmin(audio.shape)))
+    return audio
+
+
 # Well-known HuggingFace speech dataset column mappings
 KNOWN_DATASET_MAPPINGS: Dict[str, Dict[str, str]] = {
     "mozilla-foundation/common_voice_11_0": {
@@ -177,14 +187,14 @@ class HuggingFaceDatasetLoader:
         if isinstance(audio_data, dict):
             audio_array = audio_data.get("array")
             sampling_rate = audio_data.get("sampling_rate", 16000)
-            
+
             if audio_array is None:
                 raise ValueError(f"Audio data missing 'array' key")
-            
-            return np.array(audio_array, dtype=np.float32), sampling_rate
-        
+
+            return _to_mono(np.array(audio_array, dtype=np.float32)), sampling_rate
+
         # Fallback: assume raw numpy array with default sample rate
-        return np.array(audio_data, dtype=np.float32), 16000
+        return _to_mono(np.array(audio_data, dtype=np.float32)), 16000
     
     def _map_item(self, item: Dict[str, Any], idx: int) -> AudioSample:
         """Map a HuggingFace dataset item to AudioSample.

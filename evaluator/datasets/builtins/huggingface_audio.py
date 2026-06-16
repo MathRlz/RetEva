@@ -24,6 +24,7 @@ class HuggingFaceAudioDataset(AudioRetrievalDataset):
 
     @classmethod
     def from_config(cls, data: "DataConfig") -> "QueryDataset":
+        from ..descriptor import resolve_split
         from ..loaders.factory import create_dataset_loader
         from ..runtime import AudioSamplesQueryDataset, _load_corpus_entries
 
@@ -31,7 +32,7 @@ class HuggingFaceAudioDataset(AudioRetrievalDataset):
             source="huggingface",
             huggingface_dataset=data.huggingface_dataset,
             huggingface_subset=getattr(data, "huggingface_subset", None),
-            huggingface_split=getattr(data, "huggingface_split", "test"),
+            huggingface_split=resolve_split(data, cls.default_split),
             column_mapping=getattr(data, "column_mapping", None),
             max_samples=getattr(data, "max_samples", None),
             default_language=getattr(data, "default_language", "en"),

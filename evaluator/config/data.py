@@ -20,11 +20,17 @@ class DataConfig:
         questions_path: Path to questions/queries file. Optional.
         corpus_path: Path to corpus/documents file. Optional.
         prepared_dataset_dir: Path to pre-prepared dataset directory. Optional.
+        data_path: Filesystem location/root of the dataset (e.g. the admed_voice base
+            directory). Optional — datasets that read it fall back to their own default
+            (env var / data dir) when unset.
         strict_validation: Enforce strict dataset validation. Default: True.
         trace_limit: Limit number of samples (0 = no limit). Default: 0.
         batch_size: Batch size for processing. Default: 32.
         num_workers: Number of data loading workers. Default: 0.
         test_size: Fraction of data for test split (0.0 = no split). Default: 0.0.
+        split: Which split to load — dataset-dependent (e.g. train / test / both /
+            validation). None = the dataset's default_split. Validated against the
+            descriptor's declared splits ("both" = the union of all declared splits).
 
         dataset_source: Source type. Default: "local".
             Options: "local", "huggingface", "custom".
@@ -56,11 +62,13 @@ class DataConfig:
     questions_path: Optional[str] = None
     corpus_path: Optional[str] = None
     prepared_dataset_dir: Optional[str] = None
+    data_path: Optional[str] = None
     strict_validation: bool = True
     trace_limit: int = 0
     batch_size: int = 32
     num_workers: int = 0
     test_size: float = 0.0
+    split: Optional[str] = None
 
     # Dataset loader configuration
     dataset_source: str = "local"  # local, huggingface, custom

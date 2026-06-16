@@ -24,19 +24,28 @@ class HaniMedicalDataset(AudioTranscriptionDataset):
 
     @classmethod
     def from_config(cls, data: "DataConfig") -> "QueryDataset":
+        from ..descriptor import resolve_split
         from ..loaders.factory import create_dataset_loader
         from ..runtime import AudioSamplesQueryDataset
 
-        loader = create_dataset_loader(
-            source="huggingface",
-            huggingface_dataset="Hani89/medical_asr_recording_dataset",
-            huggingface_split=getattr(data, "huggingface_split", None) or cls.default_split,
-            # pin the dataset's columns (audio dict + `sentence` text); config may override
-            column_mapping=getattr(data, "column_mapping", None)
-            or {"audio": "audio", "transcription": "sentence"},
-            max_samples=getattr(data, "max_samples", None),
-            default_language=getattr(data, "default_language", "en"),
-        )
+        split = (resolve_split(data, cls.default_split) or cls.default_split).lower()
+        # "both" = the union of every declared HF split; a named split loads just that one.
+        hf_splits = cls.splits if split == "both" else (split,)
+        column_mapping = getattr(data, "column_mapping", None) or {
+            "audio": "audio",
+            "transcription": "sentence",
+        }
+        samples = []
+        for hf_split in hf_splits:
+            loader = create_dataset_loader(
+                source="huggingface",
+                huggingface_dataset="Hani89/medical_asr_recording_dataset",
+                huggingface_split=hf_split,
+                column_mapping=column_mapping,
+                max_samples=getattr(data, "max_samples", None),
+                default_language=getattr(data, "default_language", "en"),
+            )
+            samples.extend(loader.load())
         return AudioSamplesQueryDataset(
-            loader.load(), trace_limit=getattr(data, "trace_limit", 0)
+            samples, trace_limit=getattr(data, "trace_limit", 0)
         )

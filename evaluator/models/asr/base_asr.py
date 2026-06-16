@@ -113,8 +113,15 @@ class HuggingFaceASRModel(ASRModel):
             if sr != 16000:
                 audio_list[idx] = torchaudio.functional.resample(audio_sample, sr, 16000)
                 sampling_rates[idx] = 16000
-            
-            processed_audio.append(audio_list[idx].squeeze().numpy())
+
+            # Ensure 1-D mono: the feature extractors require one channel per clip; a
+            # multi-channel clip survives squeeze() and breaks batched padding. Downmix
+            # over the channel axis (the smaller dimension: channels << samples).
+            audio = audio_list[idx].squeeze()
+            if audio.dim() > 1:
+                ch_axis = int(min(range(audio.dim()), key=lambda d: audio.shape[d]))
+                audio = audio.mean(dim=ch_axis)
+            processed_audio.append(audio.numpy())
         
         # Extract features using model-specific processor
         return self._extract_features(processed_audio)
