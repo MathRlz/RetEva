@@ -3,6 +3,8 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: admed_voice
+  path: null                # admed_voice location; null = ADMED_VOICE_PATH / EVALUATOR_DATA_DIR env
+  split: both               # train / test / both (admed has no validation split)
   batch_size: 32
 data:
   num_workers: 4

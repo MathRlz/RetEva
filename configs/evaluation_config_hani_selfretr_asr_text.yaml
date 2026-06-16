@@ -8,6 +8,7 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: hani_medical
+  split: train              # train / test / both (HF splits; admed-style self-retrieval, no validation)
   batch_size: 32
   trace_limit: 300          # the HF train split is large; 0 = full
 data:

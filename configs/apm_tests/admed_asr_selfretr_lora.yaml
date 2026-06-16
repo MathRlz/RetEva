@@ -1,0 +1,41 @@
+# ASR self-retrieval — Whisper + a fine-tuned LoRA adapter, on admed (test split).
+# audio -> ASR (Whisper + your LoRA/PEFT adapter) -> text embed -> search the transcription
+# corpus (self-retrieval). Fill in the LoRA adapter directory and the admed dataset path.
+experiment:
+  name: asr_selfretr_admed_lora
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  path: null                # <- admed_voice dataset location
+  split: test               # test = speaker-disjoint holdout (admed has no native split)
+  batch_size: 32
+data:
+  num_workers: 4
+  test_size: 0.3            # the test split = a 30% speaker-disjoint holdout
+graph:
+  mode: asr_text_retrieval
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-medium
+    adapter: null            # <- your trained Whisper LoRA/PEFT adapter directory
+    device: cuda:0
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    device: cuda:1
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

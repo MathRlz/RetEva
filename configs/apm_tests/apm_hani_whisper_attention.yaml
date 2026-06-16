@@ -1,0 +1,45 @@
+# APM self-retrieval (audio_emb) — Whisper-large-v3 encoder, attention pooling, on hani (test split).
+# Audio query embedded by the APM into the text-embedder space and matched against the
+# transcription corpus (self-retrieval). Cross-modal alignment lives in the trained
+# attention-pool weights — set audio_embedding.model_path (.pt) for meaningful numbers.
+experiment:
+  name: apm_hani_whisper_attention
+  output_dir: evaluation_results
+dataset:
+  id: hani_medical
+  split: test               # HuggingFace test split
+  batch_size: 32
+  trace_limit: 300          # cap samples; 0 = full
+data:
+  num_workers: 4
+graph:
+  mode: audio_emb_retrieval
+nodes:
+  audio_embedding:
+    model: attention_pool        # Whisper-large-v3 encoder audio -> emb_dim, aligned to the text space
+    size: large-v3
+    dim: 2048                  # must match the text embedder's dim (jina_v4 = 2048)
+    dropout: 0.1
+    params:
+      pooling: attention      # attention | mean | mean_whiten | mean_abtt
+    model_path: null           # <- trained attention-pool alignment weights (.pt)
+    device: cuda:0
+  text_embedding:
+    model: jina_v4             # corpus side: embeds the transcription text (the "documents")
+    name: jinaai/jina-embeddings-v4
+    device: cuda:1
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: false
+    cache_transcriptions: false
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG
