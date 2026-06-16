@@ -32,6 +32,9 @@ class ModelConfig:
     text_emb_model_name: Optional[str] = None
     text_emb_adapter_path: Optional[str] = None
     text_emb_device: str = "cuda:1"
+    # Override the embedding-space id (else derived from model type/name). Declare the
+    # SAME id on a co-trained audio embedder so cross-modal dense retrieval validates.
+    text_emb_embedding_space: Optional[str] = None
     text_emb_params: Dict[str, object] = field(default_factory=dict)
 
     # --- Audio embedding ---
@@ -43,6 +46,9 @@ class ModelConfig:
     audio_emb_dim: int = 2048
     audio_emb_dropout: float = 0.1
     audio_emb_device: str = "cuda:0"
+    # Override the embedding-space id — an APM trained to project audio into a text
+    # embedder's space declares that text space here (not derived from the encoder name).
+    audio_emb_embedding_space: Optional[str] = None
     audio_emb_params: Dict[str, object] = field(default_factory=dict)
 
     pipeline_mode: Union[str, PipelineMode] = "asr_text_retrieval"

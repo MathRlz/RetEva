@@ -47,6 +47,7 @@ _MODEL_NODE_FIELDS = {
         "name": "text_emb_model_name",
         "device": "text_emb_device",
         "adapter": "text_emb_adapter_path",
+        "embedding_space": "text_emb_embedding_space",
         "params": "text_emb_params",
     },
     "audio_embedding": {
@@ -57,6 +58,7 @@ _MODEL_NODE_FIELDS = {
         "model_path": "audio_emb_model_path",
         "dim": "audio_emb_dim",
         "dropout": "audio_emb_dropout",
+        "embedding_space": "audio_emb_embedding_space",
         "params": "audio_emb_params",
     },
 }

@@ -6,7 +6,7 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: admed_voice
-  path: null                # <- admed_voice dataset location
+  path: /home/student5/datasets/admed_voice                # <- admed_voice dataset location
   split: test               # test = speaker-disjoint holdout (admed has no native split)
   batch_size: 32
 data:
@@ -18,7 +18,7 @@ nodes:
   asr:
     model: whisper
     name: openai/whisper-medium
-    adapter: null            # <- your trained Whisper LoRA/PEFT adapter directory
+    adapter: /home/student5/models/medical-transcribe-pl/natural_anonym_synth_cv_fl/            # <- your trained Whisper LoRA/PEFT adapter directory
     device: cuda:0
   text_embedding:
     model: jina_v4
@@ -27,7 +27,7 @@ nodes:
   vector_db:
     store: inmemory
   retrieval:
-    k: 5
+    k: 10
 runtime:
   cache:
     enabled: true

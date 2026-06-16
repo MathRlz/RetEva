@@ -1,18 +1,16 @@
-# APM self-retrieval (audio_emb) — SeamlessM4T-v2 encoder, mean_whiten pooling, on admed (test split).
+# APM self-retrieval (audio_emb) — SeamlessM4T-v2 encoder, mean_whiten pooling, on hani (test split).
 # Audio query embedded by the APM into the text-embedder space and matched against the
 # transcription corpus (self-retrieval). Cross-modal alignment lives in the trained
 # attention-pool weights — set audio_embedding.model_path (.pt) for meaningful numbers.
 experiment:
-  name: apm_admed_m4t_whiten
+  name: apm_hani_m4t_whiten
   output_dir: evaluation_results
 dataset:
-  id: admed_voice
-  path: null                # <- admed_voice dataset location (null = ADMED_VOICE_PATH / EVALUATOR_DATA_DIR env)
-  split: test               # test = speaker-disjoint holdout (admed has no native split)
+  id: hani_medical
+  split: test               # HuggingFace test split
   batch_size: 32
 data:
   num_workers: 4
-  test_size: 0.3            # the test split = a 30% speaker-disjoint holdout
 graph:
   mode: audio_emb_retrieval
 nodes:
@@ -21,13 +19,15 @@ nodes:
     size: v2-large
     dim: 2048                  # must match the text embedder's dim (jina_v4 = 2048)
     dropout: 0.1
+    embedding_space: jina_v4_space   # APM trained to project audio into jina_v4's text space
     params:
       pooling: mean_whiten      # attention | mean | mean_whiten | mean_abtt
-    model_path: null           # <- trained attention-pool alignment weights (.pt)
+    model_path: /home/student5/scripts/attention_pool_model/apm_m4t_jina_admed_voice_whitened_none.pt   # <- trained attention-pool alignment weights (.pt)
     device: cuda:0
   text_embedding:
     model: jina_v4             # corpus side: embeds the transcription text (the "documents")
     name: jinaai/jina-embeddings-v4
+    embedding_space: jina_v4_space   # same id as the audio embedder -> shared dense space
     device: cuda:1
   vector_db:
     store: inmemory

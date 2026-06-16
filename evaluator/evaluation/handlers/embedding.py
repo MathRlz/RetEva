@@ -293,10 +293,17 @@ def _stage_corpus_embedding(s: RunState) -> None:
             )
         model_type = params.get("model") or s.config.model.text_emb_model_type
         if model_type:
-            cv.space = resolve_embedding_space(
-                text_embedding_registry,
-                str(model_type),
-                params.get("name") or s.config.model.text_emb_model_name,
+            override = params.get("embedding_space") or getattr(
+                s.config.model, "text_emb_embedding_space", None
+            )
+            cv.space = (
+                str(override)
+                if override
+                else resolve_embedding_space(
+                    text_embedding_registry,
+                    str(model_type),
+                    params.get("name") or s.config.model.text_emb_model_name,
+                )
             )
         s.put_artifact("corpus_vectors", cv)
         return

@@ -9,7 +9,6 @@ dataset:
   id: hani_medical
   split: test               # HuggingFace test split
   batch_size: 32
-  trace_limit: 300          # cap samples; 0 = full
 data:
   num_workers: 4
 graph:
@@ -20,13 +19,15 @@ nodes:
     size: large-v3
     dim: 2048                  # must match the text embedder's dim (jina_v4 = 2048)
     dropout: 0.1
+    embedding_space: jina_v4_space   # APM trained to project audio into jina_v4's text space
     params:
       pooling: attention      # attention | mean | mean_whiten | mean_abtt
-    model_path: null           # <- trained attention-pool alignment weights (.pt)
+    model_path: /home/student5/scripts/attention_pool_model/apm_whisper_jina_admed_voice.pt   # <- trained attention-pool alignment weights (.pt)
     device: cuda:0
   text_embedding:
     model: jina_v4             # corpus side: embeds the transcription text (the "documents")
     name: jinaai/jina-embeddings-v4
+    embedding_space: jina_v4_space   # same id as the audio embedder -> shared dense space
     device: cuda:1
   vector_db:
     store: inmemory

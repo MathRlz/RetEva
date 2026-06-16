@@ -58,6 +58,17 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
 # ── Embedding-space typing (architecture A2 / §4.1 P1) ────────────────
 
 
+def _resolve_space(
+    registry: Any, model_type: Any, model_name: Optional[str], override: Optional[str]
+) -> str:
+    """Embedding-space id, honoring a per-instance ``embedding_space`` override (config field
+    or node param) over the type/name-derived default — e.g. an APM trained to project audio
+    into a text embedder's space declares that text space instead of its encoder name."""
+    if override:
+        return str(override)
+    return resolve_embedding_space(registry, str(model_type), model_name)
+
+
 def validate_embedding_spaces(config: Any) -> None:
     """Raise ``ConfigurationError`` if a dense/hybrid retrieval would dot vectors from
     different embedding spaces (query-side vs corpus-side). No-op for non-vector retrieval,
@@ -83,15 +94,17 @@ def validate_embedding_spaces(config: Any) -> None:
         audio_type = getattr(model, "audio_emb_model_type", None)
         if not audio_type or not text_type:
             return  # not enough info to compare
-        query_space = resolve_embedding_space(
+        query_space = _resolve_space(
             audio_embedding_registry,
             audio_type,
             getattr(model, "audio_emb_model_name", None),
+            getattr(model, "audio_emb_embedding_space", None),
         )
-        corpus_space = resolve_embedding_space(
+        corpus_space = _resolve_space(
             text_embedding_registry,
             text_type,
             getattr(model, "text_emb_model_name", None),
+            getattr(model, "text_emb_embedding_space", None),
         )
         if query_space != corpus_space:
             raise ConfigurationError(
@@ -99,8 +112,9 @@ def validate_embedding_spaces(config: Any) -> None:
                 f"'{audio_type}' is in space '{query_space}' but the text corpus embedder "
                 f"'{text_type}' is in space '{corpus_space}'. Dense retrieval dots these "
                 f"vectors, so the scores would be meaningless. Use embedders that share a "
-                f"space (e.g. sonar_speech + sonar), declare a shared `embedding_space` in "
-                f"the model registry metadata, or switch to sparse retrieval."
+                f"space (e.g. sonar_speech + sonar); for an APM trained to align to this text "
+                f"embedder, set the SAME `embedding_space:` on both nodes (audio + text) to "
+                f"declare the shared space; or switch to sparse retrieval."
             )
     # asr_text_retrieval: query and corpus both use text_emb → same space, always OK.
     # audio_text_retrieval (fusion): query is a fused vector — space combination is not
@@ -126,19 +140,21 @@ def _node_space(node: Any, config: Any) -> Optional[str]:
         mtype = params.get("model") or getattr(model, "text_emb_model_type", None)
         if not mtype:
             return None
-        return resolve_embedding_space(
+        return _resolve_space(
             text_embedding_registry,
-            str(mtype),
+            mtype,
             params.get("name") or getattr(model, "text_emb_model_name", None),
+            params.get("embedding_space") or getattr(model, "text_emb_embedding_space", None),
         )
     if stage == "audio_embedding":
         mtype = params.get("model") or getattr(model, "audio_emb_model_type", None)
         if not mtype:
             return None
-        return resolve_embedding_space(
+        return _resolve_space(
             audio_embedding_registry,
-            str(mtype),
+            mtype,
             params.get("name") or getattr(model, "audio_emb_model_name", None),
+            params.get("embedding_space") or getattr(model, "audio_emb_embedding_space", None),
         )
     return None
 
