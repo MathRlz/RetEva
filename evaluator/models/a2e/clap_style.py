@@ -1,9 +1,13 @@
 """Multimodal CLAP audio-text embedding model."""
 from dataclasses import dataclass, field
 from typing import List, Optional, NamedTuple
-import pickle
-import io
+import os
+import threading
 import torch
+
+# The CLAP checkpoint remap injects fake modules into sys.modules during torch.load; a global
+# injection would race concurrent loads (e.g. two GPUs), so serialize it.
+_CLAP_LOAD_LOCK = threading.Lock()
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -23,64 +27,60 @@ def set_requires_grad(module: nn.Module, requires_grad: bool) -> None:
 # Custom Unpickler for Loading Checkpoints
 # ============================================================================
 
-class RemapUnpickler(pickle.Unpickler):
-    """Custom unpickler that remaps clap_model references to local classes."""
-    
-    def find_class(self, module, name):
-        # Remap clap_model.config classes to local classes
-        if module == 'clap_model.config':
-            # Return the class from the current module's globals
-            return globals()[name]
-        # Remap clap_model.model classes to local classes
-        elif module == 'clap_model.model':
-            return globals()[name]
-        # Remap clap_model.encoders classes to local classes
-        elif module == 'clap_model.encoders':
-            return globals()[name]
-        return super().find_class(module, name)
-
-
 def load_checkpoint_with_remap(path, map_location=None):
-    """Load checkpoint with module remapping using sys.modules trick."""
+    """Load a CLAP checkpoint, remapping its pickled ``clap_model.*`` classes to local ones.
+
+    Security (A1/F1): CLAP checkpoints pickle custom classes, so a *safe* ``weights_only=True``
+    load can't restore them; ``weights_only=False`` executes arbitrary code embedded in the file
+    — remote code execution on a malicious/corrupt checkpoint. We therefore try the safe load
+    first and only fall back to the unsafe path when ``EVALUATOR_ALLOW_UNSAFE_CHECKPOINTS=1`` is
+    set (opt in only for checkpoints you trust). The ``sys.modules`` shim is serialized under a
+    lock so concurrent loads can't clobber each other's injection.
+    """
     import sys
     from types import ModuleType
-    
-    # Create fake modules to satisfy the unpickler
+
+    # Safe path first: a pure-tensor checkpoint loads with weights_only=True.
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except Exception:
+        pass
+
+    if not os.environ.get("EVALUATOR_ALLOW_UNSAFE_CHECKPOINTS"):
+        raise RuntimeError(
+            f"CLAP checkpoint {path!r} cannot be loaded safely (it pickles custom classes). "
+            "Loading it with weights_only=False would execute arbitrary code embedded in the "
+            "file — only do this for checkpoints you trust. Set "
+            "EVALUATOR_ALLOW_UNSAFE_CHECKPOINTS=1 to allow it."
+        )
+
+    # Fake modules to satisfy the unpickler, populated with our local classes.
     fake_config = ModuleType('clap_model.config')
     fake_model = ModuleType('clap_model.model')
     fake_encoders = ModuleType('clap_model.encoders')
     fake_clap_model = ModuleType('clap_model')
-    
-    # Populate with our local classes
     for name in ['TextEncoderConfig', 'AudioEncoderConfig', 'ProjectionConfig', 'CLAPConfig']:
         if name in globals():
             setattr(fake_config, name, globals()[name])
-    
     for name in ['CLAP', 'CLAPOutput', 'ProjectionHead', 'CrossModalAttention']:
         if name in globals():
             setattr(fake_model, name, globals()[name])
-    
     for name in ['TextEncoder', 'AudioEncoder']:
         if name in globals():
             setattr(fake_encoders, name, globals()[name])
-    
-    # Temporarily inject into sys.modules
-    sys.modules['clap_model'] = fake_clap_model
-    sys.modules['clap_model.config'] = fake_config
-    sys.modules['clap_model.model'] = fake_model
-    sys.modules['clap_model.encoders'] = fake_encoders
-    
-    try:
-        # Now load with torch.load (handles persistent IDs properly)
-        checkpoint = torch.load(path, map_location=map_location, weights_only=False)
-    finally:
-        # Clean up
-        sys.modules.pop('clap_model', None)
-        sys.modules.pop('clap_model.config', None)
-        sys.modules.pop('clap_model.model', None)
-        sys.modules.pop('clap_model.encoders', None)
-    
-    return checkpoint
+
+    with _CLAP_LOAD_LOCK:
+        sys.modules['clap_model'] = fake_clap_model
+        sys.modules['clap_model.config'] = fake_config
+        sys.modules['clap_model.model'] = fake_model
+        sys.modules['clap_model.encoders'] = fake_encoders
+        try:
+            return torch.load(path, map_location=map_location, weights_only=False)
+        finally:
+            sys.modules.pop('clap_model', None)
+            sys.modules.pop('clap_model.config', None)
+            sys.modules.pop('clap_model.model', None)
+            sys.modules.pop('clap_model.encoders', None)
 
 
 # ============================================================================

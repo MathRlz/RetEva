@@ -178,9 +178,11 @@ class ChromaDBVectorStore(VectorStore):
                     score = distance
                 else:  # l2
                     score = 1.0 / (1.0 + distance)
-                
-                output.append((self._payloads[payload_idx], float(score)))
-        
+
+                payload = self._payload_at(payload_idx)
+                if payload is not None:
+                    output.append((payload, float(score)))
+
         return output
     
     def search_batch(
@@ -236,9 +238,11 @@ class ChromaDBVectorStore(VectorStore):
                         score = distance
                     else:  # l2
                         score = 1.0 / (1.0 + distance)
-                    
-                    output.append((self._payloads[payload_idx], float(score)))
-            
+
+                    payload = self._payload_at(payload_idx)
+                    if payload is not None:
+                        output.append((payload, float(score)))
+
             all_outputs.append(output)
         
         return all_outputs

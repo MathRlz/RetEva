@@ -135,6 +135,15 @@ def _stage_retrieval(s: RunState) -> None:
     params = s.node_params
     vname = params.get("vectors")
     query_vectors = s.get_artifact(vname) if vname else s.input("query_vectors")
+    if query_vectors is None:
+        from ...errors import ConfigurationError
+
+        raise ConfigurationError(
+            "retrieval got no query vectors: no upstream embedder published "
+            f"'{vname or 'query_vectors'}' (audio/text/fused). Likely a graph-wiring bug "
+            "(a missing/misordered embedding node) or a stale cache — try "
+            "`evaluator cache clear` and re-run."
+        )
     if isinstance(query_vectors, list) and len(query_vectors) > 0:
         query_vectors = np.array(query_vectors)
     s.cb("phase_3_retrieval", 0, s.total, "Phase 3: Retrieval")

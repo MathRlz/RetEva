@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Any, Tuple, Union
 from pathlib import Path
+import logging
 import numpy as np
 import json
 
@@ -33,6 +34,20 @@ class VectorStore(ABC):
     def search_batch(self, queries: np.ndarray, k: int) -> List[List[Tuple[Any, float]]]:
         """Batch search — default loops over search(). Override for vectorized impl."""
         return [self.search(q, k) for q in queries]
+
+    def _payload_at(self, idx: int) -> Any:
+        """Bounds-checked payload lookup (A4/F4). A backend can hand back a stale/oversized
+        ``_payload_idx`` (or a ``load()`` with mismatched payloads); index it blindly and the
+        search either returns the wrong document or raises ``IndexError`` mid-run. Return None
+        for an out-of-range index (logged, not raised) so callers skip the bad hit."""
+        payloads = getattr(self, "_payloads", None) or []
+        if 0 <= idx < len(payloads):
+            return payloads[idx]
+        logging.getLogger("evaluator").warning(
+            "%s: payload index %d out of range (n=%d) — skipping hit",
+            type(self).__name__, idx, len(payloads),
+        )
+        return None
 
     @abstractmethod
     def save(self, path: Union[str, Path]) -> None:

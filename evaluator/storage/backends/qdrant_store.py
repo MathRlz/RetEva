@@ -233,9 +233,11 @@ class QdrantVectorStore(VectorStore):
             # For euclidean, we need to convert
             if self.distance_fn in ("euclidean", "l2"):
                 score = 1.0 / (1.0 + score)
-            
-            output.append((self._payloads[payload_idx], float(score)))
-        
+
+            payload = self._payload_at(payload_idx)
+            if payload is not None:
+                output.append((payload, float(score)))
+
         return output
     
     def search_batch(
@@ -294,8 +296,10 @@ class QdrantVectorStore(VectorStore):
                 
                 if self.distance_fn in ("euclidean", "l2"):
                     score = 1.0 / (1.0 + score)
-                
-                output.append((self._payloads[payload_idx], float(score)))
+
+                payload = self._payload_at(payload_idx)
+                if payload is not None:
+                    output.append((payload, float(score)))
             all_outputs.append(output)
         
         return all_outputs

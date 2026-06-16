@@ -19,7 +19,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
@@ -46,6 +46,7 @@ def _cli_command(interpreter: str, cfg_path: Path) -> list:
 _PROGRESS_FILENAME = "progress.jsonl"
 _ERR_TAIL_LINES = 50
 _LOG_CAP = 5000  # max console lines retained per job
+_CANCEL_POLL_S = 0.5  # how often to re-check for a cancel while the child runs
 
 
 # Env vars that importing torch injects into the webapi server process; inherited by the
@@ -302,15 +303,26 @@ class JobManager:
 
         assert proc.stdout is not None
         prog = _ProgressTail(progress_path)
-        for raw in proc.stdout:
-            self._append_log(job_id, raw.rstrip())
-            for event in prog.read_new():
-                self._push_progress_event(job_id, event)
+
+        # Drain stdout in a reader thread so a cancel is honored on a fixed cadence even when
+        # the child goes silent — the blocking ``for line in stdout`` could otherwise stall
+        # indefinitely and never re-check the cancel flag (F3).
+        def _drain() -> None:
+            for raw in proc.stdout:
+                self._append_log(job_id, raw.rstrip())
+                for event in prog.read_new():
+                    self._push_progress_event(job_id, event)
+
+        reader = Thread(target=_drain, name=f"job-{job_id}-stdout", daemon=True)
+        reader.start()
+        while reader.is_alive():
             if self._cancel_requested(job_id):
                 _kill_process_group(proc)
                 break
-        proc.stdout.close()
+            reader.join(timeout=_CANCEL_POLL_S)
         proc.wait()
+        reader.join(timeout=2)  # let it drain remaining output + observe EOF
+        proc.stdout.close()
         # Final drain: events emitted after the last stdout line we read.
         for event in prog.read_new():
             self._push_progress_event(job_id, event)

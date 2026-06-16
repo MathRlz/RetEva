@@ -1,6 +1,7 @@
 """GPU pool allocation and tracking."""
 
 import logging
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, TYPE_CHECKING, Generator
@@ -70,6 +71,11 @@ class GPUPool:
         self._allow_cpu_fallback = allow_cpu_fallback
         self._strategy: Optional["AllocationStrategy"] = None
         self._round_robin_index = 0
+        # The webapi runs allocations on a ThreadPoolExecutor; without this lock two
+        # threads can both pass the ``free >= memory_gb`` check and over-commit a GPU
+        # (F2). Re-entrant: ``allocate`` holds it while the strategy calls back into
+        # ``get_next_round_robin_device`` / ``_reserve``.
+        self._lock = threading.RLock()
         
         # Resolve "auto" to actual devices
         if devices == ["auto"] or (len(devices) == 1 and devices[0] == "auto"):
@@ -138,49 +144,52 @@ class GPUPool:
             RuntimeError: If no device can accommodate the model.
         """
         logger.debug(f"Allocating device for '{model_type}' (requires {memory_gb:.2f}GB)")
-        
-        # Use strategy if set
-        if self._strategy is not None:
-            device = self._strategy.allocate(self, model_type, memory_gb)
+
+        # Hold the lock across the whole find-then-reserve so two threads can't both see the
+        # same device as free and over-commit it (F2). RLock → nested _reserve / round-robin OK.
+        with self._lock:
+            # Use strategy if set
+            if self._strategy is not None:
+                device = self._strategy.allocate(self, model_type, memory_gb)
+                if device is not None:
+                    self._reserve(device, model_type, memory_gb)
+                    logger.info(
+                        f"Allocated '{device}' for '{model_type}' using {self._strategy.__class__.__name__} "
+                        f"({memory_gb:.2f}GB reserved)"
+                    )
+                    return device
+
+            # Default: find device with most free memory
+            device = self._find_best_device(memory_gb)
             if device is not None:
                 self._reserve(device, model_type, memory_gb)
                 logger.info(
-                    f"Allocated '{device}' for '{model_type}' using {self._strategy.__class__.__name__} "
-                    f"({memory_gb:.2f}GB reserved)"
+                    f"Allocated '{device}' for '{model_type}' "
+                    f"({memory_gb:.2f}GB reserved, {self._devices[device].free_memory_gb:.2f}GB free)"
                 )
                 return device
-        
-        # Default: find device with most free memory
-        device = self._find_best_device(memory_gb)
-        if device is not None:
-            self._reserve(device, model_type, memory_gb)
-            logger.info(
-                f"Allocated '{device}' for '{model_type}' "
-                f"({memory_gb:.2f}GB reserved, {self._devices[device].free_memory_gb:.2f}GB free)"
-            )
-            return device
-        
-        # Try CPU fallback
-        if self._allow_cpu_fallback and "cpu" not in self._devices:
-            logger.warning(
-                f"No GPU available for '{model_type}' requiring {memory_gb:.2f}GB. "
-                f"Falling back to CPU. Available GPUs: {self.gpu_devices}"
-            )
-            self._devices["cpu"] = DeviceUsage(device="cpu", total_memory_gb=float('inf'))
-            self._reserve("cpu", model_type, memory_gb)
-            return "cpu"
-        
-        if self._allow_cpu_fallback and "cpu" in self._devices:
-            logger.warning(
-                f"No GPU available for '{model_type}' requiring {memory_gb:.2f}GB. "
-                f"Using CPU fallback."
-            )
-            self._reserve("cpu", model_type, memory_gb)
-            return "cpu"
-        
-        # Build detailed error message
-        usage_info = {dev: f"{usage.reserved_memory_gb:.2f}/{usage.total_memory_gb:.2f}GB" 
-                      for dev, usage in self._devices.items()}
+
+            # Try CPU fallback
+            if self._allow_cpu_fallback and "cpu" not in self._devices:
+                logger.warning(
+                    f"No GPU available for '{model_type}' requiring {memory_gb:.2f}GB. "
+                    f"Falling back to CPU. Available GPUs: {self.gpu_devices}"
+                )
+                self._devices["cpu"] = DeviceUsage(device="cpu", total_memory_gb=float('inf'))
+                self._reserve("cpu", model_type, memory_gb)
+                return "cpu"
+
+            if self._allow_cpu_fallback and "cpu" in self._devices:
+                logger.warning(
+                    f"No GPU available for '{model_type}' requiring {memory_gb:.2f}GB. "
+                    f"Using CPU fallback."
+                )
+                self._reserve("cpu", model_type, memory_gb)
+                return "cpu"
+
+            # Build detailed error message
+            usage_info = {dev: f"{usage.reserved_memory_gb:.2f}/{usage.total_memory_gb:.2f}GB"
+                          for dev, usage in self._devices.items()}
         logger.error(
             f"Failed to allocate device for '{model_type}' requiring {memory_gb:.2f}GB. "
             f"Current usage: {usage_info}"
@@ -206,12 +215,12 @@ class GPUPool:
     
     def _reserve(self, device: str, model_type: str, memory_gb: float) -> None:
         """Reserve memory on a device for a model."""
-        if device not in self._devices:
-            return
-        
-        usage = self._devices[device]
-        usage.reserved_memory_gb += memory_gb
-        usage.allocations[model_type] = memory_gb
+        with self._lock:
+            if device not in self._devices:
+                return
+            usage = self._devices[device]
+            usage.reserved_memory_gb += memory_gb
+            usage.allocations[model_type] = memory_gb
     
     def release(self, model_type: str) -> None:
         """Release a model's allocation.
@@ -219,19 +228,19 @@ class GPUPool:
         Args:
             model_type: Identifier for the model to release.
         """
-        for device, usage in self._devices.items():
-            if model_type in usage.allocations:
-                memory_gb = usage.allocations.pop(model_type)
-                usage.reserved_memory_gb -= memory_gb
-                # Prevent negative values due to floating point errors
-                usage.reserved_memory_gb = max(0.0, usage.reserved_memory_gb)
-                logger.debug(
-                    f"Released '{model_type}' from '{device}' "
-                    f"({memory_gb:.2f}GB freed, {usage.free_memory_gb:.2f}GB now free)"
-                )
-                return
-        
-        logger.warning(f"Attempted to release '{model_type}' but no allocation found")
+        with self._lock:
+            for device, usage in self._devices.items():
+                if model_type in usage.allocations:
+                    memory_gb = usage.allocations.pop(model_type)
+                    usage.reserved_memory_gb -= memory_gb
+                    # Prevent negative values due to floating point errors
+                    usage.reserved_memory_gb = max(0.0, usage.reserved_memory_gb)
+                    logger.debug(
+                        f"Released '{model_type}' from '{device}' "
+                        f"({memory_gb:.2f}GB freed, {usage.free_memory_gb:.2f}GB now free)"
+                    )
+                    return
+            logger.warning(f"Attempted to release '{model_type}' but no allocation found")
     
     def get_usage(self) -> Dict[str, DeviceUsage]:
         """Get current allocation status for all devices.
@@ -271,8 +280,9 @@ class GPUPool:
         if not gpu_devices:
             return "cpu"
         
-        device = gpu_devices[self._round_robin_index % len(gpu_devices)]
-        self._round_robin_index += 1
+        with self._lock:
+            device = gpu_devices[self._round_robin_index % len(gpu_devices)]
+            self._round_robin_index += 1
         return device
     
     @contextmanager
