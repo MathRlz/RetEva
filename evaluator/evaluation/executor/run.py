@@ -173,12 +173,20 @@ def run_graph(
         features = context.features
     features = features or RunFeatures()
 
-    # Determine mode + build the stage graph (the source of truth for what runs).
+    # Determine mode + build the stage graph (the source of truth for what runs). The
+    # config's explicit pipeline_mode wins — cross-modal audio_emb builds a text pipeline
+    # for the corpus, which pipeline-presence detection would misread as audio_text fusion.
+    configured_mode = None
+    if eval_config is not None and getattr(eval_config, "model", None) is not None:
+        from ...config.types import enum_to_str
+
+        configured_mode = enum_to_str(eval_config.model.pipeline_mode)
     mode = detect_pipeline_mode(
         retrieval_pipeline,
         asr_pipeline,
         text_embedding_pipeline,
         audio_embedding_pipeline,
+        configured_mode=configured_mode,
     )
     logger.info("Evaluation mode: %s (DAG)", PIPELINE_MODE_LABELS[mode])
     stage_graph = _build_run_graph(

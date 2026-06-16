@@ -52,16 +52,18 @@ class AdmedVoiceDataset(AudioTranscriptionDataset):
         samples = []
         for idx, row in df.reset_index(drop=True).iterrows():
             waveform, sr = load_audio_file(row["file_path"])
-            # admed filenames repeat across category/speaker dirs (the unique key is the full
-            # path) — bare-filename sample_ids collide, and duplicate question_ids make
-            # dataset_source drop ALL ground truth (→ empty WER/CER + IR metrics). Build a
-            # unique id from the path components.
+            # admed filenames repeat across category/speaker dirs, and the corpus even has
+            # genuinely duplicated file rows — so any natural key collides. Duplicate
+            # question_ids make dataset_source drop ALL ground truth (→ empty WER/CER + IR
+            # metrics), so disambiguate with the row index (guaranteed unique). Path
+            # components keep the id readable.
             uid_parts = [
                 str(row[c])
                 for c in ("source", "cat_code", "rec_place", "speaker_id", "filename")
                 if c in row and row[c] is not None
             ]
-            sample_id = "_".join(uid_parts) if uid_parts else str(idx)
+            base_uid = "_".join(uid_parts) if uid_parts else "sample"
+            sample_id = f"{base_uid}#{idx}"
             samples.append(AudioSample(
                 audio_array=waveform.squeeze().numpy(),
                 sampling_rate=sr,

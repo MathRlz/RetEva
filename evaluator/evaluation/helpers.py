@@ -26,15 +26,24 @@ def detect_pipeline_mode(
     asr_pipeline: Optional[Any],
     text_embedding_pipeline: Optional[Any],
     audio_embedding_pipeline: Optional[Any],
+    configured_mode: Optional[str] = None,
 ) -> str:
     """Resolve the pipeline mode string from the set of provided pipelines.
 
     Single source of truth for mode detection shared by every evaluation engine.
     Pure — performs no logging — so callers control their own log output.
 
+    ``configured_mode`` (the config's explicit ``pipeline_mode``) takes precedence: the
+    factory builds pipelines *for* that mode, and pipeline-presence detection alone cannot
+    tell ``audio_emb_retrieval`` cross-modal (audio query + text corpus → both an audio AND a
+    text pipeline) from ``audio_text_retrieval`` fusion. Detection is the fallback when no
+    config mode is available (direct pipeline callers).
+
     Raises:
         ValueError: If neither an audio embedding nor an ASR pipeline is provided.
     """
+    if configured_mode:
+        return str(configured_mode)
     if audio_embedding_pipeline is not None and text_embedding_pipeline is not None:
         return "audio_text_retrieval"
     if audio_embedding_pipeline is not None:
