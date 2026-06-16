@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from evaluator import EvaluationConfig, run_evaluation, run_evaluation_matrix
+from evaluator import ConfigurationError, EvaluationConfig, run_evaluation, run_evaluation_matrix
 from evaluator.pipeline import create_pipeline_from_config  # noqa: F401
 from evaluator.services import ModelServiceProvider
 from evaluator.services.evaluation_service import load_dataset  # noqa: F401
-from evaluator.webapi.config_helpers import nested_config as _nested_config  # noqa: F401
+from evaluator.webapi.form_builder import nested_config as _nested_config  # noqa: F401
 from evaluator.webapi.jobs import JobManager
 from evaluator.webapi.ui import build_ui_router
 from evaluator.webapi.routers import (
@@ -52,6 +54,16 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # A ConfigurationError is always a bad request (unknown/misspelled key, invalid
+    # value). Handle it once here so every /api route can let it propagate instead of
+    # wrapping each config call in try/except → HTTPException(400). (UI routes render
+    # their own HTML error via _prepared_config_or_error and never reach this.)
+    @app.exception_handler(ConfigurationError)
+    async def _configuration_error_handler(  # noqa: F811 - registered, not called directly
+        request: Request, exc: ConfigurationError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
     jobs = JobManager(
         evaluation_runner=evaluation_runner,
         matrix_runner=matrix_runner,
@@ -73,10 +85,16 @@ def create_app(
     )
     app.include_router(build_ui_router(provider_factory, jobs))
 
-    app.mount(
-        "/static",
-        StaticFiles(directory=Path(__file__).parent / "static"),
-        name="static",
-    )
+    # Mount only when the assets shipped — an install without package data must not
+    # take the whole API down (the UI just loses its stylesheet).
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    else:  # pragma: no cover - packaging misconfiguration path
+        logging.getLogger(__name__).warning(
+            "webapi static assets missing at %s — /static not mounted "
+            "(reinstall the package; setup.py ships them via package_data)",
+            static_dir,
+        )
 
     return app

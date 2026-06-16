@@ -1,0 +1,54 @@
+# SHOWCASE: hybrid retrieval + rerank refinement + MMR diversity (architecture §6).
+# Dense (LaBSE cosine) and sparse (lexical) candidate lists are fused with reciprocal
+# rank fusion (RRF); a token-overlap reranker then re-scores the candidates and MMR
+# greedily diversifies the final top-k (lambda balances relevance vs novelty). Bootstrap
+# confidence intervals are attached to the headline IR metrics.
+experiment:
+  name: showcase_hybrid_rerank_mmr
+  output_dir: evaluation_results/showcase
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+nodes:
+  asr:
+    model: whisper
+    size: base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+    mode: hybrid
+    fusion:
+      method: rrf
+      rrf_k: 60
+    reranker:
+      enabled: true
+      mode: token_overlap
+      top_k: 10
+    mmr:
+      enabled: true
+      lambda: 0.7
+compute_confidence_intervals: true
+runtime:
+  cache:
+    enabled: true
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/showcase/audio

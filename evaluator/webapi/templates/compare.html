@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="panel">
+  <h2>Run comparison</h2>
+  <p class="muted">
+    A = run {{ run_a.run_id }} ({{ run_a.experiment_name }} · {{ run_a.dataset_name }} · {{ run_a.pipeline_mode }})
+    &nbsp;·&nbsp;
+    B = run {{ run_b.run_id }} ({{ run_b.experiment_name }} · {{ run_b.dataset_name }} · {{ run_b.pipeline_mode }})
+  </p>
+
+  <h3>Metrics</h3>
+  {% if metric_rows %}
+  <table>
+    <thead><tr><th>Metric</th><th>A</th><th>B</th><th>Δ (B − A)</th></tr></thead>
+    <tbody>
+      {% for r in metric_rows %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td>{{ '%.4f'|format(r.a) if r.a is not none else '--' }}</td>
+        <td>{{ '%.4f'|format(r.b) if r.b is not none else '--' }}</td>
+        <td>
+          {% if r.delta is not none %}
+            <span style="color: {{ '#2563eb' if r.delta >= 0 else '#dc2626' }}">{{ '%+.4f'|format(r.delta) }}</span>
+          {% else %}--{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted" style="font-size:11px">Δ is an unpaired cross-run difference — no significance test
+    (paired statistics need per-query data from one branched run; see the run detail page).</p>
+  {% else %}
+  <p class="muted">Neither run carries numeric metrics.</p>
+  {% endif %}
+
+  <h3>Config diff</h3>
+  {% if diff_lines %}
+  <pre class="job-log" style="max-height:480px">{% for line in diff_lines %}<span style="color: {{ '#4ade80' if line.startswith('+') else '#f87171' if line.startswith('-') else '#93c5fd' if line.startswith('@@') else '#94a3b8' }}">{{ line }}</span>
+{% endfor %}</pre>
+  {% else %}
+  <p class="muted">Configs are identical.</p>
+  {% endif %}
+</div>
+{% endblock %}

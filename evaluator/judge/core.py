@@ -158,7 +158,7 @@ def run_llm_judging(
 
     selected = traces if max_cases == 0 else traces[:max_cases]
     outputs: List[Dict[str, Any]] = []
-    for trace in tqdm(selected, desc="Judging", unit="case"):
+    for trace in tqdm(selected, desc="Judging", unit="case", disable=None):
         verdict = judge_trace_with_openai_compatible(
             trace,
             client=client,

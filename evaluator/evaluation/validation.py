@@ -1,140 +1,223 @@
-"""Validation helpers for benchmark datasets and configs."""
+"""Pre-flight validation: every check that must fail BEFORE any model loads.
+
+One home for the chain that used to live inline in ``_run_core`` (with per-call
+local imports working around layering) — determinism seeding, LLM cost budget,
+embedding-space typing (config-level and per-node graph-level), and optional
+store-backend availability. The embedding-space validators moved here from
+``models/embedding_space.py``: they are *validation*, not model construction
+(``resolve_embedding_space`` stays in models/ — a registry concern).
+
+(This module previously held a dead ``validate_pubmed_dataset`` helper with zero
+callers; replaced wholesale.)
+"""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Optional
 
-from ..datasets.utils import DatasetLoader
+from ..errors import ConfigurationError
+from ..logging_config import get_logger
+from ..models.embedding_space import resolve_embedding_space
 
+logger = get_logger(__name__)
 
-def _load_rows(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
-        raise ValueError(f"File does not exist: {path}")
-
-    loader = DatasetLoader(path)
-    data = loader.load()
-
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ["questions", "documents", "corpus", "items"]:
-            if key in data and isinstance(data[key], list):
-                return data[key]
-        raise ValueError(f"Unsupported JSON structure in {path}")
-
-    raise ValueError(f"Unsupported data type for {path}. Expected list or dict.")
+# Retrieval modes that compare vectors via inner product (so spaces must match).
+_VECTOR_MODES = {"dense", "hybrid"}
 
 
-def validate_pubmed_dataset(
-    questions_path: str, corpus_path: str, verify_audio: bool = True
-) -> Tuple[int, int]:
-    """Validate PubMed QA dataset files and return (question_count, corpus_count).
+def run_pre_flight(config: Any) -> Dict[str, Any]:
+    """Run the full pre-flight chain; returns the determinism flags for provenance.
 
-    Raises ValueError with actionable errors when validation fails.
+    Order matters: determinism first (everything downstream may consume RNGs),
+    then the cheap config-level checks, then the graph-level ones.
     """
-    q_path = Path(questions_path)
-    c_path = Path(corpus_path)
+    from ..llm.cost import COST
+    from ..pipeline.factory import check_graph_backend_dependencies
+    from ..pipeline.stage_graph import build_graph_for_config
+    from .provenance import set_global_determinism
 
-    questions = _load_rows(q_path)
-    corpus = _load_rows(c_path)
+    run_seed = getattr(getattr(config, "audio_synthesis", None), "seed", None)
+    flags = set_global_determinism(run_seed)
+    logger.info("determinism: %s", flags)
 
-    if len(questions) == 0:
-        raise ValueError(
-            f"Questions file is empty: {q_path}\n"
-            f"Expected format: JSONL with one question per line.\n"
-            f'Example: {{"question_id": "q1", "question_text": "What is...", '
-            f'"groundtruth_doc_ids": ["doc1"], "audio_path": "/path/to/audio.wav"}}'
+    budget = int(getattr(getattr(config, "llm", None), "max_tokens_budget", 0) or 0)
+    COST.reset(budget_tokens=budget or None)
+
+    validate_embedding_spaces(config)
+    check_graph_backend_dependencies(config)
+
+    try:
+        graph = build_graph_for_config(config)
+    except Exception:
+        graph = None  # graph errors surface in their own validation path
+    if graph is not None:
+        validate_graph_embedding_spaces(graph, config)
+    return flags
+
+
+# ── Embedding-space typing (architecture A2 / §4.1 P1) ────────────────
+
+
+def validate_embedding_spaces(config: Any) -> None:
+    """Raise ``ConfigurationError`` if a dense/hybrid retrieval would dot vectors from
+    different embedding spaces (query-side vs corpus-side). No-op for non-vector retrieval,
+    asr_text (query embedder == corpus embedder), or fusion (combined space, not checked).
+
+    Today the corpus is text-embedded for cross-modal retrieval, so the check that matters is
+    ``audio_emb_retrieval``: the audio query embedder must share a space with the text corpus
+    embedder.
+    """
+    from ..models.registry import audio_embedding_registry, text_embedding_registry
+
+    model = getattr(config, "model", None)
+    if model is None:
+        return
+    mode = str(getattr(model, "pipeline_mode", ""))
+    vdb = getattr(config, "vector_db", None)
+    retrieval_mode = str(getattr(vdb, "retrieval_mode", "dense")) if vdb else "dense"
+    if retrieval_mode not in _VECTOR_MODES:
+        return
+
+    text_type = getattr(model, "text_emb_model_type", None)
+    if mode == "audio_emb_retrieval":
+        audio_type = getattr(model, "audio_emb_model_type", None)
+        if not audio_type or not text_type:
+            return  # not enough info to compare
+        query_space = resolve_embedding_space(
+            audio_embedding_registry,
+            audio_type,
+            getattr(model, "audio_emb_model_name", None),
         )
-    if len(corpus) == 0:
-        raise ValueError(
-            f"Corpus file is empty: {c_path}\n"
-            f"Expected format: JSONL with one document per line.\n"
-            f'Example: {{"doc_id": "doc1", "text": "Document content...", "title": "Title"}}'
+        corpus_space = resolve_embedding_space(
+            text_embedding_registry,
+            text_type,
+            getattr(model, "text_emb_model_name", None),
         )
-
-    corpus_ids = set()
-    for idx, row in enumerate(corpus, start=1):
-        doc_id = row.get("doc_id") or row.get("pmid") or row.get("id")
-        text = row.get("text") or row.get("abstract") or row.get("content")
-        if not doc_id:
-            raise ValueError(
-                f"Corpus row {idx} missing required field: 'doc_id' (or 'pmid', 'id').\n"
-                f"Found fields: {list(row.keys())}\n"
-                f'Example: {{"doc_id": "12345", "text": "Document content..."}}'
+        if query_space != corpus_space:
+            raise ConfigurationError(
+                f"Embedding-space mismatch for dense '{mode}': audio query embedder "
+                f"'{audio_type}' is in space '{query_space}' but the text corpus embedder "
+                f"'{text_type}' is in space '{corpus_space}'. Dense retrieval dots these "
+                f"vectors, so the scores would be meaningless. Use embedders that share a "
+                f"space (e.g. sonar_speech + sonar), declare a shared `embedding_space` in "
+                f"the model registry metadata, or switch to sparse retrieval."
             )
-        if not text:
-            raise ValueError(
-                f"Corpus row {idx} missing required field: 'text' (or 'abstract', 'content').\n"
-                f"Found fields: {list(row.keys())}\n"
-                f'Example: {{"doc_id": "12345", "text": "Document content..."}}'
-            )
-        doc_id = str(doc_id)
-        if doc_id in corpus_ids:
-            raise ValueError(f"Duplicate corpus doc_id found: {doc_id}")
-        corpus_ids.add(doc_id)
+    # asr_text_retrieval: query and corpus both use text_emb → same space, always OK.
+    # audio_text_retrieval (fusion): query is a fused vector — space combination is not
+    # validated here (revisit with n-ary fusion).
 
-    for idx, row in enumerate(questions, start=1):
-        question_id = row.get("question_id") or row.get("id")
-        question_text = (
-            row.get("question_text") or row.get("question") or row.get("text")
+
+def _node_space(node: Any, config: Any) -> Optional[str]:
+    """The embedding space a graph node instance produces vectors in, or None.
+
+    Per-node ``params.model``/``name`` win over the global model fields; a
+    dataset_source vector column carries ``params.embedding_space`` directly;
+    a fusion node's combined space is unknowable here (None = unchecked).
+    """
+    from ..models.registry import audio_embedding_registry, text_embedding_registry
+    from ..pipeline.graph.operators import node_kind
+
+    params = getattr(node, "params", None) or {}
+    model = getattr(config, "model", None)
+    stage = node_kind(node.stage, params)
+    if stage == "dataset_source":
+        return params.get("embedding_space")
+    if stage in ("text_embedding", "corpus_embedding"):
+        mtype = params.get("model") or getattr(model, "text_emb_model_type", None)
+        if not mtype:
+            return None
+        return resolve_embedding_space(
+            text_embedding_registry,
+            str(mtype),
+            params.get("name") or getattr(model, "text_emb_model_name", None),
         )
-        if not question_id:
-            raise ValueError(
-                f"Question row {idx} missing required field: 'question_id' (or 'id').\n"
-                f"Found fields: {list(row.keys())}\n"
-                f'Example: {{"question_id": "q1", "question_text": "What is..."}}'
+    if stage == "audio_embedding":
+        mtype = params.get("model") or getattr(model, "audio_emb_model_type", None)
+        if not mtype:
+            return None
+        return resolve_embedding_space(
+            audio_embedding_registry,
+            str(mtype),
+            params.get("name") or getattr(model, "audio_emb_model_name", None),
+        )
+    return None
+
+
+def _producer_space(
+    node_id: str, artifact: str, by_id: dict, config: Any, depth: int = 0
+) -> Optional[str]:
+    """Space of the vectors flowing out of ``node_id`` for ``artifact`` (follows
+    pass-through nodes: vector_db ← corpus_vectors, corpus_merge ← its producers)."""
+    if depth > 16:  # defensive: graphs are small, cycles already rejected
+        return None
+    node = by_id.get(node_id)
+    if node is None:
+        return None
+    direct = _node_space(node, config)
+    if direct is not None:
+        return direct
+    from ..pipeline.graph.operators import node_kind
+
+    if node_kind(node.stage, node.params) in ("vector_db", "corpus_merge"):
+        upstream = [p for a, p in node.bindings if a == "corpus_vectors"]
+        spaces = {
+            s
+            for s in (
+                _producer_space(p, "corpus_vectors", by_id, config, depth + 1)
+                for p in upstream
             )
-        if not question_text:
-            raise ValueError(
-                f"Question row {idx} missing required field: 'question_text' (or 'question', 'text').\n"
-                f"Found fields: {list(row.keys())}\n"
-                f'Example: {{"question_id": "q1", "question_text": "What is..."}}'
+            if s is not None
+        }
+        return next(iter(spaces)) if len(spaces) == 1 else None
+    return None
+
+
+def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
+    """Per-node V[s] check: reject a dense/hybrid retrieval whose bound query-vector
+    producer and index chain live in different embedding spaces (§4.1 P1).
+
+    Catches what the config-level check cannot: explicit graphs whose per-node
+    ``params.model`` overrides diverge (e.g. ``corpus_embedding {model: labse}`` +
+    ``text_embedding {model: jina_v4}``) and dataset vector columns whose declared
+    ``embedding_space`` differs from the query embedder. Unresolvable spaces (fusion,
+    no model info) stay unchecked — this is a trap-closer, not a prover.
+    """
+    vdb = getattr(config, "vector_db", None)
+    retrieval_mode = str(getattr(vdb, "retrieval_mode", "dense")) if vdb else "dense"
+    if retrieval_mode not in _VECTOR_MODES:
+        return
+    by_id = {n.id: n for n in graph.nodes}
+    # Query-vector streams in one_of priority order (mirrors the retrieval input). The
+    # effective stream is the highest-priority bound producer; fused has no resolvable
+    # model space, so a fusion retrieval stays unchecked (trap-closer, not a prover).
+    query_vector_artifacts = (
+        "fused_query_vectors",
+        "audio_query_vectors",
+        "text_query_vectors",
+        "query_vectors",
+    )
+    from ..pipeline.graph.operators import node_kind
+
+    for node in graph.nodes:
+        if node_kind(node.stage, node.params) != "retrieval":
+            continue
+        q_producer = q_artifact = None
+        for art in query_vector_artifacts:
+            producers = [p for a, p in node.bindings if a == art]
+            if producers:
+                q_producer, q_artifact = producers[-1], art
+                break
+        index_producers = [p for a, p in node.bindings if a == "vector_index"]
+        if q_producer is None or not index_producers:
+            continue
+        q_space = _producer_space(q_producer, q_artifact, by_id, config)
+        i_space = _producer_space(index_producers[-1], "vector_index", by_id, config)
+        if q_space and i_space and q_space != i_space:
+            raise ConfigurationError(
+                f"Embedding-space mismatch at retrieval node '{node.id}': query "
+                f"vectors from '{q_producer}' are in space '{q_space}' but "
+                f"the index from '{index_producers[-1]}' holds space '{i_space}'. "
+                f"Dense retrieval dots these vectors — the scores would be garbage. "
+                f"Align the embedder models (or their registry `embedding_space` "
+                f"metadata), or switch to sparse retrieval."
             )
-
-        relevance = row.get("relevance_grades")
-        gt_ids = row.get("groundtruth_doc_ids") or row.get("relevant_doc_ids") or []
-
-        if relevance is not None:
-            if not isinstance(relevance, dict) or len(relevance) == 0:
-                raise ValueError(
-                    f"Question {question_id}: field 'relevance_grades' must be a non-empty dict.\n"
-                    f"Got: {type(relevance).__name__} = {relevance}\n"
-                    f'Example: {{"relevance_grades": {{"doc1": 2, "doc2": 1}}}}'
-                )
-            for doc_id, grade in relevance.items():
-                if str(doc_id) not in corpus_ids:
-                    raise ValueError(
-                        f"Question {question_id}: relevance doc_id not in corpus: {doc_id}"
-                    )
-                if int(grade) < 0:
-                    raise ValueError(
-                        f"Question {question_id}: relevance grade must be >= 0 for doc_id {doc_id}"
-                    )
-        else:
-            if not gt_ids:
-                raise ValueError(
-                    f"Question {question_id}: missing ground truth information.\n"
-                    f"Provide either 'relevance_grades' or 'groundtruth_doc_ids'.\n"
-                    f'Example: {{"groundtruth_doc_ids": ["doc1", "doc2"]}} or '
-                    f'{{"relevance_grades": {{"doc1": 2, "doc2": 1}}}}'
-                )
-            for doc_id in gt_ids:
-                if str(doc_id) not in corpus_ids:
-                    raise ValueError(
-                        f"Question {question_id}: groundtruth doc_id not in corpus: {doc_id}"
-                    )
-
-        if verify_audio:
-            audio_path = row.get("audio_path")
-            if not audio_path:
-                raise ValueError(
-                    f"Question {question_id} has no audio_path. "
-                    "Run scripts/prepare_pubmed_audio.py before evaluation."
-                )
-            if not Path(audio_path).exists():
-                raise ValueError(
-                    f"Question {question_id}: audio file not found: {audio_path}"
-                )
-
-    return len(questions), len(corpus)

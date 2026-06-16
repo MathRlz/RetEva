@@ -20,11 +20,17 @@ from typing import Dict, List, Mapping
 
 from .stage_graph import (
     ARTIFACT_CORPUS,
+    ARTIFACT_CORPUS_VECTORS,
     ARTIFACT_GENERATED_ANSWERS,
     ARTIFACT_METRICS,
     ARTIFACT_QUERY_AUDIO,
     ARTIFACT_QUERY_TEXT,
     ARTIFACT_QUERY_VECTORS,
+    ARTIFACT_AUDIO_QUERY_VECTORS,
+    ARTIFACT_TEXT_QUERY_VECTORS,
+    ARTIFACT_FUSED_QUERY_VECTORS,
+    ARTIFACT_REFERENCE_TRANSCRIPTION,
+    ARTIFACT_EMBEDDING_ALIGNMENT,
     ARTIFACT_RELEVANT_DOCS,
     ARTIFACT_RETRIEVED,
     ARTIFACT_SHORT_ANSWERS,
@@ -119,6 +125,13 @@ register_artifact(ARTIFACT_RELEVANT_DOCS, Modality.RELEVANCE, is_source=True)
 register_artifact(ARTIFACT_SHORT_ANSWERS, Modality.ANSWERS, is_source=True)
 # Derived artifacts (produced by transform / retrieval / metric nodes).
 register_artifact(ARTIFACT_QUERY_VECTORS, Modality.VECTOR)
+register_artifact(ARTIFACT_AUDIO_QUERY_VECTORS, Modality.VECTOR)
+register_artifact(ARTIFACT_TEXT_QUERY_VECTORS, Modality.VECTOR)
+register_artifact(ARTIFACT_FUSED_QUERY_VECTORS, Modality.VECTOR)
+register_artifact(ARTIFACT_CORPUS_VECTORS, Modality.VECTOR)
+# Spoken-transcription GT (vs reference_text = question_text) — M1a/M1c-3.
+register_artifact(ARTIFACT_REFERENCE_TRANSCRIPTION, Modality.TEXT)
+register_artifact(ARTIFACT_EMBEDDING_ALIGNMENT, Modality.SCORES)
 register_artifact(ARTIFACT_VECTOR_INDEX, Modality.INDEX)
 register_artifact(ARTIFACT_RETRIEVED, Modality.RESULTS)
 register_artifact(ARTIFACT_GENERATED_ANSWERS, Modality.ANSWERS)
@@ -126,8 +139,17 @@ register_artifact(ARTIFACT_METRICS, Modality.SCORES)
 # Ground-truth reference transcription/question, published as a keyed artifact (A3/W1) so
 # metric nodes can pair a scored artifact against its reference.
 register_artifact("reference_text", Modality.TEXT, is_source=True)
-# Raw (pre-correction) ASR output, published by the asr node (T4/L1) so metric nodes read it
-# from the bus instead of a RunState mirror; distinct from query_text (the effective query).
-register_artifact("raw_query_text", Modality.TEXT)
+# The query-text chain (distinct names — no in-place mutation): correction → corrected,
+# augmenter → augmented, optimization → optimized. query_text stays the immutable ASR/dataset
+# base. Consumers read the most-processed variant via QUERY_TEXT_CHAIN.
+register_artifact("corrected_query_text", Modality.TEXT)
+register_artifact("augmented_query_text", Modality.TEXT)
+register_artifact("optimized_query_text", Modality.TEXT)
+register_artifact("refined_query_text", Modality.TEXT)
+# Per-comparison score artifacts from the typed metric nodes (Phase 5).
+register_artifact("transcription_scores", Modality.SCORES)
+register_artifact("retrieval_scores", Modality.SCORES)
+register_artifact("judge_scores", Modality.SCORES)
+register_artifact("answer_scores", Modality.SCORES)
 # Planned modalities are additive — e.g. an image query field:
 #   register_artifact("query_image", Modality.IMAGE, is_source=True)

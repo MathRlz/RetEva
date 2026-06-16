@@ -1,0 +1,70 @@
+# SHOWCASE: multiple datasources in one graph (architecture §2, B1-B5).
+# The corpus comes from one source and the questions from another, each loaded
+# independently; two role-scoped dataset_source nodes feed the right consumers
+# (corpus -> corpus_embedding -> vector_db, questions -> tts/asr). Queries join corpus docs by shared
+# doc_id — if the namespaces were disjoint, the IR metrics would be disabled rather
+# than reported as a misleading 0 (the join contract). Here both sources point at the
+# bundled pubmed_qa_small files, so the join is total and metrics behave as usual.
+experiment:
+  name: showcase_multi_dataset_join
+  output_dir: evaluation_results/showcase
+datasets:
+  docs:
+    id: pubmed_qa
+    corpus: examples/data/pubmed_qa_small/corpus.json
+    questions: examples/data/pubmed_qa_small/questions.json
+    role: corpus
+  qa:
+    id: pubmed_qa
+    questions: examples/data/pubmed_qa_small/questions.json
+    corpus: examples/data/pubmed_qa_small/corpus.json
+    role: questions
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  nodes:
+    - id: corpus_src
+      type: dataset_source
+      params: {dataset: docs}
+    - id: qa_src
+      type: dataset_source
+      params: {dataset: qa}
+    - id: corpus_embedding
+      type: corpus_embedding
+      params: {dataset: docs}
+    - vector_db
+    - tts
+    - asr
+    - text_embedding
+    - retrieval
+    - metrics
+    - finalize
+nodes:
+  asr:
+    model: whisper
+    size: base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/showcase/audio

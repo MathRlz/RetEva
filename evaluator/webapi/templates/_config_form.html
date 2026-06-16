@@ -19,7 +19,7 @@
     <label class="field">
       <span>Mode</span>
       <select name="pipeline_mode"
-              hx-get="/ui/models" hx-target="#model-fields" hx-include="this" hx-trigger="change">
+              hx-get="/ui/models" hx-target="#model-fields" hx-include="#config-form" hx-trigger="change">
         {% for m in options.pipeline_modes %}
         <option value="{{ m }}" {{ 'selected' if m == mode else '' }}>{{ m }}</option>
         {% endfor %}

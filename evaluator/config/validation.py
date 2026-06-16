@@ -31,7 +31,12 @@ def _detect_cuda():
 
             return True, usable_gpu_count()
     except ImportError:
-        pass
+        from ..logging_config import get_logger
+
+        get_logger(__name__).info(
+            "torch not importable during config validation — assuming CPU-only "
+            "(device checks will reject cuda devices)"
+        )
     return False, 0
 
 
@@ -360,20 +365,6 @@ def preflight_check(config: Any) -> List[str]:
             warnings.append(
                 "pipeline_mode is 'audio_emb_retrieval' but audio_emb_model_type is None. "
                 "Set an audio embedding model or change pipeline_mode."
-            )
-
-    # Warn about AdvancedRetrievalConfig stub fields — declared but not implemented
-    _UNIMPLEMENTED_RETRIEVAL_FEATURES = {
-        "multi_vector_enabled": "multi-vector retrieval",
-        "query_expansion_enabled": "query expansion",
-        "pseudo_feedback_enabled": "pseudo-relevance feedback",
-        "adaptive_fusion_enabled": "adaptive fusion",
-    }
-    for field, label in _UNIMPLEMENTED_RETRIEVAL_FEATURES.items():
-        if getattr(config.vector_db, field, False):
-            warnings.append(
-                f"vector_db.{field}=True but {label} is not implemented in any "
-                f"retrieval backend. The setting will have no effect."
             )
 
     import os

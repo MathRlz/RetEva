@@ -7,8 +7,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from evaluator import ConfigurationError
-from evaluator.webapi.config_helpers import prepare_run_config
+from evaluator.webapi.form_builder import prepare_run_config
 from evaluator.webapi.jobs import JobManager
 from evaluator.webapi.schemas import ErrorResponse, EvaluationJobRequest, JobSubmitResponse, MatrixJobRequest
 from evaluator.webapi.utils import artifact_listing
@@ -57,7 +56,7 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
             config = prepare_run_config(payload.config, auto_devices=payload.auto_devices)
             job = jobs.submit_evaluation(config)
             return {"job_id": job.job_id}
-        except (ConfigurationError, ImportError) as exc:
+        except ImportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post(
@@ -72,7 +71,7 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
             config = prepare_run_config(payload.base_config, auto_devices=payload.auto_devices)
             job = jobs.submit_matrix(config, payload.test_setups, baseline_setup_id=payload.baseline_setup_id)
             return {"job_id": job.job_id}
-        except (ConfigurationError, ImportError) as exc:
+        except ImportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/api/jobs", summary="List all jobs")

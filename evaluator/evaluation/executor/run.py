@@ -8,7 +8,11 @@ results); ``run_from_bundle`` is the config-driven convenience wrapper.
 from __future__ import annotations
 
 import time
-from typing import Callable, Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...config import EvaluationConfig
+    from ...pipeline.types import PipelineBundle
 
 from ...datasets import QueryDataset
 from ...pipeline import (
@@ -22,11 +26,21 @@ from ...logging_config import get_logger, log_cache_stats
 from ...metrics.domain_terms import load_term_weights
 from ...pipeline.run_graph import _build_run_graph
 from ..helpers import detect_pipeline_mode, PIPELINE_MODE_LABELS
+from ..stage_registry import validate_graph_handlers
+from ..handlers.rag import drop_mirrored_top_level_keys
 from ..result_schema import RunResults
 from .state import RunState, RunFeatures, EvaluationContext
 from .engine import _execute_stage_graph
 
 logger = get_logger(__name__)
+
+
+def _node_kind(node) -> str:
+    """The legacy node-kind name for graph-flag derivation (operator-abstraction): an
+    operator node resolves to its old stage name, a pre-collapse node is itself."""
+    from ...pipeline.graph.operators import node_kind
+
+    return node_kind(node.stage, node.params)
 
 
 def run_graph(
@@ -157,18 +171,9 @@ def run_graph(
         progress_callback = context.progress_callback
         oracle_mode = context.oracle_mode
         features = context.features
-
-    # Optional feature configs are bundled in `features` (all default-off).
     features = features or RunFeatures()
-    judge_config = features.judge_config
-    answer_gen_config = features.answer_gen_config
-    query_opt_config = features.query_opt_config
-    query_correction_config = features.query_correction_config
-    embedding_fusion_config = features.embedding_fusion_config
-    term_weights = features.term_weights
-    compute_confidence_intervals = features.compute_confidence_intervals
 
-    # Determine mode
+    # Determine mode + build the stage graph (the source of truth for what runs).
     mode = detect_pipeline_mode(
         retrieval_pipeline,
         asr_pipeline,
@@ -176,64 +181,141 @@ def run_graph(
         audio_embedding_pipeline,
     )
     logger.info("Evaluation mode: %s (DAG)", PIPELINE_MODE_LABELS[mode])
-
     stage_graph = _build_run_graph(
         mode,
         graph_override=graph_override,
-        embedding_fusion_config=embedding_fusion_config,
-        query_opt_config=query_opt_config,
-        query_correction_config=query_correction_config,
+        embedding_fusion_config=features.embedding_fusion_config,
+        query_opt_config=features.query_opt_config,
+        query_correction_config=features.query_correction_config,
         retrieval_pipeline=retrieval_pipeline,
         eval_config=eval_config,
+        trace_limit=trace_limit,
     )
     stage_levels = [
         [node.id for node in level] for level in stage_graph.topological_levels()
     ]
     logger.info("Execution DAG mode=%s levels=%s", mode, stage_levels)
-
     logger.info(f"Dataset size: {len(dataset)}, Batch size: {batch_size}, k: {k}")
+    # Pre-flight (M3): fail a typo'd/unregistered node type before any heavy work.
+    validate_graph_handlers(stage_graph)
 
     _total = len(dataset)
     _cb = progress_callback or (lambda *_: None)
     _cb("init", 0, _total, f"Starting {mode} evaluation ({_total} samples)")
 
-    _t_total = time.perf_counter()
+    # Seed the run state (M2: setup extracted out of the DAG flow).
+    state = _setup_execution_context(
+        dataset=dataset,
+        mode=mode,
+        stage_graph=stage_graph,
+        features=features,
+        retrieval_pipeline=retrieval_pipeline,
+        asr_pipeline=asr_pipeline,
+        text_embedding_pipeline=text_embedding_pipeline,
+        audio_embedding_pipeline=audio_embedding_pipeline,
+        cache_manager=cache_manager,
+        eval_config=eval_config,
+        load_info=load_info,
+        k=k,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        checkpoint_interval=checkpoint_interval,
+        experiment_id=experiment_id,
+        resume_from_checkpoint=resume_from_checkpoint,
+        oracle_mode=oracle_mode,
+        trace_limit=trace_limit,
+        total=_total,
+        cb=_cb,
+        t_total=time.perf_counter(),
+        service_provider=service_provider,
+        offload_policy=offload_policy,
+    )
 
-    # Multi-dataset runtime (B1): when the config carries a `datasets:` map, load each source so
-    # per-node dataset_source handlers can pick theirs. Empty otherwise (single-source unchanged).
+    # DAG-driven execution: the stage graph drives what runs and in what order.
+    _execute_stage_graph(state, stage_graph, features.query_opt_config)
+
+    _finalize_run(cache_manager, experiment_id)
+    # G5: traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
+    # the duplicate top-level keys at the output boundary (sinks read them during the run).
+    drop_mirrored_top_level_keys(state.results)
+    _cb("done", _total, _total, "Evaluation complete")
+    return state.results
+
+
+def _load_multi_dataset_sources(eval_config: Any):
+    """Multi-dataset runtime (B1): load each source of a `datasets:` map so per-node
+    dataset_source handlers can pick theirs, and validate the cross-source join (B5 —
+    disjoint questions↔corpus doc_id namespaces disable the IR metrics).
+
+    Returns ``(dataset_sources, disable_ir_metrics, join_warning)``; the empty default
+    in single-source mode (no config / no map) leaves the run unchanged."""
     dataset_sources: Dict[str, Any] = {}
     disable_ir_metrics, join_warning = False, ""
-    if eval_config is not None and getattr(
+    if eval_config is None or not getattr(
         getattr(eval_config, "data", None), "datasets", None
     ):
-        from ...datasets import load_runtime_datasets, validate_dataset_join
+        return dataset_sources, disable_ir_metrics, join_warning
+    from ...datasets import load_runtime_datasets, validate_dataset_join
 
-        dataset_sources = load_runtime_datasets(eval_config)
-        # B5: validate the cross-source join (questions↔corpus doc_id overlap); disjoint → IR off.
-        cfg_sources = getattr(eval_config.data, "datasets", {}) or {}
-        q_id = next(
-            (
-                s
-                for s, e in cfg_sources.items()
-                if (e or {}).get("role") in ("questions", "both")
-            ),
-            None,
-        )
-        c_id = next(
-            (
-                s
-                for s, e in cfg_sources.items()
-                if (e or {}).get("role") in ("corpus", "both")
-            ),
-            None,
-        )
-        if q_id and c_id and q_id != c_id and {q_id, c_id} <= set(dataset_sources):
-            join = validate_dataset_join(dataset_sources[q_id], dataset_sources[c_id])
-            if join["disjoint"]:
-                disable_ir_metrics, join_warning = True, join["warning"]
-                logger.warning("dataset join: %s", join_warning)
+    dataset_sources = load_runtime_datasets(eval_config)
+    cfg_sources = getattr(eval_config.data, "datasets", {}) or {}
+    q_id = next(
+        (
+            s
+            for s, e in cfg_sources.items()
+            if (e or {}).get("role") in ("questions", "both")
+        ),
+        None,
+    )
+    c_id = next(
+        (
+            s
+            for s, e in cfg_sources.items()
+            if (e or {}).get("role") in ("corpus", "both")
+        ),
+        None,
+    )
+    if q_id and c_id and q_id != c_id and {q_id, c_id} <= set(dataset_sources):
+        join = validate_dataset_join(dataset_sources[q_id], dataset_sources[c_id])
+        if join["disjoint"]:
+            disable_ir_metrics, join_warning = True, join["warning"]
+            logger.warning("dataset join: %s", join_warning)
+    return dataset_sources, disable_ir_metrics, join_warning
 
-    # Execution context shared across stage handlers (see RunState).
+
+def _setup_execution_context(
+    *,
+    dataset: Any,
+    mode: str,
+    stage_graph: Any,
+    features: "RunFeatures",
+    retrieval_pipeline: Any,
+    asr_pipeline: Any,
+    text_embedding_pipeline: Any,
+    audio_embedding_pipeline: Any,
+    cache_manager: Any,
+    eval_config: Any,
+    load_info: Any,
+    k: int,
+    batch_size: int,
+    num_workers: int,
+    checkpoint_interval: int,
+    experiment_id: Any,
+    resume_from_checkpoint: bool,
+    oracle_mode: bool,
+    trace_limit: int,
+    total: int,
+    cb: Callable,
+    t_total: float,
+    service_provider: Any,
+    offload_policy: str,
+) -> RunState:
+    """Build the seeded ``RunState`` for a graph run (M2: extracted from ``run_graph``
+    so the DAG flow stays readable): multi-dataset sources + join validation, the
+    feature-config unpacking, offload policy, and the zeroed stage-times map."""
+    dataset_sources, disable_ir_metrics, join_warning = _load_multi_dataset_sources(
+        eval_config
+    )
     state = RunState(
         dataset=dataset,
         mode=mode,
@@ -254,22 +336,31 @@ def run_graph(
         experiment_id=experiment_id,
         resume_from_checkpoint=resume_from_checkpoint,
         oracle_mode=oracle_mode,
-        embedding_fusion_config=embedding_fusion_config,
-        query_opt_config=query_opt_config,
-        query_correction_config=query_correction_config,
-        answer_gen_config=answer_gen_config,
-        judge_config=judge_config,
+        embedding_fusion_config=features.embedding_fusion_config,
+        query_opt_config=features.query_opt_config,
+        query_correction_config=features.query_correction_config,
+        answer_gen_config=features.answer_gen_config,
+        judge_config=features.judge_config,
         trace_limit=trace_limit,
-        term_weights=term_weights,
-        compute_confidence_intervals=compute_confidence_intervals,
-        total=_total,
-        cb=_cb,
-        t_total=_t_total,
+        term_weights=features.term_weights,
+        compute_confidence_intervals=features.compute_confidence_intervals,
+        total=total,
+        cb=cb,
+        t_total=t_total,
         service_provider=service_provider,
         offload_after_stage=(
             service_provider is not None and offload_policy == "on_finish"
         ),
-        rerank_in_graph=any(n.stage == "rerank" for n in stage_graph.nodes),
+        refine_in_graph=any(
+            _node_kind(n) in ("rerank", "mmr", "threshold") for n in stage_graph.nodes
+        ),
+        mmr_in_graph=any(_node_kind(n) == "mmr" for n in stage_graph.nodes),
+        # A hybrid result_fusion consumes the dense + sparse arms' candidate pools, so those
+        # retrievals must emit candidates (not finalize to k) even with no refine node.
+        fuse_in_graph=any(
+            _node_kind(n) == "result_fusion" and (n.params or {}).get("hybrid")
+            for n in stage_graph.nodes
+        ),
     )
     state.stage_times = {
         "asr_s": 0.0,
@@ -278,12 +369,11 @@ def run_graph(
         "embedding_s": 0.0,
         "retrieval_s": 0.0,
     }
+    return state
 
-    # DAG-driven execution: the stage graph drives what runs and in what order.
-    _execute_stage_graph(state, stage_graph, query_opt_config)
 
-    results = state.results
-
+def _finalize_run(cache_manager: Any, experiment_id: Any) -> None:
+    """Post-run housekeeping: drop the run's phased checkpoint + log cache stats."""
     if cache_manager and experiment_id:
         try:
             import os
@@ -295,12 +385,8 @@ def run_graph(
                 os.remove(checkpoint_path)
         except OSError as exc:
             logger.warning("Failed to clean up checkpoint file: %s", exc)
-
     if cache_manager:
         log_cache_stats(cache_manager, logger)
-
-    _cb("done", _total, _total, "Evaluation complete")
-    return results
 
 
 def run_from_bundle(

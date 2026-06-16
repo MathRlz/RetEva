@@ -51,8 +51,7 @@ class AudioSynthesizer:
         (incl. aliases) is selectable — no hardcoded list here.
         """
         provider_name = (self.config.provider or "").lower()
-        # Importing the tts package triggers decorator registration.
-        import evaluator.models.tts  # noqa: F401
+        # The TTS registry lazily imports the tts package on first lookup.
         from evaluator.models.registry import tts_registry
 
         try:
@@ -167,7 +166,8 @@ class AudioSynthesizer:
         logger.info(f"Synthesizing {total} texts...")
 
         for i, text in tqdm(
-            enumerate(texts), total=total, desc="TTS synthesis", unit="clip"
+            enumerate(texts), total=total, desc="TTS synthesis", unit="clip",
+            disable=None,
         ):
             output_path = None
             if output_dir:

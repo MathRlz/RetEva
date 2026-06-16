@@ -116,7 +116,10 @@ def _node_reranking(rp, params, provider):
     (D3): swap in its reranker (built from ``params.model`` via the provider/factory) +
     reranking settings, restore on exit. No params → use the pipeline's global reranker.
     """
-    if not params:
+    # Only an actual per-node reranker override triggers the swap — not the operator
+    # discriminator fields the alias injects (e.g. {op: rerank}), which would otherwise
+    # fire a no-op rebuild and (in tests) touch a stub pipeline's missing reranker.
+    if not (params and any(k in params for k in ("model", "mode", "top_k", "weight"))):
         yield
         return
     saved_reranker = rp.reranker

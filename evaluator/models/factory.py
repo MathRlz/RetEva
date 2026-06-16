@@ -1,7 +1,34 @@
 """Factory functions for creating model instances."""
+import inspect
 from typing import Optional, Callable, Dict, Any
 import torch
 from .registry import asr_registry, text_embedding_registry, audio_embedding_registry, reranker_registry
+
+
+def _check_extra_params(model_type: str, model_class, extra_params: Dict[str, Any]) -> None:
+    """Fail loud + clear when extra params don't fit the model's constructor.
+
+    Guard for incoherent configs (e.g. a form/preset merge that mixed one model's type
+    with another model's params — `whisper` + m4t's `tgt_lang`): without this the error
+    surfaces as a cryptic ``__init__() got an unexpected keyword argument`` deep in a
+    run. Constructors that take ``**kwargs`` accept anything and are skipped."""
+    if not extra_params:
+        return
+    try:
+        sig = inspect.signature(model_class.__init__)
+    except (TypeError, ValueError):  # builtins / C extensions — can't introspect
+        return
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return
+    accepted = {n for n in sig.parameters if n != "self"}
+    unknown = sorted(set(extra_params) - accepted)
+    if unknown:
+        raise ValueError(
+            f"Model '{model_type}' ({model_class.__name__}) does not accept "
+            f"param(s) {unknown}; it accepts {sorted(accepted)}. "
+            "This usually means the config mixes one model's type with another "
+            "model's name/params (e.g. a preset merged with a different form selection)."
+        )
 
 
 def create_asr_model(model_type: str, model_name: Optional[str] = None,
@@ -24,6 +51,7 @@ def create_asr_model(model_type: str, model_name: Optional[str] = None,
     """
     model_class = asr_registry.get(model_type)
     name = asr_registry.resolve_model_name(model_type, size=size, model_name=model_name)
+    _check_extra_params(model_type, model_class, extra_params)
 
     return model_class(name, adapter_path=adapter_path, **extra_params).to(torch.device(device))
 
@@ -49,6 +77,7 @@ def create_text_embedding_model(model_type: str, model_name: Optional[str] = Non
 
     model_class = text_embedding_registry.get(model_type)
     name = text_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
+    _check_extra_params(model_type, model_class, extra_params)
 
     return model_class(name, **extra_params).to(torch.device(device))
 
@@ -73,12 +102,14 @@ def _build_attention_pool_audio(
     device: str,
     **extra,
 ):
+    _check_extra_params(model_type, model_class, extra)
     name = audio_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
     return model_class(
         audio_encoder_name=name,
         emb_dim=emb_dim,
         model_path=model_path,
         dropout=dropout,
+        pooling=extra.get("pooling", "attention"),
     ).to(torch.device(device))
 
 
@@ -94,6 +125,7 @@ def _build_clap_style_audio(
     device: str,
     **extra,
 ):
+    _check_extra_params(model_type, model_class, extra)
     if model_path is None:
         raise ValueError(
             "clap_style model requires 'model_path' to be specified.\n"
@@ -136,6 +168,7 @@ def create_audio_embedding_model(model_type: str, model_name: Optional[str] = No
     if builder is None:
         # Generic fallback: resolve name, construct with model_name kwarg
         name = audio_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
+        _check_extra_params(model_type, model_class, extra_params)
         return model_class(model_name=name, **extra_params).to(torch.device(device))
     return builder(
         model_class,

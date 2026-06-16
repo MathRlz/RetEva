@@ -369,7 +369,7 @@ class ASRPipeline(CacheMixin):
             )
         ) as batch_processor:
             with TimingContext("ASR Dataset Processing", logger):
-                for batch in tqdm(data_loader, desc="ASR Processing"):
+                for batch in tqdm(data_loader, desc="ASR Processing", disable=None):
                     batch_size_actual = len(batch["transcriptions"])
 
                     # Skip already processed samples (from checkpoint)

@@ -1,6 +1,7 @@
 """Caching infrastructure for expensive computations."""
 
 import logging
+import sqlite3
 import numpy as np
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
@@ -60,7 +61,20 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
                     # A single unwritable category shouldn't crash the whole cache; that
                     # category just degrades to no-op (get returns None, writes are skipped).
                     logger.warning("Could not create cache dir %s: %s", dir_path, exc)
-            self._initialize_manifest_db()
+            try:
+                self._initialize_manifest_db()
+                # Drop rows whose artifact file is gone (M4) — keeps the manifest bounded
+                # even with the size limit disabled (max_size_gb=0, the default).
+                self.compact_manifest()
+            except (sqlite3.OperationalError, OSError) as exc:
+                # An unwritable / read-only cache_dir (e.g. owned by another user) must not
+                # crash the run — disable the cache and continue uncached. Every cache op
+                # gates on `self.enabled`, so this degrades the whole manager to a no-op.
+                logger.warning(
+                    "Cache manifest at %s is not writable (%s) — disabling cache for "
+                    "this run.", self.manifest_db_path, exc,
+                )
+                self.enabled = False
 
     def _get_cache_path(
         self, cache_type: str, cache_key: str, extension: str = ""
@@ -275,7 +289,7 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
                 removed = True
         # Manifest row (the .npy is tracked there; remove it and its artifact too).
         if self.manifest_db_path.exists():
-            with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+            with closing(self._connect()) as conn, conn:
                 row = conn.execute(
                     "SELECT artifact_path FROM cache_entries "
                     "WHERE cache_type='vector_db' AND cache_key=?",

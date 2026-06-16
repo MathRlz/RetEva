@@ -1,11 +1,18 @@
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, TYPE_CHECKING
+"""Retrieval orchestration: vector store + strategy modules glued into one pipeline.
+
+Strategy logic lives in ``models/retrieval/`` (``sparse`` BM25, ``refine``
+rerank/MMR/threshold, ``fusion_registry`` hybrid fusion, ``scoring`` shared
+primitives); this module only sequences index build → candidate fetch →
+refinement, mapping the DAG's ``retrieval``/``rerank`` nodes onto
+:meth:`RetrievalPipeline.retrieve_candidates` / :meth:`refine_candidates`.
+"""
+
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
-from collections import Counter, defaultdict
 from tqdm import tqdm
 
 from ..storage.cache import CacheManager
-from ..constants import MIN_NORM_THRESHOLD
 from ..devices.memory import get_memory_manager
 from ..logging_config import get_logger, TimingContext
 from ..models.retrieval.strategy import (
@@ -20,116 +27,14 @@ from ..models.retrieval.contracts import (
     normalize_search_results,
     normalize_batch_search_results,
 )
-from ..models.retrieval.rag.strategies import (
-    DistanceMetric,
-    mmr_rerank,
-    threshold_filter,
-)
+from ..models.retrieval.rag.strategies import DistanceMetric
+from ..models.retrieval.refine import apply_mmr, apply_threshold, rerank_results
+from ..models.retrieval.sparse import SparseBM25Index
 
 if TYPE_CHECKING:
     from ..models.retrieval.rag.reranker import BaseReranker
 
 logger = get_logger(__name__)
-
-K = TypeVar("K")
-
-
-def _payload_text(payload: Any) -> str:
-    if isinstance(payload, dict):
-        return str(payload.get("text", ""))
-    return str(payload)
-
-
-class SparseBM25Index:
-    """Minimal BM25 index for lexical retrieval over payload texts."""
-
-    def __init__(self, k1: float = 1.5, b: float = 0.75):
-        self.k1 = k1
-        self.b = b
-        self.payloads: List[Any] = []
-        self.doc_lens: List[int] = []
-        self.avgdl: float = 0.0
-        self.doc_term_freqs: List[Counter] = []
-        self.doc_freq: Dict[str, int] = defaultdict(int)
-        self.doc_count: int = 0
-
-    @staticmethod
-    def _tokenize(text: str) -> List[str]:
-        return [tok for tok in text.lower().split() if tok]
-
-    def build(self, payloads: List[Any]) -> None:
-        self.payloads = payloads
-        self.doc_term_freqs = []
-        self.doc_lens = []
-        self.doc_freq = defaultdict(int)
-
-        for payload in payloads:
-            tokens = self._tokenize(_payload_text(payload))
-            tf = Counter(tokens)
-            self.doc_term_freqs.append(tf)
-            self.doc_lens.append(len(tokens))
-            for token in tf.keys():
-                self.doc_freq[token] += 1
-
-        self.doc_count = len(payloads)
-        self.avgdl = (
-            (sum(self.doc_lens) / self.doc_count) if self.doc_count > 0 else 0.0
-        )
-
-    def search(self, query_text: str, k: int = 10) -> List[Tuple[Any, float]]:
-        if self.doc_count == 0:
-            return []
-
-        q_tokens = self._tokenize(query_text)
-        if not q_tokens:
-            return []
-
-        scores = np.zeros(self.doc_count, dtype=np.float32)
-        n = self.doc_count
-
-        for token in q_tokens:
-            df = self.doc_freq.get(token, 0)
-            if df == 0:
-                continue
-
-            idf = np.log(1.0 + (n - df + 0.5) / (df + 0.5))
-
-            for i, tf in enumerate(self.doc_term_freqs):
-                f = tf.get(token, 0)
-                if f == 0:
-                    continue
-
-                dl = self.doc_lens[i]
-                denom = f + self.k1 * (
-                    1.0 - self.b + self.b * (dl / max(self.avgdl, MIN_NORM_THRESHOLD))
-                )
-                scores[i] += (
-                    idf * (f * (self.k1 + 1.0)) / max(denom, MIN_NORM_THRESHOLD)
-                )
-
-        top_idx = np.argsort(-scores)[:k]
-        return [
-            (self.payloads[i], float(scores[i])) for i in top_idx if scores[i] > 0.0
-        ]
-
-
-def _payload_key(payload: Any) -> str:
-    if isinstance(payload, dict):
-        if payload.get("doc_id") is not None:
-            return str(payload["doc_id"])
-        if payload.get("text") is not None:
-            return str(payload["text"])
-    return str(payload)
-
-
-def _min_max_norm(scores: Dict[K, float]) -> Dict[K, float]:
-    if not scores:
-        return {}
-    vals = list(scores.values())
-    mn, mx = min(vals), max(vals)
-    if mx - mn < MIN_NORM_THRESHOLD:
-        return {k: 1.0 for k in scores}
-    return {k: (v - mn) / (mx - mn) for k, v in scores.items()}
 
 
 class RetrievalPipeline:
@@ -305,130 +210,16 @@ class RetrievalPipeline:
         """Typed retrieval output contract for single-query dense search."""
         return normalize_search_results(self.search(query_embedding, k))
 
-    @staticmethod
-    def _token_overlap_score(query_text: str, payload: Any) -> float:
-        q = set(SparseBM25Index._tokenize(query_text))
-        d = set(SparseBM25Index._tokenize(_payload_text(payload)))
-        if not q or not d:
-            return 0.0
-        inter = len(q & d)
-        union = len(q | d)
-        return inter / max(union, 1)
-
     def _rerank(
         self, query_text: str, results: List[Tuple[Any, float]], k: int
     ) -> List[Tuple[Any, float]]:
-        """Apply reranking to initial retrieval results.
-
-        Supports multiple reranking modes:
-        - "none": No reranking, just truncate to k
-        - "token_overlap": Simple Jaccard token overlap scoring
-        - "cross_encoder": Use cross-encoder model (requires self.reranker)
-        """
-        reranker_mode = self.strategy_config.reranking.mode
-        if reranker_mode == "none" and self.reranker is None:
-            return results[:k]
-
-        limited = results[: max(k, self.strategy_config.reranking.top_k)]
-
-        # Cross-encoder reranking takes precedence if reranker is set
-        if self.reranker is not None:
-            return self.reranker.rerank(query_text, limited, top_k=k)
-
-        if reranker_mode == "token_overlap":
-            base_scores = {idx: float(score) for idx, (_, score) in enumerate(limited)}
-            base_norm = _min_max_norm(base_scores)
-            rerank_scores = {
-                idx: self._token_overlap_score(query_text, payload)
-                for idx, (payload, _) in enumerate(limited)
-            }
-            rerank_norm = _min_max_norm(rerank_scores)
-
-            merged = []
-            for idx, (payload, _) in enumerate(limited):
-                score = (1.0 - self.strategy_config.reranking.weight) * base_norm.get(
-                    idx, 0.0
-                ) + self.strategy_config.reranking.weight * rerank_norm.get(idx, 0.0)
-                merged.append((payload, float(score)))
-
-            merged.sort(key=lambda x: x[1], reverse=True)
-            return merged[:k]
-
-        if reranker_mode not in {"none", "token_overlap", "cross_encoder"}:
-            raise ValueError(f"Unsupported reranker_mode: {reranker_mode}")
-
-        return results[:k]
-
-    def _apply_mmr(
-        self,
-        query_emb: np.ndarray,
-        results: List[Tuple[Any, float]],
-        k: int,
-    ) -> List[Tuple[Any, float]]:
-        """Apply MMR reranking for diversity.
-
-        Args:
-            query_emb: Query embedding
-            results: Initial retrieval results
-            k: Number of results to return
-
-        Returns:
-            MMR-reranked results
-        """
-        if not self.strategy_config.post_processing.use_mmr or not results:
-            return results[:k]
-
-        # Get embeddings for retrieved documents
-        if self._index_embeddings is None or self._index_payloads is None:
-            logger.warning("MMR enabled but index embeddings not stored. Skipping MMR.")
-            return results[:k]
-
-        # Map payloads to indices
-        payload_to_idx = {
-            _payload_key(p): i for i, p in enumerate(self._index_payloads)
-        }
-
-        # Get embeddings for results
-        result_indices = []
-        valid_results = []
-        for payload, score in results:
-            key = _payload_key(payload)
-            if key in payload_to_idx:
-                result_indices.append(payload_to_idx[key])
-                valid_results.append((payload, score))
-
-        if not valid_results:
-            return results[:k]
-
-        doc_embs = self._index_embeddings[result_indices]
-
-        return mmr_rerank(
-            query_emb=query_emb,
-            results=valid_results,
-            doc_embs=doc_embs,
-            k=k,
-            lambda_param=self.strategy_config.post_processing.mmr_lambda,
-            metric=self.distance_metric,
-        )
-
-    def _apply_threshold(
-        self,
-        results: List[Tuple[Any, float]],
-    ) -> List[Tuple[Any, float]]:
-        """Apply similarity threshold filtering.
-
-        Args:
-            results: Retrieval results
-
-        Returns:
-            Filtered results
-        """
-        if self.strategy_config.post_processing.min_similarity_threshold is None:
-            return results
-
-        return threshold_filter(
+        """Rerank via the extracted strategy (cross-encoder / token-overlap / none)."""
+        return rerank_results(
+            query_text,
             results,
-            min_score=self.strategy_config.post_processing.min_similarity_threshold,
+            k,
+            reranking=self.strategy_config.reranking,
+            reranker=self.reranker,
         )
 
     def _apply_advanced_strategies(
@@ -441,16 +232,22 @@ class RetrievalPipeline:
 
         Order: MMR first (needs more candidates), then threshold filtering.
         """
+        post = self.strategy_config.post_processing
         # Apply MMR for diversity (before k truncation for better selection)
-        if self.strategy_config.post_processing.use_mmr:
-            results = self._apply_mmr(query_emb, results, k)
+        if post.use_mmr:
+            results = apply_mmr(
+                query_emb,
+                results,
+                k,
+                post=post,
+                index_embeddings=self._index_embeddings,
+                index_payloads=self._index_payloads,
+                metric=self.distance_metric,
+            )
         else:
             results = results[:k]
 
-        # Apply threshold filtering
-        results = self._apply_threshold(results)
-
-        return results
+        return apply_threshold(results, post=post)
 
     def _needs_reranking(self) -> bool:
         return (
@@ -482,16 +279,18 @@ class RetrievalPipeline:
         query_embeddings: np.ndarray,
         k: int = 10,
         query_texts: Optional[List[str]] = None,
+        mode: Optional[str] = None,
     ) -> List[List[Tuple[Any, float]]]:
         """Stage 1 of retrieval: raw dense/sparse/hybrid candidates (pre-refinement).
 
         Fetches ``fetch_k`` candidates (enough for downstream rerank/MMR); the dense
-        fast path returns top-k directly when no refinement applies. Pair with
-        :meth:`refine_candidates` — together they equal :meth:`search_batch`."""
+        fast path returns top-k directly when no refinement applies. ``mode`` overrides
+        the configured retrieval mode (so the hybrid DAG runs the dense + sparse arms as
+        separate retrieval nodes). Pair with :meth:`refine_candidates`."""
         memory_manager = get_memory_manager()
         candidates: List[List[Tuple[Any, float]]] = []
         fetch_k = self._fetch_k(k)
-        mode = self.strategy_config.core.mode
+        mode = mode or self.strategy_config.core.mode
 
         if mode == "dense":
             if not self.needs_refinement:
@@ -502,7 +301,7 @@ class RetrievalPipeline:
                     candidates.append(br[:k])
                     memory_manager.record_operation()
             else:
-                for query_emb in tqdm(query_embeddings, desc="Retrieval", unit="query"):
+                for query_emb in tqdm(query_embeddings, desc="Retrieval", unit="query", disable=None):
                     candidates.append(self.vector_store.search(query_emb, fetch_k))
                     memory_manager.record_operation()
             return candidates
@@ -515,7 +314,7 @@ class RetrievalPipeline:
             )
 
         if mode == "sparse":
-            for query_text in tqdm(query_texts, desc="Retrieval", unit="query"):
+            for query_text in tqdm(query_texts, desc="Retrieval", unit="query", disable=None):
                 candidates.append(self.sparse_index.search(query_text, fetch_k))
                 memory_manager.record_operation()
             return candidates
@@ -526,6 +325,7 @@ class RetrievalPipeline:
             total=len(query_texts),
             desc="Retrieval",
             unit="query",
+            disable=None,
         ):
             dense_res = self.vector_store.search(query_emb, fetch_k)
             sparse_res = self.sparse_index.search(query_text, fetch_k)
@@ -561,6 +361,7 @@ class RetrievalPipeline:
             total=len(candidates),
             desc="Rerank",
             unit="query",
+            disable=None,
         ):
             if mode == "dense":
                 refined = cand
@@ -577,6 +378,48 @@ class RetrievalPipeline:
                 self._apply_advanced_strategies(query_embeddings[idx], refined, k)
             )
         return results
+
+    # ── refine sub-steps, exposed as the rerank / mmr / threshold nodes ──────────
+    # `refine_candidates` is the bundled (rerank → MMR/[:k] → threshold) path; these are
+    # the same operations as independent steps so the DAG can compose them. ``k`` is the
+    # single consistent target (the retrieve node's k); rerank keeps the larger fetch_k pool
+    # only when MMR follows (MMR re-selects k diverse from it).
+    def rerank_only(
+        self, candidates, query_texts, k: int
+    ) -> List[List[Tuple[Any, float]]]:
+        """Rerank each candidate list, keeping the top ``k`` (pass fetch_k as ``k`` to keep
+        the MMR pool). Identical to ``refine_candidates``'s rerank stage."""
+        return [
+            self._rerank(query_texts[i] if query_texts else "", cand, k)
+            for i, cand in enumerate(candidates)
+        ]
+
+    def mmr_only(
+        self, candidates, query_embeddings, k: int
+    ) -> List[List[Tuple[Any, float]]]:
+        """MMR-select ``k`` diverse results per query (the MMR stage alone)."""
+        from ..models.retrieval.refine import apply_mmr
+
+        post = self.strategy_config.post_processing
+        return [
+            apply_mmr(
+                query_embeddings[i],
+                cand,
+                k,
+                post=post,
+                index_embeddings=self._index_embeddings,
+                index_payloads=self._index_payloads,
+                metric=self.distance_metric,
+            )
+            for i, cand in enumerate(candidates)
+        ]
+
+    def threshold_only(self, candidates, k: int) -> List[List[Tuple[Any, float]]]:
+        """Truncate to ``k`` then drop below the similarity threshold per query."""
+        from ..models.retrieval.refine import apply_threshold
+
+        post = self.strategy_config.post_processing
+        return [apply_threshold(cand[:k], post=post) for cand in candidates]
 
     def search_batch(
         self,

@@ -1,6 +1,6 @@
 # C5: the thesis's 3-branch compare graph — ref (ASR oracle) / asr (raw whisper) /
 # corr (asr + rule query-correction) — each terminal metrics, cross-branch deltas reported.
-# CSE collapses the shared prefix (dataset_source, corpus_index, tts) to one run.
+# CSE collapses the shared prefix (dataset_source, corpus_embedding, vector_db, tts) to one run.
 experiment:
   name: e2e_pubmed_qa_3branch
   output_dir: evaluation_results/e2e
@@ -30,7 +30,7 @@ nodes:
   text_embedding:
     model: labse
     device: cuda:0
-  corpus_index:
+  vector_db:
     store: inmemory
   retrieval:
     k: 5

@@ -23,7 +23,15 @@
     {% if log_text %}
     <details {% if not terminal %}open{% endif %}>
       <summary>Console log</summary>
-      <pre class="job-log">{{ log_text }}</pre>
+      <pre class="job-log" id="job-log-{{ job_id[:8] }}">{{ log_text }}</pre>
+      {% if not terminal %}
+      <script>
+        (function () { /* keep the live log pinned to the newest lines across swaps */
+          var el = document.getElementById('job-log-{{ job_id[:8] }}');
+          if (el) el.scrollTop = el.scrollHeight;
+        })();
+      </script>
+      {% endif %}
     </details>
     {% endif %}
 

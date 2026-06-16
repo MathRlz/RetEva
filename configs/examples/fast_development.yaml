@@ -24,7 +24,7 @@ nodes:
     model: null
     name: null
     device: cpu
-  corpus_index:
+  vector_db:
     store: inmemory
   retrieval:
     k: 5

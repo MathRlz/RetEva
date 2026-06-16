@@ -1,0 +1,60 @@
+# SHOWCASE: corpus-side robustness — the `augmenter` node on the docs axis (§4.1 T2).
+# The augmenter sits between dataset_source and corpus_embedding with `axis: docs`: it
+# perturbs each DOCUMENT's text deterministically (seeded per doc_id) while queries stay
+# clean — the mirror image of showcase_robustness_augmenter (clean corpus, corrupted
+# queries). Compare the two leaderboard entries to separate query-noise from corpus-noise
+# sensitivity of the same retrieval stack.
+experiment:
+  name: showcase_corpus_robustness
+  output_dir: evaluation_results/showcase
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  nodes:
+    - dataset_source
+    - id: corpus_augmenter
+      type: augmenter
+      params:
+        axis: docs
+        homophones: true
+        unit_corruption: true
+        max_edits: 2
+    - corpus_embedding
+    - vector_db
+    - tts
+    - asr
+    - text_embedding
+    - retrieval
+    - metrics
+    - finalize
+nodes:
+  asr:
+    model: whisper
+    size: base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/showcase/audio

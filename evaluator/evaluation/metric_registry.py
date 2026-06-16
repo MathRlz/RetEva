@@ -136,7 +136,10 @@ def compute_metric(spec: MetricSpec, artifacts: Mapping[str, ItemSet]) -> ItemSe
 
 
 # ── built-in metrics ──────────────────────────────────────────────────
-# ASR: scored = hypothesis text (query_text after asr), gt = reference_text.
+# ASR: scored = the ASR hypothesis (query_text, now immutable since correction/optimization
+# emit distinct names), gt = reference_text. So `wer`/`cer` always measure ASR quality —
+# the old raw_wer/raw_cer (which scored a separate raw_query_text snapshot) are subsumed.
+# A "corrected WER" is now expressible by pointing a second metric at corrected_query_text.
 register_metric(
     "wer",
     scored="query_text",
@@ -151,29 +154,9 @@ register_metric(
     fn=lambda hyp, ref: character_error_rate(ref, hyp),
     higher_is_better=False,
 )
-# Raw ASR WER/CER (L1): scored on `raw_query_text` (the ASR output BEFORE any
-# query_correction) vs reference. Under a correction branch wer (corrected query_text)
-# and raw_wer differ — both are wanted (asr-vs-asr+correction is the thesis delta). With
-# no correction, query_text == raw_query_text so raw_wer == wer. Supersedes the legacy
-# scalar `WER` (which also scored raw ASR), letting the registry be the single source.
-register_metric(
-    "raw_wer",
-    scored="raw_query_text",
-    gt="reference_text",
-    fn=lambda hyp, ref: word_error_rate(ref, hyp),
-    higher_is_better=False,
-)
-register_metric(
-    "raw_cer",
-    scored="raw_query_text",
-    gt="reference_text",
-    fn=lambda hyp, ref: character_error_rate(ref, hyp),
-    higher_is_better=False,
-)
 # CEER — critical-entity (drug/dose/unit) error rate; a low WER can hide a dangerous error.
 # Supersedes the legacy term-weighted WER (`TW_WER`, L2): TW_WER crudely up-weighted a broad
-# medical vocabulary, whereas CEER targets the actually-dangerous drug/dose/unit entities, and
-# `raw_wer` (above) covers the raw-ASR WER basis TW_WER used — so no metric is silently lost.
+# medical vocabulary, whereas CEER targets the actually-dangerous drug/dose/unit entities.
 register_metric(
     "ceer",
     scored="query_text",

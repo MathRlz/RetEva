@@ -27,7 +27,7 @@ nodes:
   text_embedding:
     model: labse
     device: cuda:0
-  corpus_index:
+  vector_db:
     store: inmemory
   retrieval:
     k: 5

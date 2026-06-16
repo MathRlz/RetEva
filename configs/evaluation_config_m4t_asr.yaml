@@ -5,7 +5,7 @@ dataset:
   id: pubmed_qa
   questions: examples/data/pubmedqa/questions.json
   corpus: examples/data/pubmedqa/corpus.json
-  trace_limit: 5
+  trace_limit: 0          # all 50 questions
   batch_size: 4
 data:
   strict_validation: false
@@ -18,11 +18,11 @@ nodes:
     name: facebook/seamless-m4t-v2-large
     params:
       tgt_lang: eng
-    device: cpu
+    device: cuda:0
   text_embedding:
     model: labse
-    device: cpu
-  corpus_index:
+    device: cuda:0
+  vector_db:
     store: inmemory
   retrieval:
     k: 10
@@ -38,6 +38,22 @@ runtime:
   logging:
     console_level: INFO
     file_level: DEBUG
+# Improve the spoken query between ASR and retrieval (chain: optimized > corrected > raw).
+query_correction:
+  enabled: true
+  method: kb              # fuzzy-snap mis-transcribed medical terms (no LLM)
+  use_default_rules: true
+  kb_max_distance: 1
+query_optimization:
+  enabled: true
+  method: rewrite         # LLM reformulation before embedding
+  use_local_server: true
+  local_server_url: http://localhost:11434/v1/chat/completions   # Ollama
+  model: llama3.1         # set to a model you've `ollama pull`-ed
+  temperature: 0.3
+  max_iterations: 2
+  use_initial_context: false   # no retrieved context exists yet at this stage
+  timeout_s: 30
 audio_synthesis:
   enabled: true
   provider: mms

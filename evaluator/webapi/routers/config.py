@@ -4,14 +4,13 @@ from typing import Any, Callable, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from evaluator import ConfigurationError
 from evaluator.pipeline.stage_graph import (
     PIPELINE_MODE_SPECS,
     resolve_pipeline_mode_spec,
 )
 from evaluator.datasets.descriptor import list_registered_datasets, get_descriptor
 from evaluator.services import ModelServiceProvider
-from evaluator.webapi.config_helpers import (
+from evaluator.webapi.form_builder import (
     create_config_options,
     deep_merge_dict,
     graph_preview,
@@ -87,30 +86,81 @@ def build_config_router(
         responses={400: {"model": ErrorResponse}},
     )
     def validate_config(payload: EvaluationJobRequest) -> Dict[str, Any]:
-        """Validate and normalize an EvaluationConfig dict. Returns 400 on invalid config."""
+        """Validate and normalize an EvaluationConfig dict. Returns 400 on invalid config
+        (ConfigurationError → 400 via the app-level handler; a missing optional backend
+        lib surfaces as ImportError)."""
         try:
             config = prepare_run_config(
                 payload.config, auto_devices=payload.auto_devices
             )
             return {"config": config.to_dict()}
-        except (ConfigurationError, ImportError) as exc:
+        except ImportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/api/graph/preview", summary="Preview pipeline DAG")
     def graph_preview_endpoint(payload: EvaluationJobRequest) -> Dict[str, Any]:
-        """Return stage graph nodes and levels for the given config."""
-        try:
-            config = load_config(payload.config, auto_devices=payload.auto_devices)
-            return graph_preview(config)
-        except ConfigurationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        """Return stage graph nodes and levels for the given config (ConfigurationError →
+        400 via the app-level handler)."""
+        config = load_config(payload.config, auto_devices=payload.auto_devices)
+        return graph_preview(config)
 
     @router.get("/api/graph/nodes", summary="Stage-node catalogue for the builder")
     def graph_nodes_endpoint() -> Dict[str, Any]:
         """The registered node types + I/O contract that the visual builder palette offers (E2)."""
-        from ..config_helpers import node_catalogue
+        from ..form_builder import node_catalogue
 
         return node_catalogue()
+
+    @router.post("/api/graph/node-form", summary="Field-aware form for one operator node")
+    def graph_node_form_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Re-resolve a node's builder form for its currently-set discriminator fields
+        ``{type, params}``: ports + model family + op-specific param switches (so picking
+        ``transform.op`` or ``embed.modality`` re-renders the right fields/choices)."""
+        from ..form_builder import resolve_node_form
+
+        node_type = payload.get("type") or payload.get("op")
+        if not node_type:
+            raise HTTPException(status_code=400, detail="node-form needs a 'type'")
+        try:
+            return resolve_node_form(str(node_type), payload.get("params") or {})
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get(
+        "/api/graph/template/{mode}", summary="Starter graph for a pipeline mode"
+    )
+    def graph_template_endpoint(mode: str) -> Dict[str, Any]:
+        """The mode's default DAG as a canvas seed: nodes (id/type/params), the resolved
+        data bindings (artifact + producer — what the auto-wiring derived, so the canvas
+        draws *real* edges), and topological levels for layout. The user starts from a
+        working graph and only swaps models/params per node."""
+        from ...pipeline.stage_graph import build_stage_graph
+        from ..form_builder import resolve_node_form
+
+        try:
+            graph = build_stage_graph(
+                mode,
+                # audio_text is the fusion mode — its starter includes the fusion path.
+                embedding_fusion_enabled=(mode == "audio_text_retrieval"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "mode": graph.mode,
+            "levels": [[n.id for n in level] for level in graph.topological_levels()],
+            "nodes": [
+                {
+                    "id": n.id,
+                    "type": n.stage,
+                    "params": dict(n.params or {}),
+                    "bindings": [list(b) for b in n.bindings],
+                    # field-aware contract (ports/label/family/switches) for THIS instance,
+                    # so the canvas renders an operator node by its discriminator fields.
+                    **resolve_node_form(n.stage, dict(n.params or {})),
+                }
+                for n in graph.nodes
+            ],
+        }
 
     @router.post("/api/graph/build", summary="Build + validate a canvas graph spec")
     def graph_build_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,8 +176,24 @@ def build_config_router(
         for e in payload.get("edges") or []:
             if e.get("from") and e.get("to"):
                 edges.setdefault(e["to"], []).append(e["from"])
+        branches = payload.get("branches") or []
         try:
-            graph = build_graph_from_spec(nodes, mode=mode, edges=edges)
+            if branches:
+                # Variant set (P5/§8): expand + CSE-collapse so the response shows
+                # the REAL run shape (@branch ids, shared prefix run once).
+                from ...pipeline.graph.branches import build_branched_graph
+
+                graph = build_branched_graph(
+                    nodes, branches, mode=mode, edges=edges or None
+                )
+            else:
+                graph = build_graph_from_spec(nodes, mode=mode, edges=edges)
+            # Per-node V[s] check (§4.1 P1) — per-node embedder overrides only
+            # (no run config here, so global fields contribute nothing).
+            from ...config import EvaluationConfig
+            from ...evaluation.validation import validate_graph_embedding_spaces
+
+            validate_graph_embedding_spaces(graph, EvaluationConfig())
         except Exception as exc:  # noqa: BLE001 — surface any build error as 400
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -145,28 +211,26 @@ def build_config_router(
         responses={400: {"model": ErrorResponse}},
     )
     def create_config(payload: ConfigCreateRequest) -> Dict[str, Any]:
-        """Create a new config by merging a patch dict over a preset base."""
-        try:
-            from evaluator import EvaluationConfig
+        """Create a new config by merging a patch dict over a preset base
+        (ConfigurationError → 400 via the app-level handler)."""
+        from evaluator import EvaluationConfig
 
-            if payload.preset_name:
-                base_config = EvaluationConfig.from_preset(
-                    payload.preset_name, validate=False
-                )
-            else:
-                base_config = EvaluationConfig()
-
-            merged = deep_merge_dict(
-                nested_config(base_config), dict(payload.config_patch)
+        if payload.preset_name:
+            base_config = EvaluationConfig.from_preset(
+                payload.preset_name, validate=False
             )
-            config = EvaluationConfig.from_dict(merged)
-            if payload.auto_devices:
-                config = config.with_auto_devices()
-            return {
-                "config": nested_config(config),
-                "flat": config.to_dict(),
-            }
-        except ConfigurationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            base_config = EvaluationConfig()
+
+        merged = deep_merge_dict(
+            nested_config(base_config), dict(payload.config_patch)
+        )
+        config = EvaluationConfig.from_dict(merged)
+        if payload.auto_devices:
+            config = config.with_auto_devices()
+        return {
+            "config": nested_config(config),
+            "flat": config.to_dict(),
+        }
 
     return router

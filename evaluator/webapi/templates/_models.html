@@ -1,7 +1,9 @@
 {% for sec in model_sections %}
 <label class="field">
   <span>{{ sec.family }}</span>
-  <select name="{{ sec.type_field }}">
+  <select name="{{ sec.type_field }}"
+          hx-get="/ui/models" hx-target="#model-fields"
+          hx-include="#config-form" hx-trigger="change">
     <option value="">— select —</option>
     {% for opt in sec.options %}
     <option value="{{ opt.type }}" {{ 'selected' if opt.type == sec.selected_type else '' }}>{{ opt.type }} ({{ opt.name }})</option>

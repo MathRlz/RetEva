@@ -90,7 +90,6 @@ def to_dict(config: Any, *, include_config: bool = False) -> Dict[str, Any]:
         "checkpoint_enabled": config.checkpoint_enabled,
         "checkpoint_interval": config.checkpoint_interval,
         "parallel_enabled": config.parallel_enabled,
-        "num_parallel_workers": config.num_parallel_workers,
         "cache_enabled": config.cache.enabled,
         "pipeline_mode": enum_to_str(config.model.pipeline_mode),
         "asr_model": f"{config.model.asr_model_type}:{config.model.asr_model_name or config.model.asr_size or 'default'}",
@@ -123,7 +122,6 @@ def to_nested_dict(config: Any) -> Dict[str, Any]:
         "checkpoint_interval": config.checkpoint_interval,
         "resume_from_checkpoint": config.resume_from_checkpoint,
         "parallel_enabled": config.parallel_enabled,
-        "num_parallel_workers": config.num_parallel_workers,
     }
     for key in config._PLAIN_SUBCONFIGS:
         result[key] = _serialize_dataclass(getattr(config, key))

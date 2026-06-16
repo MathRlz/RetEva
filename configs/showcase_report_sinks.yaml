@@ -1,0 +1,57 @@
+# SHOWCASE: report persistence as explicit DAG nodes (architecture §8 — results
+# ownership). The aggregate computes the report; terminal sink nodes persist it:
+# leaderboard_sink ingests the run into leaderboard.sqlite (queryable via
+# /api/leaderboard and the UI results page) and writes report_<name>.json next to the
+# results; dataset_sink exports the synthesized query audio + any generated answers as
+# a reusable prepared dataset. I/O stays an explicit, opt-in part of the graph.
+experiment:
+  name: showcase_report_sinks
+  output_dir: evaluation_results/showcase
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  nodes:
+    - dataset_source
+    - corpus_embedding
+    - vector_db
+    - tts
+    - asr
+    - text_embedding
+    - retrieval
+    - metrics
+    - finalize
+    - aggregate
+    - leaderboard_sink
+    - id: dataset_sink
+      type: dataset_sink
+      params:
+        output_dir: evaluation_results/showcase/exported_dataset
+nodes:
+  asr:
+    model: whisper
+    size: base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/showcase/audio

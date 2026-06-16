@@ -1,11 +1,7 @@
 """Tier-3: dataset loaders + data-file parsing/normalization utilities."""
 
-from ..datasets import (
-    AdmedQueryDataset,
-    PubMedQADataset,
-    load_admed_voice_corpus,
-    load_pubmed_qa_dataset,
-)
+from ..datasets import load_admed_voice_corpus
+from ..datasets.core import load_corpus_documents, load_questions_file
 from ..datasets.utils import (
     DatasetLoader,
     load_json,
@@ -17,10 +13,9 @@ from ..datasets.utils import (
 )
 
 __all__ = [
-    "AdmedQueryDataset",
-    "PubMedQADataset",
     "load_admed_voice_corpus",
-    "load_pubmed_qa_dataset",
+    "load_questions_file",
+    "load_corpus_documents",
     "DatasetLoader",
     "load_json",
     "load_jsonl",

@@ -1,0 +1,44 @@
+# ADMED self-retrieval — v2: audio embedding (cross-modal).
+# Same "fake" retrieval target as v1 — the vector DB holds the TEXT transcriptions — but the
+# query side skips ASR: the audio is embedded directly and matched against the text corpus.
+# This only works with a JOINT audio<->text space: attention_pool projects the Whisper-encoder
+# audio into the text embedder's space (emb_dim must match; model_path = the trained alignment).
+# SONAR alternative (self-contained, no model_path): set audio_embedding.model: sonar_speech +
+# audio_embedding.size: eng, and text_embedding.model: sonar.
+experiment:
+  name: admed_selfretr_audio_emb
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  batch_size: 32
+data:
+  num_workers: 4
+  test_size: 0.0
+graph:
+  mode: audio_emb_retrieval
+nodes:
+  audio_embedding:
+    model: attention_pool      # Whisper-encoder audio -> emb_dim, aligned to the text space
+    size: medium               # Whisper-medium encoder (matches v1's ASR)
+    dim: 2048                  # must match the text embedder's dim (jina_v4 = 2048)
+    model_path: null           # <- the trained attention-pool alignment weights
+    device: cuda:0
+  text_embedding:
+    model: jina_v4             # corpus side: embeds the transcription text (the "documents")
+    name: jinaai/jina-embeddings-v4
+    device: cuda:1
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: false
+    cache_transcriptions: false
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

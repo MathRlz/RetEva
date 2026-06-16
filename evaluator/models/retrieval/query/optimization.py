@@ -18,6 +18,7 @@ from .prompts import (
     get_hyde_prompt,
     get_decompose_prompt,
     get_multi_query_prompt,
+    get_self_rag_prompt,
 )
 
 logger = get_logger(__name__)
@@ -47,6 +48,88 @@ def _call_llm(
         [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         use_cache=use_cache,
     )
+
+
+def refine_query(
+    query: str,
+    doc_texts: List[str],
+    config: QueryOptimizationConfig,
+    method: str = "rewrite_with_context",
+    context_top_k: int = 3,
+) -> str:
+    """Reformulate ``query`` using the top retrieved documents as context — the
+    post-retrieval improvement step of an iterative RAG flow. ``method`` selects a refine
+    strategy (distinct from ``config.method``, which only carries the LLM settings here);
+    the strategies register in ``_REFINE_STRATEGIES`` (Phase 2 adds the others).
+
+    Unlike :func:`rewrite_query` (whose context only applies on internal iterations), the
+    refine node feeds the retrieved context to the FIRST and only call."""
+    if not doc_texts:
+        return query
+    contexts = doc_texts[: max(1, int(context_top_k))]
+    strategy = _REFINE_STRATEGIES.get(method)
+    if strategy is None:
+        return query
+    try:
+        return strategy(query, contexts, config)
+    except (RuntimeError, json.JSONDecodeError, KeyError) as exc:
+        logger.warning("Query refine failed: %s. Using the current query.", exc)
+        return query
+
+
+def _refine_rewrite_with_context(
+    query: str, contexts: List[str], config: QueryOptimizationConfig
+) -> str:
+    """LLM rewrite conditioned on the retrieved documents (reuses the rewrite prompt)."""
+    context_str = "\n".join(f"- {c}" for c in contexts)
+    system_prompt, user_prompt = get_rewrite_prompt(query, context_str)
+    refined = _call_llm(system_prompt, user_prompt, config)
+    return refined or query
+
+
+# Lightweight English stopwords for the deterministic relevance-feedback strategy.
+_RF_STOPWORDS = frozenset(
+    "the a an and or of to in for with on at by from is are was were be been being this "
+    "that these those it its as into than then them they their there here what which who "
+    "whom how when where why can could should would may might must do does did has have "
+    "had not no nor but if so such about over under between within without".split()
+)
+
+
+def _refine_relevance_feedback(
+    query: str, contexts: List[str], config: QueryOptimizationConfig
+) -> str:
+    """Deterministic (no-LLM) Rocchio-style expansion: append the most frequent salient
+    terms from the top retrieved documents that are not already in the query."""
+    import re
+    from collections import Counter
+
+    query_terms = {w for w in re.findall(r"[a-z0-9]+", query.lower())}
+    counts: Counter = Counter()
+    for ctx in contexts:
+        for w in re.findall(r"[a-z0-9]+", ctx.lower()):
+            if len(w) > 3 and w not in _RF_STOPWORDS and w not in query_terms:
+                counts[w] += 1
+    expansion = [w for w, _ in counts.most_common(int(getattr(config, "context_top_k", 3)) + 2)]
+    return (query + " " + " ".join(expansion)).strip() if expansion else query
+
+
+def _refine_self_rag_critique(
+    query: str, contexts: List[str], config: QueryOptimizationConfig
+) -> str:
+    """LLM critiques the retrieved docs' relevance and reformulates the query."""
+    context_str = "\n".join(f"- {c}" for c in contexts)
+    system_prompt, user_prompt = get_self_rag_prompt(query, context_str)
+    refined = _call_llm(system_prompt, user_prompt, config)
+    return refined or query
+
+
+# Refine-strategy registry: method name → (query, retrieved_doc_texts, config) → query.
+_REFINE_STRATEGIES = {
+    "rewrite_with_context": _refine_rewrite_with_context,
+    "relevance_feedback": _refine_relevance_feedback,
+    "self_rag_critique": _refine_self_rag_critique,
+}
 
 
 def rewrite_query(

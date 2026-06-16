@@ -55,7 +55,6 @@ model:
   text_emb_device: cuda:1
   text_emb_model_name: sentence-transformers/LaBSE
   text_emb_model_type: labse
-num_parallel_workers: 0
 output_dir: evaluation_results
 parallel_enabled: false
 resume_from_checkpoint: true

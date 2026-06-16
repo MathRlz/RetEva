@@ -1,0 +1,46 @@
+# Hani89 medical self-retrieval — v3: audio + text fusion.
+# Same "fake" retrieval target (vector DB = the text transcriptions). The query is embedded
+# BOTH ways — audio (attention_pool) and text (jina_v4, over the reference transcription) — and
+# the two query vectors are fused (embedding_fusion) into one before searching the text corpus.
+# embedding_fusion.enabled is what inserts the `fusion` node; without it audio_text_retrieval
+# collapses to audio-only. SONAR alternative: audio_embedding.model: sonar_speech (size: eng)
+# + text_embedding.model: sonar.
+experiment:
+  name: hani_selfretr_fusion
+  output_dir: evaluation_results
+dataset:
+  id: hani_medical
+  batch_size: 32
+  trace_limit: 300          # the HF train split is large; 0 = full
+data:
+  num_workers: 4
+graph:
+  mode: audio_text_retrieval
+embedding_fusion:
+  enabled: true               # fuse audio + text query vectors, then a single retrieval
+nodes:
+  audio_embedding:
+    model: attention_pool
+    size: medium
+    dim: 2048                 # must match the text embedder's dim (jina_v4 = 2048)
+    model_path: null          # <- the trained attention-pool alignment weights
+    device: cuda:0
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    device: cuda:1
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: false
+    cache_transcriptions: false
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

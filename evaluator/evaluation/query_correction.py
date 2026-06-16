@@ -142,29 +142,71 @@ def _llm_correct(texts: List[str], config: Any, client: Any) -> List[str]:
     return out
 
 
+# ── Corrector registry (§11, C7 groundwork) ───────────────────────────
+# A corrector is `(texts, config, client=None) → corrected texts` (same length).
+# Register a custom one with @register_corrector("my_method") and select it via the
+# query_correction node's `method` param — no core edit.
+
+_CORRECTOR_REGISTRY: Dict[str, Any] = {}
+
+
+def register_corrector(method: str):
+    """Decorator: register a corrector callable under ``method``."""
+
+    def decorator(fn):
+        _CORRECTOR_REGISTRY[method] = fn
+        return fn
+
+    return decorator
+
+
+def list_correctors() -> List[str]:
+    """Registered corrector method names (drives the node's `method` choices)."""
+    return sorted(_CORRECTOR_REGISTRY)
+
+
+@register_corrector("rule")
+def _rule_corrector(
+    texts: List[str], config: Any, client: Optional[Any] = None
+) -> List[str]:
+    compiled = _compile(_build_rules(config))
+    return (
+        [correct_text(t or "", compiled) for t in texts] if compiled else list(texts)
+    )
+
+
+@register_corrector("kb")
+def _kb_corrector(
+    texts: List[str], config: Any, client: Optional[Any] = None
+) -> List[str]:
+    terms = tuple(getattr(config, "kb_terms", None) or DEFAULT_KB_TERMS)
+    max_dist = int(getattr(config, "kb_max_distance", 1))
+    return [_kb_correct_text(t or "", terms, max_dist) for t in texts]
+
+
+@register_corrector("llm")
+def _llm_corrector(
+    texts: List[str], config: Any, client: Optional[Any] = None
+) -> List[str]:
+    if client is None:
+        from ..llm.client import LLMClient
+
+        client = LLMClient(config.to_llm_config(), component="query_correction")
+    return _llm_correct(texts, config, client)
+
+
 def correct_query_texts(
     texts: List[str], config: Any, client: Optional[Any] = None
 ) -> List[str]:
     """Correct a batch of query texts via the configured method. Returns a new same-length list."""
     method = getattr(config, "method", "rule")
-    if method == "rule":
-        compiled = _compile(_build_rules(config))
-        return (
-            [correct_text(t or "", compiled) for t in texts]
-            if compiled
-            else list(texts)
+    corrector = _CORRECTOR_REGISTRY.get(method)
+    if corrector is None:
+        known = ", ".join(list_correctors())
+        raise ValueError(
+            f"unsupported correction method {method!r}. Registered: {known}"
         )
-    if method == "kb":
-        terms = tuple(getattr(config, "kb_terms", None) or DEFAULT_KB_TERMS)
-        max_dist = int(getattr(config, "kb_max_distance", 1))
-        return [_kb_correct_text(t or "", terms, max_dist) for t in texts]
-    if method == "llm":
-        if client is None:
-            from ..llm.client import LLMClient
-
-            client = LLMClient(config.to_llm_config(), component="query_correction")
-        return _llm_correct(texts, config, client)
-    raise ValueError(f"unsupported correction method {method!r}")
+    return corrector(texts, config, client)
 
 
 def correction_diff(raw: List[str], corrected: List[str]) -> List[Dict[str, Any]]:

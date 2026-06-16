@@ -37,6 +37,21 @@ class ModelServiceProvider:
         self._tts_services: Dict[TTSKey, FactoryModelService] = {}
         self._llm_server_services: Dict[LLMServerKey, LLMServerService] = {}
 
+    @staticmethod
+    def _get_or_create(
+        bucket: MutableMapping[Any, FactoryModelService[Any]],
+        key: Any,
+        factory,
+        label: str,
+    ):
+        """Cached get-or-create over a service bucket: build the service on first
+        request for ``key`` (wrapping ``factory``), reuse it after."""
+        service = bucket.get(key)
+        if service is None:
+            service = FactoryModelService(factory, label=label)
+            bucket[key] = service
+        return service.get()
+
     def get_asr_model(
         self,
         model_type: str,
@@ -45,19 +60,17 @@ class ModelServiceProvider:
         device: str,
     ):
         key: ASRKey = (model_type, model_name, adapter_path, device)
-        service = self._asr_services.get(key)
-        if service is None:
-            service = FactoryModelService(
-                lambda: factory_create_asr_model(
-                    model_type=model_type,
-                    model_name=model_name,
-                    adapter_path=adapter_path,
-                    device=device,
-                ),
-                label=f"asr:{model_type}@{device}",
-            )
-            self._asr_services[key] = service
-        return service.get()
+        return self._get_or_create(
+            self._asr_services,
+            key,
+            lambda: factory_create_asr_model(
+                model_type=model_type,
+                model_name=model_name,
+                adapter_path=adapter_path,
+                device=device,
+            ),
+            f"asr:{model_type}@{device}",
+        )
 
     def get_text_embedding_model(
         self,
@@ -66,18 +79,16 @@ class ModelServiceProvider:
         device: str,
     ):
         key: TextKey = (model_type, model_name, device)
-        service = self._text_services.get(key)
-        if service is None:
-            service = FactoryModelService(
-                lambda: factory_create_text_embedding_model(
-                    model_type=model_type,
-                    model_name=model_name,
-                    device=device,
-                ),
-                label=f"text_embedding:{model_type}@{device}",
-            )
-            self._text_services[key] = service
-        return service.get()
+        return self._get_or_create(
+            self._text_services,
+            key,
+            lambda: factory_create_text_embedding_model(
+                model_type=model_type,
+                model_name=model_name,
+                device=device,
+            ),
+            f"text_embedding:{model_type}@{device}",
+        )
 
     def get_audio_embedding_model(
         self,
@@ -89,21 +100,19 @@ class ModelServiceProvider:
         device: str,
     ):
         key: AudioKey = (model_type, model_name, model_path, emb_dim, dropout, device)
-        service = self._audio_services.get(key)
-        if service is None:
-            service = FactoryModelService(
-                lambda: factory_create_audio_embedding_model(
-                    model_type=model_type,
-                    model_name=model_name,
-                    model_path=model_path,
-                    emb_dim=emb_dim,
-                    dropout=dropout,
-                    device=device,
-                ),
-                label=f"audio_embedding:{model_type}@{device}",
-            )
-            self._audio_services[key] = service
-        return service.get()
+        return self._get_or_create(
+            self._audio_services,
+            key,
+            lambda: factory_create_audio_embedding_model(
+                model_type=model_type,
+                model_name=model_name,
+                model_path=model_path,
+                emb_dim=emb_dim,
+                dropout=dropout,
+                device=device,
+            ),
+            f"audio_embedding:{model_type}@{device}",
+        )
 
     def get_reranker(
         self,
@@ -114,20 +123,18 @@ class ModelServiceProvider:
         max_length: int = 512,
     ):
         key: RerankerKey = (model_type, model_name, device, batch_size, max_length)
-        service = self._reranker_services.get(key)
-        if service is None:
-            service = FactoryModelService(
-                lambda: factory_create_reranker(
-                    model_type=model_type,
-                    model_name=model_name,
-                    device=device,
-                    batch_size=batch_size,
-                    max_length=max_length,
-                ),
-                label=f"reranker:{model_type}@{device}",
-            )
-            self._reranker_services[key] = service
-        return service.get()
+        return self._get_or_create(
+            self._reranker_services,
+            key,
+            lambda: factory_create_reranker(
+                model_type=model_type,
+                model_name=model_name,
+                device=device,
+                batch_size=batch_size,
+                max_length=max_length,
+            ),
+            f"reranker:{model_type}@{device}",
+        )
 
     def move_asr_model(
         self,
@@ -288,14 +295,13 @@ class ModelServiceProvider:
     def list_available_models(self) -> Dict[str, List[Dict[str, Any]]]:
         """List all available models with normalized metadata schema.
 
-        Fully registry-driven: importing ``evaluator.models`` triggers every
-        model's ``@register_*`` decorator (each family subpackage is imported in
-        ``models/__init__.py``), so a model registered by decorator alone shows
-        up here — no second edit in this file. Per-model UI hints
-        (``capabilities``, ``requires_path``, aliases, extras) come from
-        decorator metadata, not hardcoded maps.
+        Fully registry-driven: each ``ModelRegistry`` lazily imports its family
+        module on first lookup, which runs every model's ``@register_*``
+        decorator — so a model registered by decorator alone shows up here, no
+        second edit in this file. Per-model UI hints (``capabilities``,
+        ``requires_path``, aliases, extras) come from decorator metadata, not
+        hardcoded maps.
         """
-        import evaluator.models  # noqa: F401  (populates all registries)
         from ..models.registry import FAMILY_REGISTRIES
 
         # Fallback capability per family when a model declares none.
@@ -338,14 +344,12 @@ class ModelServiceProvider:
             config.language or "en",
             int(config.sample_rate),
         )
-        service = self._tts_services.get(key)
-        if service is None:
-            service = FactoryModelService(
-                lambda: self._create_tts_backend(config),
-                label=f"tts:{key[0]}",
-            )
-            self._tts_services[key] = service
-        return service.get()
+        return self._get_or_create(
+            self._tts_services,
+            key,
+            lambda: self._create_tts_backend(config),
+            f"tts:{key[0]}",
+        )
 
     def get_llm_server(self, config):
         """Get or create local LLM server service from LLMServerConfig."""

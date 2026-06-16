@@ -517,16 +517,16 @@ class CLAP(nn.Module):
 
 @register_audio_embedding_model('clap_style', requires_path=True, description='CLAP-style multimodal audio-text embedding model')
 class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
+    """Multimodal CLAP model that can encode both audio and text.
+
+    Implements both AudioEmbeddingModel and TextEmbeddingModel interfaces.
+    Uses the contrastive heads for retrieval (independent encoding).
+    """
 
     @dataclass
     class Params:
         model_path: str = ""
-    """
-    Multimodal CLAP model that can encode both audio and text.
-    Implements both AudioEmbeddingModel and TextEmbeddingModel interfaces.
-    Uses the contrastive heads for retrieval (independent encoding).
-    """
-    
+
     def __init__(self, 
                  model_path: str,
                  device: str = "cuda:0"):
@@ -576,8 +576,6 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
     def preprocess_audio(self, audio_list: List[torch.Tensor], 
                         sampling_rates: List[int]):
         """Preprocess audio using Whisper feature extractor."""
-        import torchaudio
-        
         processed_audio = []
         
         for idx in range(len(audio_list)):

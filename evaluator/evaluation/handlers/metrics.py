@@ -4,8 +4,8 @@ Registers the ``metrics`` and ``aggregate`` handlers at import time. The metric 
 is the one place metrics are computed (Phase 4 L3 removed the legacy double-compute path); the
 flat ``WER``/``MRR``/``Recall@k``/... keys are report-derived aliases (`_derive_bare_keys`).
 Diagnostics the report does not carry + the per-item intermediates the rag/judge stages consume
-are computed from the aligned per-item state. Raw ASR text is read from the ctx bus
-(`raw_query_text`, T4) — no ``RunState`` mirror.
+are computed from the aligned per-item state. WER/CER score the ASR hypothesis (`query_text`,
+immutable since Phase 4) — no separate raw_query_text snapshot.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from ...logging_config import get_logger
 from ..helpers import _search_results_to_keys
 from ..executor.state import RunState
 from ..result_schema import RunResults
-from .retrieval import _rehydrate_retrieved
+from .retrieval import _retrieved_from_bus
 from ...metrics import (
     first_relevant_rank_distribution,
     wer_recall_correlation,
@@ -32,6 +32,30 @@ from ...analysis.errors import analyze_retrieval_failures
 from ...analysis.significance import bootstrap_confidence_interval
 
 logger = get_logger(__name__)
+
+
+@register_stage_handler("measure", self_timed=True)
+def _stage_measure(s: RunState) -> None:
+    """The ``measure`` operator: dispatch by family / trace to the typed comparison,
+    report-assembler, trace-builder, or judge body (all unchanged; answer/trace/judge live
+    in the rag handlers, alignment in the embedding handlers)."""
+    from .embedding import _stage_embedding_alignment_metrics
+    from .rag import (
+        _stage_answer_judge,
+        _stage_answer_metrics,
+        _stage_build_query_traces,
+    )
+    from ._dispatch import dispatch_operator
+
+    return dispatch_operator("measure", {
+        "transcription_metrics": _stage_transcription_metrics,
+        "retrieval_metrics": _stage_retrieval_metrics,
+        "metrics": _stage_metrics,
+        "embedding_alignment_metrics": _stage_embedding_alignment_metrics,
+        "answer_metrics": _stage_answer_metrics,
+        "build_query_traces": _stage_build_query_traces,
+        "answer_judge": _stage_answer_judge,
+    }, s)
 
 # Bootstrap confidence-interval settings.
 BOOTSTRAP_ALPHA = 0.05
@@ -93,7 +117,69 @@ def _drop_ir_if_disabled(s: "RunState", scores: Dict[str, Any]) -> Dict[str, Any
     return {k: v for k, v in scores.items() if not _is_ir_metric(k)}
 
 
-@register_stage_handler("aggregate", self_timed=True)
+# ── Shared reduction utilities (M7): one registry-scoring + provenance + attach path
+# used by both the single-branch metrics node and the multi-branch aggregate. ──
+
+
+def _branch_scores(s: "RunState", artifacts: Dict[str, Any]) -> Dict[str, Any]:
+    """Score one branch's artifacts via the metric registry (collect_all), with the
+    B5 IR gate applied — the single scoring call both report paths share."""
+    from ..metric_registry import compute_metrics
+
+    return _drop_ir_if_disabled(s, compute_metrics(artifacts, collect_all=True))
+
+
+def _run_provenance(s: "RunState", dropped_by_branch: Optional[Dict] = None):
+    """The run's provenance block (seed, timing, drops, cache hit/miss, LLM cost)."""
+    from ..provenance import build_provenance
+
+    seed = getattr(getattr(s.config, "audio_synthesis", None), "seed", None)
+    return build_provenance(
+        s.config,
+        seed=seed,
+        timing=dict(s.stage_times),
+        dropped_by_branch=dropped_by_branch or None,
+        dropped_by_node=dict(s.drop_sink.by_node) or None,
+        cache_stats=_collect_cache_stats(s),
+        cost=_llm_cost_summary(),
+    )
+
+
+def _attach_report(results, report) -> None:
+    """Attach the keyed report + surface its flattened keys to the leaderboard (M4)."""
+    from ..aggregate import flatten_report
+
+    results["report"] = report
+    results.update(flatten_report(report))
+
+
+def _retrieval_wer_impact(
+    per_branch: Dict[str, Dict[str, Any]], baseline: str
+) -> Dict[str, Dict[str, Any]]:
+    """Retrieval-WER-Impact: recall lost vs the oracle baseline, per recall@k —
+    `Recall(baseline) − Recall(branch)` over id-aligned items (the degradation
+    ASR/correction imposes on retrieval). M3; extracted from the aggregate (M7)."""
+    base_scores = per_branch.get(baseline, {})
+    impact: Dict[str, Dict[str, Any]] = {}
+    for branch, scores in per_branch.items():
+        if branch == baseline:
+            continue
+        per_metric: Dict[str, Any] = {}
+        for name in scores:
+            if not name.startswith("recall@") or name not in base_scores:
+                continue
+            ids, base_vals, branch_vals = base_scores[name].align(scores[name])
+            if ids:
+                losses = [float(b) - float(v) for b, v in zip(base_vals, branch_vals)]
+                per_metric[name] = {
+                    "mean": sum(losses) / len(losses),
+                    "n": len(losses),
+                }
+        if per_metric:
+            impact[f"{branch}_vs_{baseline}"] = per_metric
+    return impact
+
+
 def _stage_aggregate(s: RunState) -> None:
     """Terminal report builder (W6/A9): per-branch metrics + cross-branch deltas.
 
@@ -107,8 +193,15 @@ def _stage_aggregate(s: RunState) -> None:
 
     relevant = _ctx_first(s, "relevant_docs")
     reference = _ctx_first(s, "reference_text")
-    # Per-branch query_text (the effective query feeding retrieval) for WER/CER. Prefer a
-    # correction producer over asr within a branch; remember the lone shared producer (M1).
+    # ASR-quality metrics pair against the spoken transcription when the asr node
+    # published it (M1c-3 reconciliation of the M1a trap); reference_text (question)
+    # remains the fallback — identical on TTS-bridge datasets where spoken == question.
+    ref_transcription = _ctx_first(s, "reference_transcription")
+    if isinstance(ref_transcription, ItemSet):
+        reference = ref_transcription
+    # Per-branch query_text = the branch's ASR hypothesis for WER/CER. query_text is
+    # immutable (correction/optimization emit distinct names) so the only producers are
+    # asr / dataset_source — no correction preference needed (Phase 4).
     qtext_by_branch: Dict[str, ItemSet] = {}
     shared_qtext: Optional[ItemSet] = None
     qtext_slots = [(p, n) for p, n in s.ctx.slots() if n == "query_text"]
@@ -117,23 +210,8 @@ def _stage_aggregate(s: RunState) -> None:
         if not isinstance(val, ItemSet):
             continue
         shared_qtext = val
-        b = _branch_of(pid)
-        if b not in qtext_by_branch or "correction" in pid:
-            qtext_by_branch[b] = val
+        qtext_by_branch.setdefault(_branch_of(pid), val)
     only_shared = shared_qtext if len(qtext_slots) == 1 else None
-
-    # Raw (pre-correction) ASR text per branch, for raw_wer/raw_cer (L1). Published by the
-    # asr node; never republished by correction, so it stays the uncorrected hypothesis.
-    raw_qtext_by_branch: Dict[str, ItemSet] = {}
-    shared_raw_qtext: Optional[ItemSet] = None
-    raw_slots = [(p, n) for p, n in s.ctx.slots() if n == "raw_query_text"]
-    for pid, _ in raw_slots:
-        val = s.ctx.get(pid, "raw_query_text")
-        if not isinstance(val, ItemSet):
-            continue
-        shared_raw_qtext = val
-        raw_qtext_by_branch[_branch_of(pid)] = val
-    only_shared_raw = shared_raw_qtext if len(raw_slots) == 1 else None
 
     # Items dropped per-item upstream (T1) are excluded from the keyed report so a
     # placeholder/empty result never reaches a metric — the report measures survivors only.
@@ -159,15 +237,11 @@ def _stage_aggregate(s: RunState) -> None:
             artifacts["relevant_docs"] = relevant
         if reference is not None:
             artifacts["reference_text"] = reference
-            # query_text for WER/CER: this branch's own, else the lone shared producer.
+            # query_text for WER/CER: this branch's ASR hypothesis, else the lone shared one.
             qt = qtext_by_branch.get(branch, only_shared)
             if qt is not None:
                 artifacts["query_text"] = qt
-            # raw_query_text for raw_wer/raw_cer (L1): branch's own asr output, else shared.
-            rqt = raw_qtext_by_branch.get(branch, only_shared_raw)
-            if rqt is not None:
-                artifacts["raw_query_text"] = rqt
-        scores = _drop_ir_if_disabled(s, compute_metrics(artifacts, collect_all=True))
+        scores = _branch_scores(s, artifacts)
         if scores:
             per_branch[branch] = scores
     if not per_branch:
@@ -177,26 +251,17 @@ def _stage_aggregate(s: RunState) -> None:
     baseline = next(
         (b for b in ("ref", "main") if b in per_branch), sorted(per_branch)[0]
     )
-    from ..provenance import build_provenance
-
-    seed = getattr(getattr(s.config, "audio_synthesis", None), "seed", None)
     # Per-branch drops vs the full run (union of all branches' query ids): which items each
     # branch lost, so the shrinking paired denominator (S1) is auditable at report level (S2).
     full_ids: set = set().union(*branch_ids.values()) if branch_ids else set()
     dropped_by_branch = {
         b: sorted(full_ids - ids) for b, ids in branch_ids.items() if full_ids - ids
     }
-    provenance = build_provenance(
-        s.config,
-        seed=seed,
-        timing=dict(s.stage_times),
-        dropped_by_branch=dropped_by_branch or None,
-        dropped_by_node=dict(s.drop_sink.by_node) or None,
-        cache_stats=_collect_cache_stats(s),
-        cost=_llm_cost_summary(),
-    )
     report = build_report(
-        per_branch, baseline=baseline, provenance=provenance, with_ci=True
+        per_branch,
+        baseline=baseline,
+        provenance=_run_provenance(s, dropped_by_branch),
+        with_ci=True,
     )
     # Cross-stage: per-branch Pearson(WER, Recall@5) — does worse ASR cost retrieval? (M2)
     from ...metrics.diagnostics import wer_recall_correlation
@@ -212,34 +277,12 @@ def _stage_aggregate(s: RunState) -> None:
                 "mean": corr,
                 "n": len(ids),
             }
-    # Retrieval-WER-Impact: recall lost vs the oracle baseline = Recall(ref) − Recall(branch),
-    # per recall@k (the degradation ASR/correction imposes on retrieval). M3.
-    base_scores = per_branch.get(baseline, {})
-    impact: Dict[str, Dict[str, Any]] = {}
-    for branch, scores in per_branch.items():
-        if branch == baseline:
-            continue
-        per_metric: Dict[str, Any] = {}
-        for name in scores:
-            if not name.startswith("recall@") or name not in base_scores:
-                continue
-            ids, base_vals, branch_vals = base_scores[name].align(scores[name])
-            if ids:
-                losses = [float(b) - float(v) for b, v in zip(base_vals, branch_vals)]
-                per_metric[name] = {
-                    "mean": sum(losses) / len(losses),
-                    "n": len(losses),
-                }
-        if per_metric:
-            impact[f"{branch}_vs_{baseline}"] = per_metric
+    impact = _retrieval_wer_impact(per_branch, baseline)
     if impact:
         report["retrieval_wer_impact"] = impact
     if s.disable_ir_metrics and s.join_warning:
         report["join_warning"] = s.join_warning  # B5: why IR metrics are absent
-    s.results["report"] = report
-    from ..aggregate import flatten_report
-
-    s.results.update(flatten_report(report))  # surface to leaderboard (M4)
+    _attach_report(s.results, report)
     logger.info(
         "aggregate: %d branch(es) %s, baseline=%s",
         len(per_branch),
@@ -257,28 +300,28 @@ def _record_model_info(results: "RunResults", s: RunState) -> None:
     elif s.mode == "audio_text_retrieval":
         results["audio_embedder"] = s.audio_embedding_pipeline.model.name()
         results["text_embedder"] = s.text_embedding_pipeline.model.name()
-        try:
-            alignment = embedding_alignment(
-                s.audio_emb_for_alignment, s.text_emb_for_alignment
+        # Computed at the source (the fusion node) and published as an artifact (M1d-2).
+        alignment = _ctx_first(s, "embedding_alignment")
+        if alignment is not None:
+            results["embedding_alignment"] = alignment
+            logger.info(
+                "Embedding alignment - cosine mean=%.4f std=%.4f",
+                alignment["audio_text_cosine_mean"],
+                alignment["audio_text_cosine_std"],
             )
-            if alignment is not None:
-                results["embedding_alignment"] = alignment
-                logger.info(
-                    "Embedding alignment - cosine mean=%.4f std=%.4f",
-                    alignment["audio_text_cosine_mean"],
-                    alignment["audio_text_cosine_std"],
-                )
-        except Exception as exc:
-            logger.warning("Embedding alignment computation failed: %s", exc)
 
 
-def _raw_query_text(s: RunState) -> list:
-    """Raw (pre-correction) ASR text from the bus (``raw_query_text``, published by the asr
-    node, T4). Falls back to ``query_text`` for non-ASR modes / direct callers where the asr
-    node didn't publish it (there raw == effective query)."""
-    return list(
-        s.get_artifact("raw_query_text", default=s.get_artifact("query_text", []))
-    )
+def _asr_hypothesis(s: RunState) -> list:
+    """The ASR hypothesis from the bus (``query_text``). It is immutable — correction /
+    optimization publish distinct names — so this is always the un-rewritten ASR output
+    WER/CER score against (no raw_query_text snapshot needed since Phase 4)."""
+    return list(s.get_artifact("query_text", default=[]))
+
+
+def _reference_transcriptions(s: RunState) -> list:
+    """The spoken-transcription GT from the bus (`reference_transcription`, published by
+    the asr / audio_embedding node, M1c-3; bus-only since M1d-2)."""
+    return list(s.get_artifact("reference_transcription", default=[]))
 
 
 def _asr_item_scores(s: RunState):
@@ -287,7 +330,7 @@ def _asr_item_scores(s: RunState):
     cer_scores: List[float] = []
     if s.mode not in ("asr_text_retrieval", "asr_only"):
         return wer_scores, cer_scores
-    for gt_text, hyp_text in zip(s.all_ground_truth, _raw_query_text(s)):
+    for gt_text, hyp_text in zip(_reference_transcriptions(s), _asr_hypothesis(s)):
         wer_scores.append(word_error_rate(gt_text, hyp_text))
         cer_scores.append(character_error_rate(gt_text, hyp_text))
     return wer_scores, cer_scores
@@ -325,7 +368,7 @@ def _derive_bare_keys(results: "RunResults", scores: Dict[str, Any], mode: str) 
         results[key] = (sum(vals) / len(vals)) if vals else 0.0
 
 
-def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores) -> None:
+def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores, retrieved_keys) -> None:
     """Retrieval diagnostics not carried by the registry report (correlation, rank
     distribution, failure rate/analysis, flat CIs). Same functions/values as the old path.
     """
@@ -334,24 +377,24 @@ def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores) -> None:
         results["wer_recall5_correlation"] = corr
 
     rank_dist, failure_rate = first_relevant_rank_distribution(
-        s.all_retrieved, all_relevant
+        retrieved_keys, all_relevant
     )
     results["first_relevant_rank_distribution"] = rank_dist
     results["retrieval_failure_rate"] = failure_rate
 
     if s.trace_limit > 0:
         _attach_failure_analysis(
-            results, s, all_relevant, rank_dist, recall5, wer_scores
+            results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
         )
 
-    if s.compute_confidence_intervals and len(s.all_retrieved) >= MIN_SAMPLES_FOR_CI:
+    if s.compute_confidence_intervals and len(retrieved_keys) >= MIN_SAMPLES_FOR_CI:
         ci_inputs = {
             "MRR": [
-                reciprocal_rank(r, rel) for r, rel in zip(s.all_retrieved, all_relevant)
+                reciprocal_rank(r, rel) for r, rel in zip(retrieved_keys, all_relevant)
             ],
             "Recall@5": recall5,
             "NDCG@5": [
-                ndcg_at_k(r, rel, 5) for r, rel in zip(s.all_retrieved, all_relevant)
+                ndcg_at_k(r, rel, 5) for r, rel in zip(retrieved_keys, all_relevant)
             ],
         }
         for name, ci_scores in ci_inputs.items():
@@ -364,19 +407,21 @@ def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores) -> None:
 
 
 def _attach_failure_analysis(
-    results, s, all_relevant, rank_dist, recall5, wer_scores
+    results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
 ) -> None:
     """Retrieval failure-mode decomposition (only when traces are enabled)."""
     query_texts = (
-        s.all_hypotheses if s.mode == "asr_text_retrieval" else s.all_ground_truth
+        s.get_artifact("query_text", default=[])
+        if s.mode == "asr_text_retrieval"
+        else _reference_transcriptions(s)
     )
     details = [
         {
             "query": query_texts[i],
-            "retrieved": s.all_retrieved[i],
+            "retrieved": retrieved_keys[i],
             "relevant": all_relevant[i],
         }
-        for i in range(len(s.all_retrieved))
+        for i in range(len(retrieved_keys))
     ]
     analysis = analyze_retrieval_failures({"details": details}, top_k=s.k)
     if wer_scores and len(wer_scores) == len(recall5):
@@ -399,16 +444,48 @@ def _attach_failure_analysis(
     results["retrieval_failure_analysis"] = analysis
 
 
-@register_stage_handler("metrics", self_timed=True)
-def _stage_metrics(s: RunState) -> None:
-    """Terminal node: registry-native metrics -> results (single scalar source, L3).
+def _stage_transcription_metrics(s: RunState) -> None:
+    """Comparison node: the ASR hypothesis (``query_text``) vs the spoken GT
+    (``reference_transcription``) → per-item WER/CER. Sets ``s.wer_scores``/``s.cer_scores``
+    (read by the report + the rag/judge/trace stages) and publishes a summary artifact."""
+    s.wer_scores, s.cer_scores = _asr_item_scores(s)
+    n = len(s.wer_scores)
+    s.put_artifact(
+        "transcription_scores",
+        {
+            "wer_mean": (sum(s.wer_scores) / n) if n else None,
+            "cer_mean": (sum(s.cer_scores) / n) if n else None,
+            "n": n,
+        },
+    )
 
-    The metric registry (via ``_attach_registry_report`` -> ``_derive_bare_keys``) is the
-    single place the scalar metrics are computed; the flat WER/MRR/Recall@k/... keys are
-    report-derived aliases. Per-item intermediates the rag/judge stages consume + diagnostics
-    the report does not carry are computed here from the aligned per-item state (same
-    functions/values as the removed legacy path)."""
-    _rehydrate_retrieved(s)
+
+def _stage_retrieval_metrics(s: RunState) -> None:
+    """Comparison node: the retrieved docs vs the GT relevance (``relevant_docs``) →
+    per-item recall@5 + the aligned relevance the IR diagnostics / answer-gen / judge read
+    (``s.metrics_all_relevant`` / ``s.per_query_recall5``)."""
+    _results_with_scores, retrieved_keys, _ids = _retrieved_from_bus(s)
+    all_relevant = list(s.get_artifact("relevant_docs", default=[])) or [
+        {str(gt): 1} for gt in _reference_transcriptions(s)
+    ]
+    recall5 = [recall_at_k(r, rel, 5) for r, rel in zip(retrieved_keys, all_relevant)]
+    s.metrics_all_relevant = all_relevant
+    s.per_query_recall5 = recall5
+    n = len(recall5)
+    s.put_artifact(
+        "retrieval_scores",
+        {"recall@5_mean": (sum(recall5) / n) if n else None, "n": n},
+    )
+
+
+def _stage_metrics(s: RunState) -> None:
+    """Report assembler: registry-native scalar report → results (single scalar source, L3).
+
+    No longer a god-node — the per-comparison computation lives in the typed
+    ``transcription_metrics`` / ``retrieval_metrics`` nodes (Phase 5); this node assembles
+    the report from the registry (the flat WER/MRR/Recall@k/... keys) + the per-item
+    intermediates those nodes set. Numerically identical to the former combined node."""
+    _results_with_scores, retrieved_keys, _ids = _retrieved_from_bus(s)
     _t_phase = time.perf_counter()
     s.cb("phase_4_metrics", 0, s.total, "Computing metrics")
 
@@ -419,30 +496,28 @@ def _stage_metrics(s: RunState) -> None:
 
     _record_model_info(results, s)
 
-    # Per-item intermediates consumed by the answer-gen / judge / trace stages.
-    s.wer_scores, s.cer_scores = _asr_item_scores(s)
-    if s.mode != "asr_only":
-        all_relevant = s.all_relevance or [{str(gt): 1} for gt in s.all_ground_truth]
-        recall5 = [
-            recall_at_k(r, rel, 5) for r, rel in zip(s.all_retrieved, all_relevant)
-        ]
-        s.metrics_all_relevant = all_relevant
-        s.per_query_recall5 = recall5
-
     # Registry report + report-derived flat bare keys (the single scalar source).
-    _attach_registry_report(s, results)
+    _attach_registry_report(s, results, retrieved_keys)
 
-    # Diagnostics the registry report does not carry (computed from per-item state).
-    if s.mode != "asr_only" and s.all_retrieved:
+    # Diagnostics the registry report does not carry (from the per-item state the typed
+    # metric nodes set upstream).
+    if s.mode != "asr_only" and retrieved_keys:
         _ir_diagnostics(
-            results, s, s.metrics_all_relevant, s.per_query_recall5, s.wer_scores
+            results,
+            s,
+            s.metrics_all_relevant,
+            s.per_query_recall5,
+            s.wer_scores,
+            retrieved_keys,
         )
 
     s.stage_times["metrics_s"] = time.perf_counter() - _t_phase
     s.results = results
 
 
-def _attach_registry_report(s: RunState, results: "RunResults") -> None:
+def _attach_registry_report(
+    s: RunState, results: "RunResults", retrieved_keys: list
+) -> None:
     """Compute metrics via the registry + aggregate and attach a keyed ``report`` (W4b).
 
     Builds keyed ``ItemSet``s from the run's aligned per-item state and runs the metric
@@ -450,7 +525,13 @@ def _attach_registry_report(s: RunState, results: "RunResults") -> None:
     (parity-proven), but keyed + branch-shaped — the basis for cross-branch deltas (W6).
     Additive: the legacy result keys are untouched. No-op when query ids do not align.
     """
-    ids = [str(i) for i in (s.all_query_ids or [])]
+    # Per-item identity rides the keyed bus artifacts (M1d-2): the effective query text
+    # in ASR modes, the spoken reference in audio modes. A plain (non-keyed) publish
+    # means ids did not align — same no-op condition as the legacy all_query_ids check.
+    keyed = s.keyed_items("query_text") or s.keyed_items("reference_transcription")
+    if keyed is None:
+        return
+    ids = [str(i) for i in keyed.ids]
     if not ids or len(set(ids)) != len(ids):
         return
     from ..item_set import ItemSet
@@ -467,18 +548,23 @@ def _attach_registry_report(s: RunState, results: "RunResults") -> None:
         if values is not None and len(values) >= n:
             artifacts[name] = ItemSet(ids, list(values)[:n])
 
+    # Bus-first: the ASR hypothesis in ASR modes (query_text is immutable since Phase 4, so
+    # this is the un-rewritten output `wer`/`cer` score); the spoken reference in audio modes
+    # (legacy parity — there the "query" scored by text metrics is the GT).
+    reference = _reference_transcriptions(s)
     query_text = (
-        s.all_hypotheses if s.mode == "asr_text_retrieval" else s.all_ground_truth
+        s.get_artifact("query_text")
+        if s.mode == "asr_text_retrieval"
+        else reference
     )
     _keyed(query_text, "query_text")
-    # Raw ASR text for raw_wer/raw_cer (L1). Read the pre-correction snapshot from the bus
-    # (raw_query_text, published by the asr node, T4); falls back to the effective query for
-    # non-ASR modes / direct callers (where raw == query_text).
-    _keyed(_raw_query_text(s) or query_text, "raw_query_text")
-    _keyed(s.all_ground_truth, "reference_text")
-    if s.all_retrieved:
-        _keyed(s.all_retrieved, "retrieved")
-    relevance = s.all_relevance or [{str(gt): 1} for gt in s.all_ground_truth]
+    # ASR-quality reference = the spoken transcription, never question_text (M1a guard).
+    _keyed(reference, "reference_text")
+    if retrieved_keys:
+        _keyed(retrieved_keys, "retrieved")
+    relevance = list(s.get_artifact("relevant_docs", default=[])) or [
+        {str(gt): 1} for gt in reference
+    ]
     if "retrieved" in artifacts:
         _keyed(relevance, "relevant_docs")
     if not artifacts:
@@ -490,22 +576,10 @@ def _attach_registry_report(s: RunState, results: "RunResults") -> None:
             name: items.filter(lambda i, _v: i not in dropped_ids)
             for name, items in artifacts.items()
         }
-    scores = _drop_ir_if_disabled(s, compute_metrics(artifacts, collect_all=True))
+    scores = _branch_scores(s, artifacts)
     if scores:
         _derive_bare_keys(results, scores, s.mode)
-        from ..provenance import build_provenance
-
-        seed = getattr(getattr(s.config, "audio_synthesis", None), "seed", None)
-        provenance = build_provenance(
-            s.config,
-            seed=seed,
-            timing=dict(s.stage_times),
-            dropped_by_node=dict(s.drop_sink.by_node) or None,
-            cache_stats=_collect_cache_stats(s),
-            cost=_llm_cost_summary(),
+        report = build_report(
+            {s.mode: scores}, provenance=_run_provenance(s), with_ci=True
         )
-        report = build_report({s.mode: scores}, provenance=provenance, with_ci=True)
-        results["report"] = report
-        from ..aggregate import flatten_report
-
-        results.update(flatten_report(report))  # surface to leaderboard (M4)
+        _attach_report(results, report)

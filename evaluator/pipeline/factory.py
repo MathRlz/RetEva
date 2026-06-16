@@ -1,7 +1,6 @@
 from typing import Optional, TYPE_CHECKING
 from ..storage.cache import CacheManager
 from ..models import (
-    MultimodalClapStyleModel,
     create_asr_model,
     create_text_embedding_model,
     create_audio_embedding_model,
@@ -43,6 +42,59 @@ def create_reranker_from_config(vector_db_config, service_provider: Optional["Mo
         model_name=vector_db_config.reranker_model,
         device=vector_db_config.reranker_device,
     )
+
+
+# vector_db node param → VectorDBConfig field (per-node store override surface;
+# `collection` fans out to both backends' fields — only the active one is read).
+_VECTOR_DB_PARAM_FIELDS = {
+    "store": ("type",),
+    "gpu_id": ("gpu_id",),
+    "path": ("chromadb_path",),
+    "url": ("qdrant_url",),
+    "collection": ("chromadb_collection_name", "qdrant_collection_name"),
+}
+
+
+def effective_vector_db_config(vector_db_config, params):
+    """Global ``vector_db`` config overlaid with a ``vector_db`` node's params.
+
+    Transient — the global config is never mutated (precedent: ``_node_reranking``).
+    Empty/absent params fall back to the global field.
+    """
+    from dataclasses import replace
+
+    overrides = {}
+    for param, fields in _VECTOR_DB_PARAM_FIELDS.items():
+        value = (params or {}).get(param)
+        if value in (None, ""):
+            continue
+        if param == "gpu_id":
+            value = int(value)
+        for field in fields:
+            overrides[field] = value
+    return replace(vector_db_config, **overrides) if overrides else vector_db_config
+
+
+def check_graph_backend_dependencies(config) -> None:
+    """Pre-flight: validate optional store backends for every ``vector_db`` node.
+
+    A per-node ``store`` override can name chromadb/qdrant even when the global
+    ``vector_db.type`` doesn't — fail before any model loads, not mid-run.
+    """
+    from .stage_graph import build_graph_for_config
+
+    try:
+        graph = build_graph_for_config(config)
+    except Exception:
+        return  # graph problems surface in their own validation path
+    from .graph.operators import node_kind
+
+    for node in graph.nodes:
+        if node_kind(node.stage, node.params) != "vector_db":
+            continue
+        check_backend_dependencies(
+            effective_vector_db_config(config.vector_db, node.params or {})
+        )
 
 
 def check_backend_dependencies(vector_db_config) -> None:
@@ -233,53 +285,64 @@ def create_pipeline_from_config(
     # Shorthand helpers
     mcfg = config.model
 
-    def _make_asr():
-        dev = get_device("asr", mcfg.asr_model_type, mcfg.asr_device)
+    def _build(model_category, model_type, config_device, from_provider, from_factory):
+        """Resolve device (pool or config) then build via the shared service provider
+        when present, else the standalone factory. Single place the provider-vs-factory
+        fallback + device allocation live; the per-model arg lists stay explicit below."""
+        dev = get_device(model_category, model_type, config_device)
         if service_provider is not None:
-            return service_provider.get_asr_model(
-                mcfg.asr_model_type, mcfg.asr_model_name,
-                mcfg.asr_adapter_path, dev,
-            )
-        return create_asr_model(
-            mcfg.asr_model_type,
-            model_name=mcfg.asr_model_name,
-            adapter_path=mcfg.asr_adapter_path,
-            device=dev,
-            size=mcfg.asr_size,
-            **mcfg.asr_params,
+            return from_provider(dev)
+        return from_factory(dev)
+
+    def _make_asr():
+        return _build(
+            "asr", mcfg.asr_model_type, mcfg.asr_device,
+            lambda dev: service_provider.get_asr_model(
+                mcfg.asr_model_type, mcfg.asr_model_name, mcfg.asr_adapter_path, dev,
+            ),
+            lambda dev: create_asr_model(
+                mcfg.asr_model_type,
+                model_name=mcfg.asr_model_name,
+                adapter_path=mcfg.asr_adapter_path,
+                device=dev,
+                size=mcfg.asr_size,
+                **mcfg.asr_params,
+            ),
         )
 
     def _make_text_emb():
-        dev = get_device("text_embedding", mcfg.text_emb_model_type, mcfg.text_emb_device)
-        if service_provider is not None:
-            return service_provider.get_text_embedding_model(
+        return _build(
+            "text_embedding", mcfg.text_emb_model_type, mcfg.text_emb_device,
+            lambda dev: service_provider.get_text_embedding_model(
                 mcfg.text_emb_model_type, mcfg.text_emb_model_name, dev,
-            )
-        return create_text_embedding_model(
-            mcfg.text_emb_model_type,
-            model_name=mcfg.text_emb_model_name,
-            device=dev,
-            size=mcfg.text_emb_size,
-            **mcfg.text_emb_params,
+            ),
+            lambda dev: create_text_embedding_model(
+                mcfg.text_emb_model_type,
+                model_name=mcfg.text_emb_model_name,
+                device=dev,
+                size=mcfg.text_emb_size,
+                **mcfg.text_emb_params,
+            ),
         )
 
     def _make_audio_emb():
-        dev = get_device("audio_embedding", mcfg.audio_emb_model_type, mcfg.audio_emb_device)
-        if service_provider is not None:
-            return service_provider.get_audio_embedding_model(
+        return _build(
+            "audio_embedding", mcfg.audio_emb_model_type, mcfg.audio_emb_device,
+            lambda dev: service_provider.get_audio_embedding_model(
                 mcfg.audio_emb_model_type, mcfg.audio_emb_model_name,
                 mcfg.audio_emb_model_path, mcfg.audio_emb_dim,
                 mcfg.audio_emb_dropout, dev,
-            )
-        return create_audio_embedding_model(
-            mcfg.audio_emb_model_type,
-            model_name=mcfg.audio_emb_model_name,
-            model_path=mcfg.audio_emb_model_path,
-            emb_dim=mcfg.audio_emb_dim,
-            dropout=mcfg.audio_emb_dropout,
-            device=dev,
-            size=mcfg.audio_emb_size,
-            **mcfg.audio_emb_params,
+            ),
+            lambda dev: create_audio_embedding_model(
+                mcfg.audio_emb_model_type,
+                model_name=mcfg.audio_emb_model_name,
+                model_path=mcfg.audio_emb_model_path,
+                emb_dim=mcfg.audio_emb_dim,
+                dropout=mcfg.audio_emb_dropout,
+                device=dev,
+                size=mcfg.audio_emb_size,
+                **mcfg.audio_emb_params,
+            ),
         )
 
     # Create models based on mode
@@ -288,6 +351,10 @@ def create_pipeline_from_config(
         retrieval_pipeline = _create_retrieval_pipeline(config, cache_manager, reranker)
 
     elif mode == "audio_text_retrieval":
+        # Local import: keeps the a2e family (torch/transformers-heavy) lazy
+        # for every other pipeline mode.
+        from ..models.a2e import MultimodalClapStyleModel
+
         audio_emb_model = _make_audio_emb()
 
         is_multimodal = (

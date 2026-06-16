@@ -2,9 +2,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from .llm_backend import LLMBackendMixin
+
 
 @dataclass
-class AnswerGenerationConfig:
+class AnswerGenerationConfig(LLMBackendMixin):
     """Configuration for RAG answer generation (pipeline Phase 4.5).
 
     Attributes:
@@ -54,21 +56,3 @@ class AnswerGenerationConfig:
     local_server_url: Optional[str] = None
     compute_rouge: bool = True
     reference_metadata_field: str = "long_answer"
-
-    def get_api_base(self) -> str:
-        """Return effective API base URL (local server takes precedence)."""
-        if self.use_local_server and self.local_server_url:
-            return self.local_server_url
-        return self.api_base
-
-    def to_llm_config(self) -> "LLMConfig":
-        from .llm_backend import LLMConfig
-        return LLMConfig(
-            model=self.model,
-            api_base=self.api_base,
-            api_key_env=self.api_key_env,
-            temperature=self.temperature,
-            timeout_s=self.timeout_s,
-            use_local_server=self.use_local_server,
-            local_server_url=self.local_server_url,
-        )

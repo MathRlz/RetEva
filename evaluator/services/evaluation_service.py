@@ -165,25 +165,11 @@ def _run_core(
         load_info = {}
     logger = get_logger(__name__)
 
-    # Seed all RNGs + request deterministic kernels at the very start, so the whole run
-    # (synthesis, augmentation, models) is reproducible; recorded in report.provenance (S5).
-    from ..evaluation.provenance import set_global_determinism
+    # Pre-flight chain (evaluation/validation.py): determinism seed, LLM budget,
+    # embedding-space typing (config + per-node graph), optional store backends.
+    from ..evaluation.validation import run_pre_flight
 
-    run_seed = getattr(getattr(config, "audio_synthesis", None), "seed", None)
-    flags = set_global_determinism(run_seed)
-    logger.info("determinism: %s", flags)
-
-    # Reset the LLM cost accumulator for this run + apply the optional token budget (T8).
-    from ..llm.cost import COST
-
-    budget = int(getattr(getattr(config, "llm", None), "max_tokens_budget", 0) or 0)
-    COST.reset(budget_tokens=budget or None)
-
-    # Fail fast on an embedding-space mismatch (dense retrieval dotting vectors from
-    # different spaces → meaningless scores) before any model loads (A2).
-    from ..models.embedding_space import validate_embedding_spaces
-
-    validate_embedding_spaces(config)
+    run_pre_flight(config)
 
     # Prepare the dataset (load + TTS-synthesize missing query audio) BEFORE building the
     # model pipelines, so a TTS model is loaded and fully offloaded before the ASR/embedding

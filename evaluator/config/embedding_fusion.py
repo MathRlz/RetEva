@@ -52,6 +52,9 @@ class EmbeddingFusionConfig:
         ... )
     """
     enabled: bool = False
+    # embedding = fuse the audio + text VECTORS into one retrieval (the fusion node);
+    # result = retrieve each stream separately, then fuse the RANKED results (result_fusion).
+    level: str = "embedding"  # embedding | result
     audio_weight: float = 0.5
     text_weight: float = 0.5
     fusion_method: str = "weighted"  # weighted | concatenate | max_pool | average
@@ -67,6 +70,10 @@ class EmbeddingFusionConfig:
         if not 0.0 <= self.text_weight <= 1.0:
             raise ValueError(f"text_weight must be in [0, 1], got {self.text_weight}")
         
+        if self.level not in {"embedding", "result"}:
+            raise ValueError(
+                f"embedding_fusion.level must be 'embedding' or 'result', got {self.level}"
+            )
         valid_methods = {"weighted", "concatenate", "max_pool", "average"}
         if self.fusion_method not in valid_methods:
             raise ValueError(

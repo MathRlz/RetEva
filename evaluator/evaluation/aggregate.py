@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
+from ..logging_config import get_logger
 from .item_set import ItemSet
+
+logger = get_logger(__name__)
 
 MIN_SAMPLES_FOR_CI = 20
 _BOOTSTRAP_ALPHA = 0.05
@@ -32,8 +35,9 @@ def reduce_scores(item_scores: ItemSet, *, with_ci: bool = False) -> Dict[str, A
             out["ci"] = bootstrap_confidence_interval(
                 values, alpha=_BOOTSTRAP_ALPHA, n_bootstrap=_BOOTSTRAP_ITERS
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("bootstrap CI failed (n=%d): %s", n, exc)
+            out["ci_error"] = str(exc)
     return out
 
 
@@ -110,15 +114,17 @@ def _enrich_deltas(deltas: Dict[str, Dict[str, Any]]) -> None:
             d["cohens_d"] = (d["mean_delta"] / sd) if sd > 0 else 0.0
             try:
                 d["ci"] = list(bootstrap_confidence_interval(diffs, random_state=0))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("delta CI failed for %s/%s: %s", pair, name, exc)
+                d["ci_error"] = str(exc)
             try:
                 _, p = wilcoxon_test(diffs, [0.0] * n)
                 d["p_value"] = float(p)
                 pkeys.append((pair, name))
                 pvals.append(float(p))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("paired test failed for %s/%s: %s", pair, name, exc)
+                d["p_value_error"] = str(exc)
     if pvals:
         for (pair, name), q in zip(pkeys, benjamini_hochberg(pvals)):
             deltas[pair][name]["p_value_fdr"] = q

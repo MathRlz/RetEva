@@ -83,7 +83,7 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
     ) and branched
     # Persistent per-branch state: the "main" (shared-prefix) branch runs on the base; each
     # divergent branch carries its own _NodeView across all levels, so a branch's positional
-    # accumulators (all_retrieved …) survive level→level for its own metrics node (T5).
+    # node-scoped control attrs survive level→level for its own metrics node (T5).
     views: Dict[str, Any] = {}
 
     def _ctx_for(node: Any) -> Any:

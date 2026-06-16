@@ -11,13 +11,47 @@ from .io import _file_checksum
 
 logger = logging.getLogger(__name__)
 
+# Manifest *index* schema version, stored in the SQLite file's PRAGMA user_version. Distinct
+# from cache_keys.CACHE_SCHEMA_VERSION, which versions the *content* keys (a key mismatch is a
+# clean miss). This versions the table layout: bump only on a NON-additive change (a new
+# column migrates in place below). A manifest stamped NEWER than this is rejected — the code
+# can't assume it understands that layout, so reading it could silently mis-resolve paths.
+_MANIFEST_SCHEMA_VERSION = 1
+
+
+class CacheManifestError(RuntimeError):
+    """The on-disk cache manifest is a newer, incompatible schema than this evaluator."""
+
 
 class ManifestMixin:
     """SQLite manifest index operations shared by the cache manager."""
 
+    def _connect(self):
+        """Open the manifest with a write timeout so concurrent runs wait for the lock
+        instead of failing immediately with ``database is locked``."""
+        return sqlite3.connect(self.manifest_db_path, timeout=30)
+
     def _initialize_manifest_db(self) -> None:
-        """Initialize SQLite cache manifest index."""
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        """Initialize the SQLite cache manifest index, gating on its schema version.
+
+        A manifest stamped with a version GREATER than ``_MANIFEST_SCHEMA_VERSION`` (written
+        by a newer evaluator) is rejected with an actionable error instead of being read
+        under assumptions that may not hold. A fresh DB (``user_version == 0``) — or a
+        legacy one created before versioning, which carries the current additive layout —
+        is stamped to the current version.
+        """
+        with closing(self._connect()) as conn, conn:
+            # WAL persists in the file → readers don't block the writer (concurrent runs).
+            conn.execute("PRAGMA journal_mode=WAL")
+            stored = conn.execute("PRAGMA user_version").fetchone()[0]
+            if stored > _MANIFEST_SCHEMA_VERSION:
+                raise CacheManifestError(
+                    f"Cache manifest at {self.manifest_db_path} is schema v{stored}, but "
+                    f"this evaluator understands up to v{_MANIFEST_SCHEMA_VERSION} (the "
+                    f"manifest was written by a newer version). Clear the cache "
+                    f"(`evaluator cache clear`) or point EVALUATOR_CACHE_DIR at a fresh "
+                    f"directory."
+                )
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cache_entries (
                     cache_type TEXT NOT NULL,
@@ -42,7 +76,7 @@ class ManifestMixin:
                 CREATE INDEX IF NOT EXISTS idx_cache_entries_type_model_key
                 ON cache_entries(cache_type, model_name, cache_key)
                 """)
-            # Add columns if upgrading from older schema
+            # Add columns if upgrading from older schema (additive — no version bump)
             for col, col_type in [("file_size_bytes", "INTEGER"), ("checksum", "TEXT")]:
                 try:
                     conn.execute(
@@ -50,6 +84,10 @@ class ManifestMixin:
                     )
                 except sqlite3.OperationalError:
                     pass  # column already exists
+            if stored != _MANIFEST_SCHEMA_VERSION:
+                # Stamp the current version (PRAGMA forbids parameter binding; the value
+                # is our own trusted int constant).
+                conn.execute(f"PRAGMA user_version = {_MANIFEST_SCHEMA_VERSION}")
             conn.commit()
 
     def _upsert_manifest_entry(
@@ -70,7 +108,7 @@ class ManifestMixin:
         timestamp = datetime.now().isoformat()
         file_size = artifact_path.stat().st_size if artifact_path.exists() else 0
         checksum = _file_checksum(artifact_path) if artifact_path.exists() else None
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO cache_entries(
@@ -142,7 +180,7 @@ class ManifestMixin:
 
         path: Optional[Path] = None
         stored_checksum: Optional[str] = None
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 """
                 SELECT artifact_path, checksum FROM cache_entries
@@ -165,7 +203,7 @@ class ManifestMixin:
                     path.unlink(missing_ok=True)
                 else:
                     # Touch updated_at for LRU ordering
-                    with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+                    with closing(self._connect()) as conn, conn:
                         conn.execute(
                             "UPDATE cache_entries SET updated_at = ? "
                             "WHERE cache_type = ? AND cache_key = ?",
@@ -174,7 +212,7 @@ class ManifestMixin:
                         conn.commit()
                     return path
             # stale or corrupted manifest entry: remove
-            with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+            with closing(self._connect()) as conn, conn:
                 conn.execute(
                     "DELETE FROM cache_entries WHERE cache_type = ? AND cache_key = ?",
                     (cache_type, cache_key),

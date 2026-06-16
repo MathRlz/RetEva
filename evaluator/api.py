@@ -155,7 +155,7 @@ def evaluate_from_config(
     if not config_path.exists():
         raise ConfigurationError(f"Config file not found: {config_path}")
     
-    if not config_path.suffix in ('.yaml', '.yml'):
+    if config_path.suffix not in ('.yaml', '.yml'):
         raise ConfigurationError(
             f"Config file must be YAML (.yaml or .yml), got: {config_path.suffix}"
         )

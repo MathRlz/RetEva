@@ -57,6 +57,42 @@
         {% endfor %}
       </div>
     {% endfor %}
+    {# --- Delta bar chart with bootstrap-CI whiskers + FDR stars (batch 3) --- #}
+    <div id="run-delta-chart" style="height:260px;margin-top:8px"></div>
+    <script>
+      (function () {
+        var deltas = {{ deltas|tojson }};
+        var labels = [], values = [], lo = [], hi = [], notes = [];
+        Object.keys(deltas).forEach(function (pair) {
+          var dm = deltas[pair];
+          Object.keys(dm).forEach(function (name) {
+            var d = dm[name];
+            if (!d || typeof d.mean_delta !== 'number') return;
+            labels.push('Δ' + name + '<br>' + pair);
+            values.push(d.mean_delta);
+            var ci = Array.isArray(d.ci) && d.ci.length === 2 ? d.ci : null;
+            lo.push(ci ? d.mean_delta - ci[0] : 0);
+            hi.push(ci ? ci[1] - d.mean_delta : 0);
+            var q = (typeof d.p_value_fdr === 'number') ? d.p_value_fdr : d.p_value;
+            notes.push(typeof q !== 'number' ? '' : q < 0.001 ? '***' : q < 0.01 ? '**' : q < 0.05 ? '*' : '');
+          });
+        });
+        if (values.length) {
+          plotInto('run-delta-chart', [{
+            x: labels, y: values, type: 'bar',
+            marker: { color: values.map(function (v) { return v >= 0 ? '#2563eb' : '#dc2626'; }) },
+            error_y: { type: 'data', array: hi, arrayminus: lo, color: '#94a3b8' },
+            text: notes, textposition: 'outside', textfont: { size: 14, color: '#fbbf24' }
+          }], {
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#e2e8f0' }, margin: { l: 50, r: 16, t: 10, b: 60 },
+            yaxis: { title: 'Δ (branch − baseline)', gridcolor: '#1f2937', zerolinecolor: '#374151' },
+            xaxis: { gridcolor: '#1f2937' }
+          }, { displaylogo: false, responsive: true });
+        }
+      })();
+    </script>
+    <p class="muted" style="font-size:11px">whiskers: 95% bootstrap CI · stars: BH-FDR q (*** &lt;.001, ** &lt;.01, * &lt;.05)</p>
     {% endif %}
     {% set impact = report.get('retrieval_wer_impact') or {} %}
     {% for pair, imetrics in impact.items() %}
@@ -91,8 +127,8 @@
         var keys = Object.keys(lat).filter(function (k) { return k !== 'total_s' && lat[k] > 0; });
         var labels = keys.map(function (k) { return k.replace(/_s$/, ''); });
         var values = keys.map(function (k) { return lat[k]; });
-        if (window.Plotly && values.length) {
-          Plotly.newPlot('run-latency-chart', [{
+        if (values.length) {
+          plotInto('run-latency-chart', [{
             x: values, y: labels, type: 'bar', orientation: 'h',
             marker: { color: '#1d4ed8' },
             text: values.map(function (v) { return v.toFixed(3) + 's'; }), textposition: 'auto'

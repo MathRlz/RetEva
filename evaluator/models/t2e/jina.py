@@ -42,7 +42,7 @@ class JinaV4Model(TextEmbeddingModel):
         prompt_name = "query"
         return_numpy = False
         if show_progress:
-            with tqdm(total=len(texts), desc=desc, unit="text") as pbar:
+            with tqdm(total=len(texts), desc=desc, unit="text", disable=None) as pbar:
                 torch_emb = self.model.encode_text(
                     texts=texts, task=task, prompt_name=prompt_name, return_numpy=return_numpy
                 )

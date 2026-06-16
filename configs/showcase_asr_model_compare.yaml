@@ -1,0 +1,48 @@
+# SHOWCASE: per-branch model swap + auto-CSE (architecture §8, R2).
+# Two branches run the SAME pipeline with different ASR sizes (whisper base vs small);
+# the shared prefix (dataset, TTS synthesis, corpus index) is computed once (CSE), and
+# the report carries per-branch WER/Recall plus statistically honest paired deltas
+# (bootstrap CI, Wilcoxon, Cohen's d) between the two ASR models.
+# Runnable as-is on the bundled examples/data/pubmed_qa_small (TTS bridge, no recordings).
+experiment:
+  name: showcase_asr_model_compare
+  output_dir: evaluation_results/showcase
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  branches:
+    - id: whisper_base
+      asr: {model: whisper, size: base}
+    - id: whisper_tiny
+      asr: {model: whisper, size: tiny}
+nodes:
+  asr:
+    model: whisper
+    size: base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/showcase/audio

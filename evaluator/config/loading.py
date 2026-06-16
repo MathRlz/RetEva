@@ -20,6 +20,7 @@ from .judge import JudgeConfig
 from .query_optimization import QueryOptimizationConfig
 from .query_correction import QueryCorrectionConfig
 from .embedding_fusion import EmbeddingFusionConfig
+from .rag_flow import RagFlowConfig
 from .device_pool import DevicePoolConfig
 
 
@@ -152,6 +153,7 @@ def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> 
         embedding_fusion=EmbeddingFusionConfig(
             **(config_dict.get("embedding_fusion") or {})
         ),
+        rag=RagFlowConfig(**(config_dict.get("rag") or {})),
     )
     sub_configs["features"] = features
 

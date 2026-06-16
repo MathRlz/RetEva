@@ -26,7 +26,7 @@ nodes:
     params:
       source_lang: eng_Latn
     device: cpu
-  corpus_index:
+  vector_db:
     store: inmemory
   retrieval:
     k: 10

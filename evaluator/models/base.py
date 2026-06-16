@@ -39,11 +39,19 @@ class ASRModel(ABC):
 
 
 class TextEmbeddingModel(ABC):
-    """Base class for text embedding models."""
-    
+    """Base class for text embedding models.
+
+    Normalization contract: ``encode`` is NOT required to return L2-normalized vectors —
+    some models do (clip, the audio embedders), most text models don't (labse/jina/bge/
+    nemotron/sonar). Retrieval does not assume it: the vector stores normalize on build/search
+    for cosine similarity (``storage/vector_store.py``). For cross-modal retrieval, pair models
+    trained into the same space (joint embedders); raw cross-model cosine is not meaningful.
+    """
+
     @abstractmethod
     def encode(self, texts: List[str], show_progress: bool = False, desc: str = "Embedding") -> np.ndarray:
-        """Encode texts into vectors of shape (N, D)."""
+        """Encode texts into vectors of shape (N, D); may or may not be L2-normalized
+        (see the class docstring — the vector store normalizes for cosine)."""
         pass
 
     @abstractmethod

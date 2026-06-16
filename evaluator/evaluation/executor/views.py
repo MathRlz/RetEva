@@ -10,7 +10,7 @@ from __future__ import annotations
 import functools
 from typing import Any, Dict
 
-from .state import RunState
+from .state import RunState, per_branch_field_names
 
 # Fields a parallel worker keeps *private* (per-node) so concurrent branch handlers don't
 # clobber each other (T5): the node it runs, the swap-sensitive pipeline attrs (`_node_pipeline`
@@ -18,29 +18,11 @@ from .state import RunState
 # else (ctx, drop_sink, config, cache, service_provider, results, stage_times) is shared — those
 # are either thread-safe (ctx/drop_sink) or only written by serial/solo nodes. Cross-node data
 # flows via the keyed `ctx`, not these accumulators (Phase R), so isolating them is safe.
-_VIEW_LOCAL_ATTRS = frozenset(
-    {
-        "current_node",
-        "asr_pipeline",
-        "text_embedding_pipeline",
-        "audio_embedding_pipeline",
-        "retrieval_pipeline",
-        "all_hypotheses",
-        "all_ground_truth",
-        "all_embeddings",
-        "audio_embeddings",
-        "text_embeddings_for_fusion",
-        "all_relevance",
-        "all_query_ids",
-        "all_results_with_scores",
-        "all_retrieved",
-        "retrieval_candidates",
-        "retrieval_query_texts",
-        "audio_emb_for_alignment",
-        "text_emb_for_alignment",
-        "query_opt_bypassed",
-    }
-)
+#
+# Derived from the RunState field `scope` markers (M1b) — not hand-maintained. Adding a
+# RunState field without a scope marker fails the classification test; marking it
+# `scope: node` automatically isolates it here.
+_VIEW_LOCAL_ATTRS = per_branch_field_names()
 
 
 class _NodeView:
@@ -56,7 +38,7 @@ class _NodeView:
     def __init__(self, base: "RunState", node: Any) -> None:
         object.__setattr__(self, "_base", base)
         # Seed each private attr from the base's *current* value (so the branch inherits the
-        # shared-prefix state, e.g. all_query_ids from dataset_source) but copy mutable
+        # shared-prefix state, e.g. a transiently-swapped pipeline) but copy mutable
         # containers so an in-place mutation in one branch can't leak into another.
         local: Dict[str, Any] = {}
         for a in _VIEW_LOCAL_ATTRS:

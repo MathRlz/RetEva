@@ -31,7 +31,7 @@ nodes:
     model: null
     name: null
     device: cuda:0
-  corpus_index:
+  vector_db:
     store: faiss_gpu
   retrieval:
     gpu_id: 0

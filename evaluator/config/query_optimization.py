@@ -4,9 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .llm_backend import LLMBackendMixin
+
 
 @dataclass
-class QueryOptimizationConfig:
+class QueryOptimizationConfig(LLMBackendMixin):
     """
     Configuration for advanced query optimization techniques.
 
@@ -67,20 +69,3 @@ class QueryOptimizationConfig:
 
         if self.max_iterations < 1:
             raise ValueError(f"max_iterations must be >= 1, got {self.max_iterations}")
-
-    def get_api_base(self) -> str:
-        if self.use_local_server and self.local_server_url:
-            return self.local_server_url
-        return self.api_base
-
-    def to_llm_config(self) -> "LLMConfig":
-        from .llm_backend import LLMConfig
-        return LLMConfig(
-            model=self.model,
-            api_base=self.api_base,
-            api_key_env=self.api_key_env,
-            temperature=self.temperature,
-            timeout_s=self.timeout_s,
-            use_local_server=self.use_local_server,
-            local_server_url=self.local_server_url,
-        )

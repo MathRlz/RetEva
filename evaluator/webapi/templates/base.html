@@ -5,8 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Evaluator</title>
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <script>
+    // htmx-safe Plotly mount: plot into a created child, never the swapped element.
+    // htmx's settle phase restores a swapped element's original attributes ~20ms
+    // after the swap, stripping the js-plotly-plot class Plotly set on it — its
+    // absolute-positioning CSS dies and the stacked SVG layers flow over the page,
+    // swallowing clicks (the "Results page unresponsive after delete" bug).
+    function plotInto(id, traces, layout, config) {
+      var host = document.getElementById(id);
+      if (!host || !window.Plotly) return;
+      host.replaceChildren();
+      var target = host.appendChild(document.createElement('div'));
+      target.style.height = '100%';
+      Plotly.newPlot(target, traces, layout, config);
+    }
+  </script>
   {% block head %}{% endblock %}
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version('app.css') }}">
 </head>
 <body>
   <div class="app">
@@ -16,7 +31,6 @@
       <a href="/ui/builder" class="{{ 'active' if active == 'builder' else '' }}">Builder</a>
       <a href="/ui/jobs" class="{{ 'active' if active == 'jobs' else '' }}">Jobs</a>
       <a href="/ui/results" class="{{ 'active' if active == 'results' else '' }}">Results</a>
-      <a href="/ui/tts" class="{{ 'active' if active == 'tts' else '' }}">TTS</a>
     </nav>
     {% block body %}{% endblock %}
   </div>

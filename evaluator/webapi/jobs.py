@@ -33,9 +33,17 @@ from .utils import utc_now
 
 logger = get_logger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_EVALUATE_PY = _REPO_ROOT / "evaluate.py"
-_PROGRESS_MARKERS = ("PHASE ", "STAGE ")
+# The eval CLI runs as a module (`python -m evaluator.cli`) — the repo-root
+# `evaluate.py` wrapper is not shipped in the wheel, so a file-relative path breaks
+# for pip-installed servers. cwd stays the server's cwd so relative dataset/config
+# paths resolve exactly like the preset loading does.
+_CLI_MODULE = "evaluator.cli"
+
+
+def _cli_command(interpreter: str, cfg_path: Path) -> list:
+    """Argv for one eval job (module form — patchable test seam)."""
+    return [interpreter, "-m", _CLI_MODULE, "--config", str(cfg_path)]
+_PROGRESS_FILENAME = "progress.jsonl"
 _ERR_TAIL_LINES = 50
 _LOG_CAP = 5000  # max console lines retained per job
 
@@ -46,7 +54,7 @@ _LOG_CAP = 5000  # max console lines retained per job
 _TORCH_INJECTED_ENV = ("KMP_DUPLICATE_LIB_OK", "KMP_INIT_AT_FORK", "TORCHINDUCTOR_CACHE_DIR")
 
 
-def _subprocess_env() -> Dict[str, str]:
+def _subprocess_env(progress_path: Optional[Path] = None) -> Dict[str, str]:
     """Environment for the eval subprocess: one OpenMP runtime + faulthandler.
 
     The webapi server loads torch + MKL-linked numpy/scipy/sklearn, i.e. two OpenMP
@@ -66,6 +74,10 @@ def _subprocess_env() -> Dict[str, str]:
         env["OMP_NUM_THREADS"] = "1"
         env["MKL_NUM_THREADS"] = "1"
     env["EVALUATOR_FAULTHANDLER"] = "1"
+    # Structured node-granular progress: the executor's ProgressSink.from_env writes
+    # node_start/node_complete JSONL here, which the supervisor tails (no stdout scraping).
+    if progress_path is not None:
+        env["EVALUATOR_PROGRESS_FILE"] = str(progress_path)
     return env
 
 
@@ -131,7 +143,7 @@ class JobManager:
     def __init__(
         self,
         *,
-        evaluation_runner: Callable[[EvaluationConfig], Any],
+        evaluation_runner: Callable[..., Any],
         matrix_runner: Callable[..., Dict[str, Any]],
         max_workers: int = 2,
     ) -> None:
@@ -230,7 +242,7 @@ class JobManager:
             cfg_path = jobdir / "config.yaml"
             cfg.to_yaml(str(cfg_path))
 
-            self._launch_cli(job_id, cfg_path)
+            self._launch_cli(job_id, cfg_path, jobdir / _PROGRESS_FILENAME)
 
             result_file = jobdir / generate_output_filename(cfg)
             if not result_file.exists():
@@ -267,14 +279,21 @@ class JobManager:
             "comparison": comparison,
         }
 
-    def _launch_cli(self, job_id: str, cfg_path: Path) -> None:
-        """Launch evaluate.py, stream progress, raise on cancel / non-zero exit."""
+    def _launch_cli(
+        self, job_id: str, cfg_path: Path, progress_path: Optional[Path] = None
+    ) -> None:
+        """Launch evaluate.py, stream logs + structured progress, raise on cancel/non-zero exit.
+
+        Console output is captured for the log + error tail; *progress* comes from the
+        subprocess's ``EVALUATOR_PROGRESS_FILE`` JSONL (node_start/node_complete events),
+        tailed incrementally — no brittle parsing of human-readable stdout lines.
+        """
         interpreter = _subprocess_python()
         logger.info("job %s: launching eval subprocess with %s", job_id, interpreter)
         proc = subprocess.Popen(
-            [interpreter, str(_EVALUATE_PY), "--config", str(cfg_path)],
-            cwd=str(_REPO_ROOT),
-            env=_subprocess_env(),
+            _cli_command(interpreter, cfg_path),
+            cwd=os.getcwd(),
+            env=_subprocess_env(progress_path),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, start_new_session=True,
         )
@@ -282,15 +301,20 @@ class JobManager:
             self._jobs[job_id].process = proc
 
         assert proc.stdout is not None
+        prog = _ProgressTail(progress_path)
         for raw in proc.stdout:
-            line = raw.rstrip()
-            self._append_log(job_id, line)
-            if any(marker in line for marker in _PROGRESS_MARKERS):
-                self.push_progress(job_id, _extract_phase(line), 0, 0, line)
+            self._append_log(job_id, raw.rstrip())
+            for event in prog.read_new():
+                self._push_progress_event(job_id, event)
             if self._cancel_requested(job_id):
                 _kill_process_group(proc)
                 break
+        proc.stdout.close()
         proc.wait()
+        # Final drain: events emitted after the last stdout line we read.
+        for event in prog.read_new():
+            self._push_progress_event(job_id, event)
+        prog.close()
 
         if self._cancel_requested(job_id):
             raise _JobCancelled()
@@ -298,16 +322,32 @@ class JobManager:
             tail = "\n".join(self.get_log(job_id, tail=_ERR_TAIL_LINES))
             raise _JobFailed(f"worker exited with code {proc.returncode}\n{tail}")
 
+    def _push_progress_event(self, job_id: str, record: Dict[str, Any]) -> None:
+        """Translate one structured progress record (ProgressSink JSONL) into the job's
+        progress feed: node name as the phase, level/total_levels as the progress fraction."""
+        event = str(record.get("event", ""))
+        node = str(record.get("node", ""))
+        level = int(record.get("level", 0) or 0)
+        total = int(record.get("total_levels", 0) or 0)
+        self.push_progress(job_id, node or event, level, total, f"{event} {node}".strip())
+
     def _ingest_leaderboard(self, original_config, cfg, result: Dict[str, Any]) -> None:
-        """Record the run on the leaderboard (best-effort; never fails the job)."""
+        """Record the run on the leaderboard (best-effort; never fails the job).
+
+        On failure the run still 'succeeds', but the error is surfaced on the result as
+        ``leaderboard_warning`` (not only logged) so a stale leaderboard is visible to the
+        caller instead of silent."""
         try:
-            metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            raw_metadata = result.get("metadata")
+            metadata: Dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
             store = ExperimentStore(
                 db_path=str(Path(original_config.output_dir) / "leaderboard.sqlite")
             )
             store.ingest_result(EvaluationResults(metrics=result, config=cfg, metadata=metadata))
         except Exception as exc:  # noqa: BLE001
             logger.warning("leaderboard ingest failed: %s", exc)
+            if isinstance(result, dict):
+                result["leaderboard_warning"] = f"leaderboard ingest failed: {exc}"
 
     # ── state transitions ──────────────────────────────────────────────────────
 
@@ -367,12 +407,43 @@ class JobManager:
             return self._jobs[job_id].status in {"cancelled", "completed", "failed"}
 
 
-def _extract_phase(line: str) -> str:
-    """Pull a short phase label from a CLI log line for the progress feed."""
-    for marker in _PROGRESS_MARKERS:
-        if marker in line:
-            return line.split(marker, 1)[1].strip() or marker.strip()
-    return line.strip()
+class _ProgressTail:
+    """Incrementally reads a subprocess's progress JSONL (one event per line).
+
+    Opens the file lazily (the subprocess creates it), yields each newly-appended
+    *complete* (newline-terminated) line as a parsed record, and re-seeks past a partial
+    trailing write so a half-flushed line is retried on the next poll.
+    """
+
+    def __init__(self, path: Optional[Path]) -> None:
+        self._path = path
+        self._fh = None
+
+    def read_new(self) -> List[Dict[str, Any]]:
+        if self._fh is None:
+            if self._path is None or not self._path.exists():
+                return []
+            self._fh = open(self._path, "r", encoding="utf-8")
+        records: List[Dict[str, Any]] = []
+        while True:
+            pos = self._fh.tell()
+            line = self._fh.readline()
+            if not line.endswith("\n"):  # EOF or partial line — rewind, wait for more
+                self._fh.seek(pos)
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except ValueError:
+                continue  # skip a malformed line rather than break the feed
+        return records
+
+    def close(self) -> None:
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
 
 
 def _kill_process_group(proc) -> None:

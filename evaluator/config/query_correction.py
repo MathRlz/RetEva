@@ -12,14 +12,13 @@ transform), but is a *correction* step, configured separately. See
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import Dict, Optional
 
-if TYPE_CHECKING:
-    from .llm_backend import LLMConfig
+from .llm_backend import LLMBackendMixin
 
 
 @dataclass
-class QueryCorrectionConfig:
+class QueryCorrectionConfig(LLMBackendMixin):
     """Configuration for the post-ASR query-correction node.
 
     Attributes:
@@ -49,22 +48,13 @@ class QueryCorrectionConfig:
     local_server_url: Optional[str] = None
 
     def __post_init__(self) -> None:
-        valid = {"rule", "kb", "llm"}
+        # The corrector registry is the authority (P3): a custom
+        # @register_corrector method is valid config the moment it registers.
+        from ..evaluation.query_correction import list_correctors
+
+        valid = set(list_correctors())
         if self.method not in valid:
             raise ValueError(
                 f"query_correction.method must be one of {sorted(valid)}, "
                 f"got {self.method!r}"
             )
-
-    def to_llm_config(self) -> "LLMConfig":
-        from .llm_backend import LLMConfig
-
-        return LLMConfig(
-            model=self.model,
-            api_base=self.api_base,
-            api_key_env=self.api_key_env,
-            temperature=self.temperature,
-            timeout_s=self.timeout_s,
-            use_local_server=self.use_local_server,
-            local_server_url=self.local_server_url,
-        )

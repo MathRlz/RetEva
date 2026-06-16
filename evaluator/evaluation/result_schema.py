@@ -93,17 +93,25 @@ class RunResults(dict):
         return self.get(f"{metric}_ci")
 
     # --- optional feature outputs ---
+    # G5: the report is the single source — these live under ``report['traces']``/``['judge']``;
+    # the top-level fallback covers older result files written before the cutover.
+    def _report_section(self, section: str) -> Dict[str, Any]:
+        report = self.get("report")
+        return report.get(section, {}) if isinstance(report, dict) else {}
+
     @property
     def query_traces(self) -> Optional[List[Dict[str, Any]]]:
-        return self.get("query_traces")
+        return self._report_section("traces").get("query_traces") or self.get("query_traces")
 
     @property
     def llm_judge(self) -> Optional[Dict[str, Any]]:
-        return self.get("llm_judge")
+        return self._report_section("judge").get("llm_judge") or self.get("llm_judge")
 
     @property
     def answer_generation(self) -> Optional[Dict[str, Any]]:
-        return self.get("answer_generation")
+        return self._report_section("traces").get("answer_generation") or self.get(
+            "answer_generation"
+        )
 
     # --- oracle baseline ---
     @property

@@ -73,93 +73,113 @@ class RunFeatures:
     compute_confidence_intervals: bool = False
 
 
+# Field-scope markers (M1b): every RunState field declares whether a parallel branch
+# worker keeps a *private* copy of it ("node") or shares the base instance ("shared").
+# `_NodeView` derives its isolation set from these markers, and a test asserts every
+# field is classified — adding a field without a scope is a test failure, not a
+# silent cross-branch race.
+_NODE = {"scope": "node"}  # per-branch private (swap-sensitive / per-query scratch)
+_SHARED = {"scope": "shared"}  # shared across branches (thread-safe or serial-only)
+
+
+def per_branch_field_names() -> frozenset:
+    """Names of RunState fields marked ``scope: node`` (the `_NodeView` isolation set)."""
+    from dataclasses import fields
+
+    return frozenset(
+        f.name for f in fields(RunState) if f.metadata.get("scope") == "node"
+    )
+
+
 @dataclass
 class RunState:
     """Mutable execution context threaded through DAG stage handlers.
 
     Holds the pipelines/config inputs plus the accumulators each stage reads and
     writes. One instance per run_graph call; handlers mutate it in place.
+    Every field carries a ``scope`` marker (M1b) — see ``per_branch_field_names``.
     """
 
     # inputs
-    dataset: Any
-    mode: str
-    retrieval_pipeline: Any
-    asr_pipeline: Any
-    text_embedding_pipeline: Any
-    audio_embedding_pipeline: Any
-    cache_manager: Any
+    dataset: Any = field(metadata=_SHARED)
+    mode: str = field(metadata=_SHARED)
+    # Pipelines are node-scoped: `_node_pipeline` / corpus_index rebind them transiently
+    # per branch, so concurrent branches must not see each other's swap.
+    retrieval_pipeline: Any = field(metadata=_NODE)
+    asr_pipeline: Any = field(metadata=_NODE)
+    text_embedding_pipeline: Any = field(metadata=_NODE)
+    audio_embedding_pipeline: Any = field(metadata=_NODE)
+    cache_manager: Any = field(metadata=_SHARED)
     # config + load_info are needed only by the corpus_index node (it (re)builds the
     # vector index inside the graph). None for direct callers that pre-built the index —
     # the corpus_index handler then no-ops.
-    config: Any
-    load_info: Any
-    k: int
-    batch_size: int
-    num_workers: int
-    checkpoint_interval: int
-    experiment_id: Any
-    resume_from_checkpoint: bool
-    oracle_mode: bool
-    embedding_fusion_config: Any
-    query_opt_config: Any
-    query_correction_config: Any
-    answer_gen_config: Any
-    judge_config: Any
-    trace_limit: int
-    term_weights: Any
-    compute_confidence_intervals: bool
-    total: int
-    cb: Callable
-    t_total: float = 0.0
+    config: Any = field(metadata=_SHARED)
+    load_info: Any = field(metadata=_SHARED)
+    k: int = field(metadata=_SHARED)
+    batch_size: int = field(metadata=_SHARED)
+    num_workers: int = field(metadata=_SHARED)
+    checkpoint_interval: int = field(metadata=_SHARED)
+    experiment_id: Any = field(metadata=_SHARED)
+    resume_from_checkpoint: bool = field(metadata=_SHARED)
+    oracle_mode: bool = field(metadata=_SHARED)
+    embedding_fusion_config: Any = field(metadata=_SHARED)
+    query_opt_config: Any = field(metadata=_SHARED)
+    query_correction_config: Any = field(metadata=_SHARED)
+    answer_gen_config: Any = field(metadata=_SHARED)
+    judge_config: Any = field(metadata=_SHARED)
+    trace_limit: int = field(metadata=_SHARED)
+    term_weights: Any = field(metadata=_SHARED)
+    compute_confidence_intervals: bool = field(metadata=_SHARED)
+    total: int = field(metadata=_SHARED)
+    cb: Callable = field(metadata=_SHARED)
+    t_total: float = field(default=0.0, metadata=_SHARED)
     # Model lifecycle: when set, a stage's model is released after the last stage that
     # uses it (frees the device mid-run). Off unless a provider + on_finish policy apply.
-    service_provider: Any = None
-    offload_after_stage: bool = False
+    service_provider: Any = field(default=None, metadata=_SHARED)
+    offload_after_stage: bool = field(default=False, metadata=_SHARED)
     # Multi-dataset runtime (B1): {dataset_id → loaded QueryDataset} for graphs with several
     # dataset_source nodes; empty in single-source mode (the dataset_source handler then uses
     # `dataset`). A node selects its source via `current_node.params.dataset`.
-    dataset_sources: Dict[str, Any] = field(default_factory=dict)
+    dataset_sources: Dict[str, Any] = field(default_factory=dict, metadata=_SHARED)
     # B5: set when the questions↔corpus doc_id namespaces are disjoint — IR metrics are then
     # meaningless (every relevant doc absent from the corpus), so the report omits them (QA/judge
     # still run). The report records the join warning.
-    disable_ir_metrics: bool = False
-    join_warning: str = ""
-    # accumulators (parallel per-query lists unless noted)
-    all_hypotheses: list = field(default_factory=list)
-    all_ground_truth: list = field(default_factory=list)
-    all_embeddings: Any = field(default_factory=list)  # retrieval input
-    audio_embeddings: Any = None  # raw audio emb (for fusion)
-    text_embeddings_for_fusion: Any = None
-    all_relevance: list = field(default_factory=list)
-    all_query_ids: list = field(default_factory=list)
-    all_results_with_scores: list = field(default_factory=list)
-    all_retrieved: list = field(default_factory=list)
-    # Candidate results handed from the retrieval node to the rerank node (when present).
-    retrieval_candidates: list = field(default_factory=list)
-    retrieval_query_texts: Any = None
-    audio_emb_for_alignment: Any = None
-    text_emb_for_alignment: Any = None
-    query_opt_bypassed: bool = False
-    stage_times: Dict[str, float] = field(default_factory=dict)
-    results: "RunResults" = field(default_factory=lambda: RunResults())
-    # Intermediates the metrics stage hands to the answer-gen / finalize stages.
-    metrics_all_relevant: list = field(default_factory=list)
-    wer_scores: list = field(default_factory=list)
-    cer_scores: list = field(default_factory=list)
-    per_query_recall5: list = field(default_factory=list)
-    ans_detail_by_qid: dict = field(default_factory=dict)
+    disable_ir_metrics: bool = field(default=False, metadata=_SHARED)
+    join_warning: str = field(default="", metadata=_SHARED)
+    stage_times: Dict[str, float] = field(default_factory=dict, metadata=_SHARED)
+    results: "RunResults" = field(
+        default_factory=lambda: RunResults(), metadata=_SHARED
+    )
+    # Intermediates the metrics stage hands to the answer-gen / finalize stages
+    # (terminal, serial nodes — shared by construction).
+    metrics_all_relevant: list = field(default_factory=list, metadata=_SHARED)
+    wer_scores: list = field(default_factory=list, metadata=_SHARED)
+    cer_scores: list = field(default_factory=list, metadata=_SHARED)
+    per_query_recall5: list = field(default_factory=list, metadata=_SHARED)
+    ans_detail_by_qid: dict = field(default_factory=dict, metadata=_SHARED)
     # RunContext: per-node artifact blackboard (Phase R). The executor sets current_node
     # before each handler; handlers exchange inter-node artifacts via put/get_artifact,
     # which key the context by the producing node's id (see run_context.RunContext).
-    ctx: RunContext = field(default_factory=RunContext)
-    current_node: Any = None
-    # True when the graph contains a rerank node → retrieval emits candidates for it
-    # (even if the global pipeline has no reranker, e.g. explicit per-node instances).
-    rerank_in_graph: bool = False
+    ctx: RunContext = field(default_factory=RunContext, metadata=_SHARED)
+    current_node: Any = field(default=None, metadata=_NODE)
+    # True when the graph contains a refine node (rerank / mmr / threshold) → retrieval
+    # emits the fetch_k candidate pool for it instead of finalizing top-k itself.
+    refine_in_graph: bool = field(default=False, metadata=_SHARED)
+    # True when an mmr node is present → the rerank node keeps the fetch_k pool (MMR
+    # re-selects k diverse from it) instead of truncating to k.
+    mmr_in_graph: bool = field(default=False, metadata=_SHARED)
+    # True when a hybrid result_fusion node is present → its dense + sparse arm retrievals
+    # emit candidate pools (not finalized top-k) so the fusion sees the full depth.
+    fuse_in_graph: bool = field(default=False, metadata=_SHARED)
+    # Lazy per-run cache of the dataset corpus as a doc_id → doc lookup (get_corpus rebuilds
+    # N dicts on every call). Corpus is global/immutable, so it is _SHARED and built once;
+    # the retrieved-payload overlay stays per-call (branch-specific) in _answer_corpus_lookup.
+    corpus_lookup_base: Optional[dict] = field(default=None, metadata=_SHARED)
     # Per-item failures dropped during the run (node_id → [query_id…]); surfaced in
     # report.provenance and excluded from the keyed report (drop-and-log, §3 / T1).
-    drop_sink: "DropSink" = field(default_factory=lambda: DropSink())
+    drop_sink: "DropSink" = field(
+        default_factory=lambda: DropSink(), metadata=_SHARED
+    )
 
     def put_artifact(self, name: str, value: Any) -> None:
         """Publish ``name`` as an output of the currently-running node."""
@@ -173,10 +193,55 @@ class RunState:
         :meth:`get_items`."""
         self.ctx.put(self.current_node.id, name, items)
 
+    @property
+    def node_params(self) -> dict:
+        """The current node's params ({} when absent) — the per-instance config
+        every handler overlays on its global config."""
+        return getattr(self.current_node, "params", None) or {}
+
     def _producers(self, name: str) -> list:
         """Producer node ids bound to input ``name`` for the current node (in order)."""
         bindings = getattr(self.current_node, "bindings", ())
         return [pid for art, pid in bindings if art == name]
+
+    def _input_candidates(self, key: str) -> tuple:
+        """The ordered candidate artifact names for a handler's canonical input key.
+
+        For an ``OneOf`` input the wiring records ``(key → (cand1, cand2, …))`` (priority
+        order) in the node's ``input_aliases``; a plain input resolves to ``(key,)``."""
+        aliases = getattr(self.current_node, "input_aliases", ())
+        for canonical, cands in aliases:
+            if canonical == key:
+                return cands
+        return (key,)
+
+    def input(self, key: str, default: Any = None) -> Any:
+        """Read an input by its canonical key, resolving ``OneOf`` alternatives.
+
+        Reads the highest-priority candidate that a bound producer actually published at
+        run time (so a bailing producer — e.g. fusion with no text vectors — falls back to
+        the next alternative). Use this for chained streams (query text / query vectors);
+        use ``get_artifact`` directly for single-name artifacts."""
+        from ..item_set import ItemSet
+
+        for name in self._input_candidates(key):
+            for producer in reversed(self._producers(name)):
+                if self.ctx.has(producer, name):
+                    value = self.ctx.get(producer, name)
+                    return value.values if isinstance(value, ItemSet) else value
+        return default
+
+    def input_items(self, key: str, default: Any = None) -> Any:
+        """Keyed (:class:`ItemSet`) sibling of :meth:`input` for per-item consumers."""
+        from ..item_set import ItemSet
+
+        for name in self._input_candidates(key):
+            for producer in reversed(self._producers(name)):
+                if self.ctx.has(producer, name):
+                    value = self.ctx.get(producer, name)
+                    if isinstance(value, ItemSet):
+                        return value
+        return default
 
     _MISSING = object()
 
@@ -197,10 +262,25 @@ class RunState:
             raise KeyError(f"no published producer for input '{name}'")
         return default
 
+    def input_role(self, role: str, default: Any = None) -> Any:
+        """Read the input bound to an edge ``role`` (operator-abstraction comparison-by-edge).
+
+        Returns the value the producer tagged ``role`` (e.g. ``expected`` / ``actual``)
+        published — so a generic ``measure`` node compares its pair by role rather than by
+        hardcoded artifact names. Empty (→ ``default``) for every node that hasn't opted into
+        role-tagged edges, so existing handlers are unaffected."""
+        from ..item_set import ItemSet
+
+        roles = getattr(self.current_node, "binding_roles", ())
+        for art, producer, r in roles:
+            if r == role and self.ctx.has(producer, art):
+                value = self.ctx.get(producer, art)
+                return value.values if isinstance(value, ItemSet) else value
+        return default
+
     def get_items(self, name: str, default: Any = _MISSING) -> Any:
         """Read input ``name`` as a keyed ``ItemSet``. A producer that published a plain
-        list is wrapped with the current ``all_query_ids`` (best-effort) so keyed consumers
-        work during the transition."""
+        list is wrapped with positional index ids (best-effort) so keyed consumers work."""
         from ..item_set import ItemSet
 
         for producer in reversed(self._producers(name)):
@@ -208,12 +288,22 @@ class RunState:
                 value = self.ctx.get(producer, name)
                 if isinstance(value, ItemSet):
                     return value
-                ids = [str(i) for i in (self.all_query_ids or range(len(value)))]
-                if len(ids) == len(value) and len(set(ids)) == len(ids):
-                    return ItemSet(ids, list(value))
                 return ItemSet([str(i) for i in range(len(value))], list(value))
         if default is RunState._MISSING:
             raise KeyError(f"no published producer for input '{name}'")
+        return default
+
+    def keyed_items(self, name: str, default: Any = None) -> Any:
+        """Read input ``name`` only if a bound producer published a true keyed ``ItemSet``
+        (M1d-2): the per-item identity source. Returns ``default`` (no positional wrap)
+        when only a plain list — or nothing — was published."""
+        from ..item_set import ItemSet
+
+        for producer in reversed(self._producers(name)):
+            if self.ctx.has(producer, name):
+                value = self.ctx.get(producer, name)
+                if isinstance(value, ItemSet):
+                    return value
         return default
 
     def get_artifacts(self, name: str) -> list:

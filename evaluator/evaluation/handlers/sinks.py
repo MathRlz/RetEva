@@ -13,7 +13,24 @@ from ..executor.state import RunState
 logger = get_logger(__name__)
 
 
-@register_stage_handler("dataset_sink", self_timed=True)
+@register_stage_handler("sink", self_timed=True)
+def _stage_sink(s: RunState) -> None:
+    """The ``sink`` operator: dispatch by target to finalize / aggregate / dataset /
+    leaderboard / tracking. Bodies unchanged (finalize lives in the rag handlers,
+    aggregate in the metrics handlers)."""
+    from .rag import _stage_finalize
+    from .metrics import _stage_aggregate
+    from ._dispatch import dispatch_operator
+
+    return dispatch_operator("sink", {
+        "finalize": _stage_finalize,
+        "aggregate": _stage_aggregate,
+        "dataset_sink": _stage_dataset_sink,
+        "leaderboard_sink": _stage_leaderboard_sink,
+        "tracking_sink": _stage_tracking_sink,
+    }, s)
+
+
 def _stage_dataset_sink(s: RunState) -> None:
     """Persist the run's prepared/generated data (questions + synthesized audio_path +
     generated answers) to JSONL — enables benchmark-prep + synthetic-data graphs.
@@ -62,7 +79,6 @@ def _stage_dataset_sink(s: RunState) -> None:
     logger.info("dataset_sink: wrote %d records to %s", written, path)
 
 
-@register_stage_handler("leaderboard_sink", self_timed=True)
 def _stage_leaderboard_sink(s: RunState) -> None:
     """Persist the aggregate ``report`` to a JSON sidecar (A6). No-op without a report."""
     report = s.results.get("report") if s.results else None
@@ -76,7 +92,6 @@ def _stage_leaderboard_sink(s: RunState) -> None:
     logger.info("leaderboard_sink: report → %s", path)
 
 
-@register_stage_handler("tracking_sink", self_timed=True)
 def _stage_tracking_sink(s: RunState) -> None:
     """Log the aggregate ``report``'s metrics to tracking (A6). No-op without a report."""
     report = s.results.get("report") if s.results else None

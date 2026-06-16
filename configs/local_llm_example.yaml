@@ -26,7 +26,7 @@ nodes:
     model: null
     name: null
     device: cuda:0
-  corpus_index:
+  vector_db:
     store: faiss
   retrieval:
     k: 5

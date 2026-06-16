@@ -17,6 +17,10 @@ import os
 import subprocess
 from typing import Any, Dict, List, Optional
 
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
+
 DEFAULT_SEED = 42
 
 
@@ -41,8 +45,8 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
         import numpy as np
 
         np.random.seed(s % (2**32))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("numpy seeding skipped: %s", exc)
     try:
         import torch
 
@@ -53,8 +57,8 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
             flags["cudnn_deterministic"] = True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("cuDNN determinism flags not applied: %s", exc)
         opt_out = os.environ.get("EVALUATOR_NONDETERMINISM") == "1"
         if not opt_out:
             try:
@@ -66,7 +70,8 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
         else:
             flags["deterministic_algorithms"] = False
             flags["deterministic_note"] = "opt-out via EVALUATOR_NONDETERMINISM=1"
-    except Exception:
+    except Exception as exc:
+        logger.debug("torch seeding skipped: %s", exc)
         flags["torch"] = "unavailable"
     return flags
 
@@ -87,7 +92,8 @@ def _git_commit() -> Optional[str]:
             timeout=5,
         )
         return out.stdout.strip() or None
-    except Exception:
+    except Exception as exc:
+        logger.debug("git commit probe failed: %s", exc)
         return None
 
 
@@ -96,8 +102,8 @@ def _library_versions() -> Dict[str, str]:
     for mod in ("torch", "transformers", "numpy", "sentence_transformers"):
         try:
             versions[mod] = __import__(mod).__version__
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("version probe for %s failed: %s", mod, exc)
     import platform
 
     versions["python"] = platform.python_version()
@@ -119,10 +125,10 @@ def _determinism_state() -> Dict[str, Any]:
             state["deterministic_algorithms"] = bool(
                 torch.are_deterministic_algorithms_enabled()
             )
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as exc:
+            logger.debug("deterministic-algorithms probe failed: %s", exc)
+    except Exception as exc:
+        logger.debug("torch determinism probe skipped: %s", exc)
     return state
 
 

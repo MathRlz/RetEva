@@ -124,7 +124,7 @@ def synthesize_missing_query_audio(
         return synthesizers[lang]
 
     done = 0
-    for question in tqdm(pending, desc="TTS synthesis", unit="clip"):
+    for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=None):
         text = getattr(question, "question_text", None)
         if not text:
             log.warning(

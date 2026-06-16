@@ -1,10 +1,11 @@
 """Command-line argument parsing for evaluation script."""
 
 import argparse
+from typing import List, Optional
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    """Parse command line arguments (from *argv*, default ``sys.argv[1:]``)."""
     parser = argparse.ArgumentParser(description="Evaluate ASR and Text Embedding Models")
     
     # Config file
@@ -121,7 +122,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--judge_timeout_s", type=int, default=None)
     parser.add_argument("--judge_temperature", type=float, default=None)
     
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 # Mapping from CLI argument name to config nested path (tuple of attr names)
@@ -207,13 +208,34 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
         config: EvaluationConfig object to modify in-place.
     """
     from ..config import DevicePoolConfig
-    
+    from ..config.model_fields import MODEL_FAMILY_FIELDS
+
+    # Capture model types before overrides so we can detect a family whose type changed.
+    old_types = {
+        fam.prefix: getattr(config.model, fam.type_field, None)
+        for fam in MODEL_FAMILY_FIELDS
+    }
+
     # Apply all mapped CLI arguments
     for arg_name, config_path in _CLI_ARG_MAP.items():
         value = getattr(args, arg_name, None)
         if value is not None:
             _set_nested_attr(config, config_path, value)
-    
+
+    # Model-coherence (same rule as the WebUI form, config.model_fields): a
+    # --X_model_type override that *changes* the family's model type makes the inherited
+    # name/adapter — a different model's identity — stale (e.g. wav2vec2 type + a whisper
+    # name → crash). Clear them unless the user also passed the name explicitly.
+    for fam in MODEL_FAMILY_FIELDS:
+        new_type = getattr(args, fam.type_field, None)
+        name_override = getattr(args, fam.name_field, None)
+        if new_type is None or name_override is not None:
+            continue
+        if old_types.get(fam.prefix) not in (None, new_type):
+            for stale_field in (fam.name_field, fam.adapter_field):
+                if hasattr(config.model, stale_field):
+                    setattr(config.model, stale_field, None)
+
     # Handle special cases with custom logic
     
     # Device pool configuration

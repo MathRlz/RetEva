@@ -52,3 +52,108 @@ details.step > summary { cursor: pointer; padding: 6px 0; font-weight: 600; colo
 details.step > summary::-webkit-details-marker { display: none; }
 details.step > summary::before { content: "\25B8"; display: inline-block; width: 1em; color: #94a3b8; transition: transform .15s; }
 details.step[open] > summary::before { transform: rotate(90deg); }
+
+/* ── Shared DAG view (builder + Config&Run preview) — BUILDER_UX.md §3.4 ── */
+:root {
+  --dag-src: #2e7d32;       --dag-src-bg: #e8f5e9;
+  --dag-model: #1565c0;     --dag-model-bg: #e3f2fd;
+  --dag-transform: #546e7a; --dag-transform-bg: #eceff1;
+  --dag-metric: #ef6c00;    --dag-metric-bg: #fff3e0;
+  --dag-sink: #6a1b9a;      --dag-sink-bg: #f3e5f5;
+  --dag-edge: #b0bec5;      --dag-edge-active: #1565c0;
+  --dag-text: #212121;      --dag-muted: #616161;
+}
+
+/* node card: content-driven width, explicit type scale.
+   !important: drawflow.min.css (width:160px; padding:15px) can load AFTER this file
+   (it's CDN-injected on demand) and would shrink the cards under their content. */
+.drawflow .drawflow-node {
+  width: max-content !important; min-width: 170px !important;
+  max-width: 320px !important; height: auto !important;
+  padding: 0 !important;
+  border: 1.5px solid var(--dag-transform) !important;
+  background: var(--dag-transform-bg) !important;
+  border-radius: 6px; color: var(--dag-text);
+}
+.drawflow .drawflow-node .drawflow_content_node { width: 100%; }
+.drawflow .drawflow-node.selected,
+.drawflow .drawflow-node.dag-selected {
+  border-width: 2.5px; box-shadow: 0 2px 8px rgba(0,0,0,.18);
+}
+.node-title { font-size: 13px; font-weight: 600; padding: 3px 8px;
+              border-bottom: 1px solid rgba(0,0,0,.08); }
+.node-model { font-size: 11px; font-weight: 500; color: var(--dag-model);
+              padding: 1px 8px 2px; min-height: 14px; }
+.node-columns { font-size: 10px; padding: 1px 8px 2px; color: var(--dag-model);
+                display: flex; flex-wrap: wrap; gap: 2px 8px;
+                border-bottom: 1px dashed rgba(0,0,0,.08); }
+.node-io { display: flex; justify-content: space-between; gap: 12px;
+           font-size: 10px; padding: 2px 8px 5px; color: var(--dag-muted); }
+/* Port dots are aligned to each name row by dag_view.js, so the row pitch must exceed the
+   dot diameter or adjacent circles overlap: pin the dot size and give each row enough height
+   + gap (pitch ≈ 14 + 10 = 24px > 13px dot). */
+.drawflow .drawflow-node .input,
+.drawflow .drawflow-node .output { width: 13px !important; height: 13px !important; }
+.node-io .col { display: flex; flex-direction: column; gap: 10px; }
+.node-io .col span { min-height: 14px; line-height: 14px; }
+/* the port dot straddles the node border (its inner half reaches ~9px inward); pad the
+   names away from their own side so the circle never overlaps the text. */
+.node-io .incol { padding-left: 12px; }
+.node-io .out { padding-right: 12px; }
+.node-io .out { text-align: right; }
+.node-io .opt { opacity: .55; font-style: italic; }
+.node-io span { max-width: 120px; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; }
+
+/* category tints — drawGraph puts `cat-<category>` on the node's class list, from each
+   node's declared taxonomy category (registry). One rule per category (source/model/
+   transform/metric/sink) replaces the old per-stage list (which had drifted: it tinted the
+   dead `corpus_index`, mislabeled `rerank` as a model and `finalize` as a metric). */
+.drawflow .drawflow-node.cat-source {
+  border-color: var(--dag-src) !important; background: var(--dag-src-bg) !important; }
+.drawflow .drawflow-node.cat-model {
+  border-color: var(--dag-model) !important; background: var(--dag-model-bg) !important; }
+.drawflow .drawflow-node.cat-metric {
+  border-color: var(--dag-metric) !important; background: var(--dag-metric-bg) !important; }
+.drawflow .drawflow-node.cat-sink {
+  border-color: var(--dag-sink) !important; background: var(--dag-sink-bg) !important; }
+/* cat-transform uses the default node border/background (var(--dag-transform)) above. */
+
+/* edges */
+.drawflow .connection .main-path { stroke: var(--dag-edge); stroke-width: 2px; }
+.drawflow .connection .main-path:hover,
+.drawflow .connection .main-path.selected { stroke: var(--dag-edge-active); }
+
+/* read-only preview container (styled by id — a class attribute would break
+   drawflow's fixed-mode pan, which checks e.target.classList[0]) */
+#dag-preview-canvas { border: 1px solid #ccc; border-radius: 4px; position: relative;
+                      min-height: 200px; background: #fff; }
+
+/* inspect panel */
+.dag-detail dt { font-weight: 600; float: left; clear: left; width: 90px;
+                 font-size: 11px; color: var(--dag-muted); text-transform: uppercase;
+                 letter-spacing: .03em; padding-top: 2px; }
+.dag-detail dd { margin-left: 100px; font-size: 13px; color: var(--dag-text); }
+
+/* edge decorations (labels pan/zoom with the precanvas) */
+.dag-edge-label { position: absolute; transform: translate(-50%, -50%);
+  font-size: 10px; color: var(--dag-muted); background: rgba(255,255,255,.88);
+  padding: 0 4px; border-radius: 3px; pointer-events: none; z-index: 4;
+  white-space: nowrap; }
+.dag-edge-arrow { position: absolute; transform: translate(-50%, -50%);
+  font-size: 9px; color: var(--dag-edge); pointer-events: none; z-index: 3; }
+.dag-zoom-small .dag-edge-label { display: none; }  /* hidden below 75% zoom */
+
+/* zoom controls (corner of any DAG canvas) */
+.dag-zoom-controls { position: absolute; right: 8px; top: 8px; z-index: 10;
+  display: flex; gap: 4px; }
+.dag-zoom-controls button { width: 26px; height: 26px; padding: 0;
+  font-size: 14px; line-height: 1; cursor: pointer;
+  border: 1px solid #b0bec5; border-radius: 4px; background: #fff; }
+.dag-zoom-controls button:hover { background: #eceff1; }
+
+/* optional-input edges: present but de-emphasized (data spine stays crisp) */
+.drawflow .connection.dag-opt-edge .main-path {
+  stroke-dasharray: 5 5; opacity: .35; stroke-width: 1.5px; }
+
+#param-panel input.invalid { border-color: #c62828; outline: 1px solid #c62828; }

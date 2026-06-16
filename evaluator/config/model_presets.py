@@ -5,8 +5,11 @@ that parses as a valid :class:`EvaluationConfig` is offered as a preset, named b
 file stem. The hardcoded preset dicts were removed so the runnable example configs and
 the preset list are a single source of truth.
 
-The configs directory is resolved relative to the repo by default, overridable with the
-``EVALUATOR_CONFIGS_DIR`` environment variable.
+The configs directory is resolved lazily, first hit wins: the
+``EVALUATOR_CONFIGS_DIR`` environment variable → ``configs/`` at the repo root (source
+checkout / editable install) → ``configs/`` under the current working directory (a
+pip-installed package run from the repo — the install path puts this file under
+site-packages, where no repo-relative ``configs/`` exists).
 """
 
 import os
@@ -15,19 +18,24 @@ from typing import Any, Dict, List
 
 import yaml
 
-# ``configs/`` at the repo root (this file is ``evaluator/config/model_presets.py``),
-# overridable for non-standard layouts.
-CONFIGS_DIR = Path(
-    os.environ.get("EVALUATOR_CONFIGS_DIR")
-    or (Path(__file__).resolve().parents[2] / "configs")
-)
+
+def _configs_dir() -> Path:
+    """Resolve the presets directory (lazy — env var honored per call, see module doc)."""
+    env = os.environ.get("EVALUATOR_CONFIGS_DIR")
+    if env:
+        return Path(env)
+    repo = Path(__file__).resolve().parents[2] / "configs"
+    if repo.is_dir():
+        return repo
+    return Path.cwd() / "configs"
 
 
 def _preset_paths() -> Dict[str, Path]:
     """Map preset name (file stem) -> path for every ``configs/*.yaml``."""
-    if not CONFIGS_DIR.is_dir():
+    configs_dir = _configs_dir()
+    if not configs_dir.is_dir():
         return {}
-    return {path.stem: path for path in sorted(CONFIGS_DIR.glob("*.yaml"))}
+    return {path.stem: path for path in sorted(configs_dir.glob("*.yaml"))}
 
 
 def _is_valid_preset(path: Path) -> bool:

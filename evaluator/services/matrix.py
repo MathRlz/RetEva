@@ -38,7 +38,6 @@ def _apply_setup_overrides(
         "checkpoint_interval",
         "resume_from_checkpoint",
         "parallel_enabled",
-        "num_parallel_workers",
     }
 
     for key, value in overrides.items():

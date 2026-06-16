@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from evaluator.webapi.jobs import JobManager
-from evaluator.webapi.ui_helpers import _prepared_config_or_error
+from evaluator.webapi.form_builder import _prepared_config_or_error
 
 
 def register_jobs_routes(router: APIRouter, page, jobs: JobManager) -> None:

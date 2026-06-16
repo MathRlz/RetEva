@@ -2,9 +2,11 @@
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
 
+from .llm_backend import LLMBackendMixin
+
 
 @dataclass
-class JudgeConfig:
+class JudgeConfig(LLMBackendMixin):
     """
     Configuration for LLM-as-judge scoring.
     
@@ -133,21 +135,3 @@ class JudgeConfig:
                 raise ValueError(
                     f"aspect_weights must sum to 1.0, got {weight_sum}"
                 )
-    
-    def get_api_base(self) -> str:
-        """Get the appropriate API base URL (local or cloud)."""
-        if self.use_local_server and self.local_server_url:
-            return self.local_server_url
-        return self.api_base
-
-    def to_llm_config(self) -> "LLMConfig":
-        from .llm_backend import LLMConfig
-        return LLMConfig(
-            model=self.model,
-            api_base=self.api_base,
-            api_key_env=self.api_key_env,
-            temperature=self.temperature,
-            timeout_s=self.timeout_s,
-            use_local_server=self.use_local_server,
-            local_server_url=self.local_server_url,
-        )

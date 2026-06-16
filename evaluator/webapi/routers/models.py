@@ -23,7 +23,6 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
         Response includes available sizes, default values, and extra params
         so the frontend can render a dynamic form.
         """
-        import evaluator.models  # noqa: F401  (populates all registries)
         from evaluator.models.registry import FAMILY_REGISTRIES
 
         registry = FAMILY_REGISTRIES.get(family)
@@ -40,6 +39,15 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
             "default_size": registry.get_default_size(model_type),
             "params_schema": registry.get_params_schema(model_type),
         }
+
+    @router.get("/api/llm/models", summary="List LLM models for the builder picker")
+    def list_llm_models(endpoint: str = "local", ollama_url: str | None = None) -> Dict[str, Any]:
+        """Models for the global-LLM picker. ``endpoint=local`` → curated catalog + a live
+        Ollama ``/api/tags`` probe (pulled models flagged + first); ``endpoint=api`` → a
+        static OpenAI-compatible list. ``ollama_url`` overrides the probed server."""
+        from evaluator.models.llm.catalog import list_llm_models as _list
+
+        return _list(endpoint, ollama_url)
 
     @router.get("/api/pipeline/{mode}/required_models")
     def pipeline_required_models(mode: str) -> Dict[str, Any]:

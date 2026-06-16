@@ -28,6 +28,7 @@ from .judge import JudgeConfig
 from .query_optimization import QueryOptimizationConfig
 from .query_correction import QueryCorrectionConfig
 from .embedding_fusion import EmbeddingFusionConfig
+from .rag_flow import RagFlowConfig
 from .vector_db import VectorDBConfig
 from .device_pool import DevicePoolConfig
 from .tracking import TrackingConfig
@@ -68,6 +69,7 @@ class FeaturesConfig:
     embedding_fusion: EmbeddingFusionConfig = field(
         default_factory=EmbeddingFusionConfig
     )
+    rag: RagFlowConfig = field(default_factory=RagFlowConfig)
 
 
 # Feature sub-config field name -> class. Single source for from_dict/presets.
@@ -79,6 +81,7 @@ _FEATURE_SUBCONFIGS = {
     "query_optimization": QueryOptimizationConfig,
     "query_correction": QueryCorrectionConfig,
     "embedding_fusion": EmbeddingFusionConfig,
+    "rag": RagFlowConfig,
 }
 
 
@@ -109,8 +112,6 @@ class EvaluationConfig:
         resume_from_checkpoint: Whether to resume from saved state.
         parallel_enabled: Enable the DAG executor's intra-level per-branch concurrency
             (different branches/nodes run on their own devices in one process).
-        num_parallel_workers: Deprecated no-op (the multiprocess data-parallel path was
-            removed in P2; kept only for config/serialization compatibility).
 
     Examples:
         Creating a config from scratch::
@@ -182,11 +183,8 @@ class EvaluationConfig:
     # Domain term weighting for TW-WER
     domain_term_weights_file: Optional[str] = None
 
-    # Parallelism. `parallel_enabled` drives the DAG executor's intra-level branch
-    # concurrency. `num_parallel_workers` is a deprecated no-op (P2 removed the
-    # multiprocess data-parallel path); kept for config/serialization compatibility.
+    # `parallel_enabled` drives the DAG executor's intra-level branch concurrency.
     parallel_enabled: bool = False
-    num_parallel_workers: int = 0
 
     # Backward-compatible shortcuts: config.judge <-> config.features.judge, etc.
     # Keeps existing call sites working after the features grouping (#7).
@@ -221,6 +219,14 @@ class EvaluationConfig:
     @judge.setter
     def judge(self, value: JudgeConfig) -> None:
         self.features.judge = value
+
+    @property
+    def rag(self) -> RagFlowConfig:
+        return self.features.rag
+
+    @rag.setter
+    def rag(self, value: RagFlowConfig) -> None:
+        self.features.rag = value
 
     @property
     def query_optimization(self) -> QueryOptimizationConfig:
@@ -353,7 +359,6 @@ class EvaluationConfig:
             "checkpoint_interval",
             "resume_from_checkpoint",
             "parallel_enabled",
-            "num_parallel_workers",
             "compute_oracle_baseline",
             "compute_confidence_intervals",
             "domain_term_weights_file",

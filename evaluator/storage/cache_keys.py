@@ -8,6 +8,12 @@ import json
 import hashlib
 from typing import Optional, Any, Dict
 
+# Bump policy (audit M4): bump when a key's *format* changes (new hashed parameter,
+# different serialization), since per-model keys do NOT fold this version — old hashes
+# simply miss and recompute, but their files + manifest rows linger. When bumping, add a
+# one-shot migration in CacheManager._initialize_manifest_db (delete-by-pattern of the
+# old entries); fingerprint-based keys (vector_db / unique_texts manifests) fold the
+# version and invalidate on bump by themselves.
 CACHE_SCHEMA_VERSION = "v1"
 
 
@@ -234,6 +240,21 @@ def vector_db_key(dataset_name: str, dataset_size: int, model_name: str) -> str:
         'c81e728d9d4c2f636f067f89cc14862c'
     """
     return _compute_hash(dataset_name, dataset_size, model_name)
+
+
+def corpus_embeddings_manifest_key(
+    *,
+    dataset_fp: str,
+    model_fp: str,
+    schema_version: str = CACHE_SCHEMA_VERSION,
+) -> str:
+    """Key for cached corpus embeddings (the split corpus_embedding node).
+
+    Deliberately excludes the retrieval/store fingerprint so the same embeddings
+    hit across vector-DB backends; the ``cemb:`` prefix isolates the key shape
+    from plain ``vector_db_manifest_key`` entries in the shared cache category.
+    """
+    return "cemb:" + _compute_hash(schema_version, dataset_fp, model_fp)
 
 
 def vector_db_manifest_key(

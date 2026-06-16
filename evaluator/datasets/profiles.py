@@ -141,29 +141,6 @@ def resolve_dataset_profile(
     )
 
 
-def register_dataset_profile(profile: DatasetCapabilityProfile) -> None:
-    """Register a dataset capability profile.
-
-    Also mirrors the registration into the descriptor registry so that
-    :func:`~evaluator.datasets.descriptor.resolve_dataset_descriptor` can find it.
-    """
-    _PROFILE_REGISTRY[profile.name] = profile
-    try:
-        from .descriptor import register_dataset, DatasetDescriptor
-        register_dataset(DatasetDescriptor(
-            id=profile.name,
-            description=profile.name,
-            dataset_type=profile.dataset_type,
-            requires_audio=profile.requires_audio,
-            requires_text=profile.requires_text,
-            supports_generation=profile.supports_generation,
-            evaluation_mode=profile.evaluation_mode,
-            compatible_pipeline_modes=tuple(profile.recommended_pipeline_modes),
-        ))
-    except Exception as exc:
-        logger.debug("descriptor mirror registration failed for %r: %s", profile.name, exc)
-
-
 def list_known_dataset_names() -> List[str]:
     """Return known dataset names from both registries."""
     try:

@@ -2,21 +2,46 @@
 {% block head %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.css">
 <script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.js"></script>
+<script src="/static/dag_view.js?v={{ asset_version('dag_view.js') }}"></script>
 <style>
   #builder { display: flex; gap: 12px; }
   #palette { width: 180px; flex: 0 0 auto; }
-  #palette button { display: block; width: 100%; margin: 2px 0; text-align: left; }
-  #canvas { flex: 1 1 auto; height: 520px; border: 1px solid #ccc; position: relative; }
-  #sidepanel { width: 280px; flex: 0 0 auto; }
-  #spec { width: 100%; height: 180px; font-family: monospace; font-size: 12px; }
-  .node-title { font-weight: bold; padding: 4px; }
+  #palette button { display: block; width: 100%; margin: 2px 0; text-align: left;
+                    border-left: 3px solid var(--dag-transform); }
+  /* palette buttons tinted by node category (mirrors the canvas card colors) */
+  #palette button.cat-source { border-left-color: var(--dag-src); }
+  #palette button.cat-model  { border-left-color: var(--dag-model); }
+  #palette button.cat-metric { border-left-color: var(--dag-metric); }
+  #palette button.cat-sink   { border-left-color: var(--dag-sink); }
+  h4.palette-group { margin: 8px 0 2px; font-size: 11px; text-transform: uppercase;
+                     letter-spacing: .04em; color: #888; }
+  /* drag the bottom-right handle to resize the graph viewport (overflow:hidden is required
+     for CSS resize and matches Drawflow's clipped canvas) */
+  #canvas { flex: 1 1 auto; height: 560px; min-height: 300px; border: 1px solid #ccc;
+            position: relative; resize: vertical; overflow: hidden; }
+  #sidepanel { width: 320px; flex: 0 0 auto; }
+  #spec { width: 100%; height: 160px; font-family: monospace; font-size: 12px; }
+  /* node-card styles are shared via /static/app.css (BUILDER_UX.md B4) */
+  /* flex rows (label left, widget right) — no floats, so dense operator forms (model +
+     device + discriminator selects + switches) never overlap/tangle. */
+  #param-panel label { display: flex; justify-content: space-between; align-items: center;
+                       gap: 8px; margin: 4px 0; font-size: 13px; }
+  #param-panel input, #param-panel select { width: 150px; flex: 0 0 auto; }
+  #param-panel input[type=checkbox] { width: auto; }
+  #param-panel h4 { margin: 6px 0 4px; }
+  #param-panel .group { border-top: 1px dashed #ccc; margin-top: 6px; padding-top: 4px; }
+  #param-panel .group .add-row { display: flex; gap: 6px; align-items: center; }
+  #param-panel .group .add-row input { width: auto; flex: 1 1 auto; min-width: 0; }
+  #param-panel .hint { font-size: 11px; color: #888; }
 </style>
 {% endblock %}
 {% block body %}
 <div class="panel">
   <h2>Pipeline builder</h2>
-  <p class="muted">Drag node types from the palette, connect matching ports (output artifact →
-    same-named input), edit params, then export the node-centric graph or validate it.</p>
+  <p class="muted">Pick a mode to load its starter graph (a working pipeline, laid out and
+    wired), then click nodes to swap models/params in the side panel. Add extra node types
+    from the palette — ports connect matching artifacts (italic = optional input). Export
+    the node-centric graph or validate it.</p>
   <div id="builder">
     <div id="palette"><h3>Nodes</h3><div id="palette-list">loading…</div></div>
     <div id="canvas"></div>
@@ -24,86 +49,613 @@
       <h3>Graph</h3>
       <label>mode
         <select id="mode">
-          <option>asr_text_retrieval</option>
-          <option>audio_emb_retrieval</option>
-          <option>audio_text_retrieval</option>
-          <option>asr_only</option>
+          <option value="asr_text_retrieval">asr_text_retrieval</option>
+          <option value="audio_emb_retrieval">audio_emb_retrieval</option>
+          <option value="audio_text_retrieval">audio_text_retrieval (fusion)</option>
+          <option value="asr_only">asr_only</option>
         </select>
       </label>
       <div class="row">
-        <button id="btn-export" type="button">Export YAML</button>
+        <button id="btn-template" type="button">Reload template</button>
+        <button id="btn-export" type="button">Export spec</button>
         <button id="btn-validate" type="button">Validate</button>
       </div>
-      <div id="param-panel"><em>select a node to edit params</em></div>
+      <div id="param-panel"><em>select a node to edit its model + params</em></div>
+      <h3>LLM <small class="muted" style="font-weight:400">query opt / correction / answer gen</small></h3>
+      <p class="muted" style="font-size:11px;margin:2px 0">One LLM for the whole graph; every
+        llm-using node inherits it. Pick local (Ollama) or an API endpoint + a model.</p>
+      <div id="llm-panel"></div>
+      <h3>Branches</h3>
+      <p class="muted" style="font-size:11px;margin:2px 0">Variant set (§8): each branch
+        overrides one node's params; shared prefixes run once (CSE). Empty = single run.</p>
+      <div id="branch-list"></div>
+      <button id="btn-add-branch" type="button" class="secondary">+ add branch</button>
       <textarea id="spec" readonly placeholder="exported node-centric graph appears here"></textarea>
       <div id="validation"></div>
     </div>
   </div>
 </div>
 <script>
-const editor = new Drawflow(document.getElementById('canvas'));
+const canvasEl = document.getElementById('canvas');
+const editor = new Drawflow(canvasEl);
 editor.start();
-let CATALOGUE = {};
+DagView.attachZoom(editor, canvasEl);  // wheel scroll-in/out + corner controls (B4c)
+let CATALOGUE = {};      // node type -> contract (from /api/graph/nodes)
+let MODELS = null;       // family -> [{type, name, ...}] (from /api/models, fetched once)
+const PARAM_SCHEMAS = {};  // "family/type" -> /api/models/{family}/{type}/params payload
+// Global graph LLM (inherited by every llm-using node via EvaluationConfig.llm). Emitted in
+// exportSpec as the top-level `llm` block only when a model is chosen.
+const LLM = {endpoint: 'local', model: '',
+             local_server_url: 'http://localhost:11434/v1/chat/completions',
+             api_base: 'https://api.openai.com/v1/chat/completions',
+             api_key_env: 'OPENAI_API_KEY', temperature: ''};
 
-// E2: palette comes from the registered node types + their I/O contract.
+// E2: palette comes from the registered node types + their I/O contract; once the
+// catalogue is in, seed the canvas with the selected mode's starter graph.
 fetch('/api/graph/nodes').then(r => r.json()).then(d => {
   const list = document.getElementById('palette-list'); list.innerHTML = '';
-  d.nodes.forEach(n => {
-    CATALOGUE[n.type] = n;
+  d.nodes.forEach(n => { CATALOGUE[n.type] = n; });
+  const tileButton = n => {
     const b = document.createElement('button');
-    b.textContent = n.type;
-    b.title = `in: ${n.inputs.join(', ') || '—'}\nout: ${n.outputs.join(', ') || '—'}`;
+    b.textContent = n.label || n.palette_id || n.type;
+    b.className = 'cat-' + (n.category || 'transform');
+    b.title = `${n.category} · ${n.domain}\nin: ${n.inputs.join(', ') || '—'}` +
+              (n.optional_inputs.length ? `\nin?: ${n.optional_inputs.join(', ')}` : '') +
+              `\nout: ${n.outputs.join(', ') || '—'}`;
     b.onclick = () => addNode(n);
-    list.appendChild(b);
+    return b;
+  };
+  // Group the palette by the node's declared `domain` (taxonomy) so related nodes sit
+  // together (query / embedding / retrieval / refine / scoring / …). Each button keeps a
+  // `cat-<category>` class so the palette tints match the canvas.
+  const byDomain = {};
+  d.nodes.forEach(n => { (byDomain[n.domain || 'other'] ||= []).push(n); });
+  Object.keys(byDomain).sort().forEach(domain => {
+    const h = document.createElement('h4');
+    h.className = 'palette-group'; h.textContent = domain;
+    list.appendChild(h);
+    byDomain[domain].forEach(n => list.appendChild(tileButton(n)));
   });
+  // Presets: named variants of an operator (Dataset union, TTS, per-family metrics,
+  // MMR/Threshold, multi-query retrieval, …) — drop a node with its discriminator fields
+  // pre-set, so the user wires a ready operator instead of hand-setting a field.
+  if (d.presets && d.presets.length) {
+    const h = document.createElement('h4');
+    h.className = 'palette-group'; h.textContent = 'presets';
+    list.appendChild(h);
+    d.presets.forEach(n => list.appendChild(tileButton(n)));
+  }
+  if (!loadSeed()) loadTemplate(document.getElementById('mode').value);
 });
 
-// E3: drop a node with one port per declared input/output artifact.
-let counter = {};
-function addNode(spec) {
-  counter[spec.type] = (counter[spec.type] || 0) + 1;
-  const id = spec.type + (counter[spec.type] > 1 ? '_' + counter[spec.type] : '');
-  const html = `<div class="node-title">${id}</div>`;
-  editor.addNode(id, spec.inputs.length, spec.outputs.length, 40, 40, spec.type,
-                 {type: spec.type, params: {}}, html);
+// B5: a graph handed over from the Config&Run preview (sessionStorage, ?seed=1) —
+// rendered editable; consumed once so a later visit starts from the mode template.
+function loadSeed() {
+  if (!new URLSearchParams(window.location.search).has('seed')) return false;
+  const raw = sessionStorage.getItem('dag_builder_seed');
+  if (!raw) return false;
+  sessionStorage.removeItem('dag_builder_seed');
+  try {
+    const seed = JSON.parse(raw);
+    const modeSel = document.getElementById('mode');
+    if ([...modeSel.options].some(o => o.value === seed.mode)) modeSel.value = seed.mode;
+    DagView.drawGraph(editor, seed, CATALOGUE);
+    syncCounter(seed.nodes);
+    DagView.zoomFit(editor, canvasEl);
+    document.getElementById('validation').innerHTML =
+      '<p class="muted">loaded from Config &amp; Run preview</p>';
+    return true;
+  } catch (e) { return false; }
 }
+
+// Starter graph: the mode's default DAG via the shared renderer (DagView.drawGraph —
+// level layout + the auto-wiring's real data bindings as edges).
+function loadTemplate(mode) {
+  document.getElementById('validation').innerHTML =
+    '<p class="muted">loading template…</p>';
+  fetch(`/api/graph/template/${mode}`).then(r => r.json()).then(t => {
+    document.getElementById('validation').innerHTML = '';
+    editor.clearModuleSelected();
+    counter = {};
+    document.getElementById('param-panel').innerHTML =
+      '<em>select a node to edit its model + params</em>';
+    DagView.drawGraph(editor, t, CATALOGUE);
+    syncCounter(t.nodes);
+    DagView.zoomFit(editor, canvasEl);
+  }).catch(() => {
+    document.getElementById('validation').innerHTML =
+      '<p class="error">failed to load template</p>';
+  });
+}
+document.getElementById('mode').onchange = e => loadTemplate(e.target.value);
+document.getElementById('btn-template').onclick = () =>
+  loadTemplate(document.getElementById('mode').value);
+
+function modelsPromise() {  // lazy, cached: full per-family model lists from the registry
+  if (MODELS) return Promise.resolve(MODELS);
+  return fetch('/api/models').then(r => r.json()).then(d => (MODELS = d.models || d));
+}
+function schemaPromise(family, type) {  // per-model Params schema (sizes + fields + choices)
+  const key = family + '/' + type;
+  if (PARAM_SCHEMAS[key]) return Promise.resolve(PARAM_SCHEMAS[key]);
+  return fetch(`/api/models/${family}/${type}/params`).then(r => r.json())
+    .then(d => (PARAM_SCHEMAS[key] = d));
+}
+
+// E3: drop a node with one port per declared input (required + optional) / output,
+// artifact names rendered inside the node + as port tooltips.
+let counter = {};
+// keep palette ids unique after a template/seed populated the canvas
+function syncCounter(nodes) {
+  counter = {};
+  (nodes || []).forEach(n => {
+    const t = n.type || n.stage;
+    counter[t] = (counter[t] || 0) + 1;
+  });
+}
+const nodeHtml = DagView.nodeHtml;
+const portTitles = DagView.portTitles;
+function addNode(spec) {
+  // presets carry a palette_id (the legacy name) + seed params (the discriminator fields);
+  // a plain operator tile drops with empty params. Node ids count per palette identity.
+  const base = spec.palette_id || spec.type;
+  counter[base] = (counter[base] || 0) + 1;
+  const id = base + (counter[base] > 1 ? '_' + counter[base] : '');
+  const params = {...(spec.params || {})};
+  const nIn = DagView.inputPorts(spec).length;
+  const dfId = editor.addNode(id, nIn, spec.outputs.length, 40, 40, spec.type,
+                              {type: spec.type, params, _form: spec},
+                              nodeHtml(id, spec, params, [], spec.label));
+  portTitles(dfId, spec);
+}
+function columnsFromParams(params) {
+  // params.fields ({column: artifact}) -> [{name, artifact, type}] for the card;
+  // modality from the cached dataset info when available, else the artifact name.
+  const fields = (params || {}).fields;
+  if (!fields || typeof fields !== 'object') return [];
+  const info = DATASET_INFO[(params || {}).dataset];
+  const typeOf = {};
+  ((info && info.fields) || []).forEach(c => { typeOf[c.name] = c.type; });
+  return Object.entries(fields).map(([name, artifact]) =>
+    ({name, artifact, type: typeOf[name] || artifact}));
+}
+// A node's contract: the field-aware form resolved for its current discriminator fields
+// (cached on the node once fetched), else the static catalogue tile.
+function formFor(node) {
+  return (node.data && node.data._form) || CATALOGUE[node.data.type] ||
+         {inputs: [], outputs: [], optional_inputs: []};
+}
+function refreshNodeBody(dfId) {
+  const node = editor.getNodeFromId(dfId);
+  const spec = formFor(node);
+  const el = document.querySelector(`#node-${dfId} .drawflow_content_node`);
+  if (el && spec) {
+    el.innerHTML = nodeHtml(node.name, spec, node.data.params || {},
+                            columnsFromParams(node.data.params));
+    // content changed → re-align port dots to the new name rows, then repath edges
+    portTitles(dfId, spec);
+    if (editor._dagRefresh) editor._dagRefresh();
+  }
+}
+// Field-aware re-render: a discriminator field changed (op/axis/modality/level/family/…), so
+// re-resolve the node's ports + model family + param switches from /api/graph/node-form.
+function refetchForm(dfId) {
+  const node = editor.getNodeFromId(dfId);
+  fetch('/api/graph/node-form', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({type: node.data.type, params: node.data.params || {}}),
+  }).then(r => (r.ok ? r.json() : Promise.reject(r)))
+    .then(form => {
+      node.data._form = form;
+      editor.updateNodeDataFromId(dfId, node.data);
+      refreshNodeBody(dfId);
+      renderParamPanel(dfId);
+    })
+    .catch(() => renderParamPanel(dfId));  // fall back to the static catalogue form
+}
+
+// ── Branch authoring (P5, §8 variant sets) ───────────────────────────
+let BRANCHES = [];  // [{id, node, params}] — params is a JSON object patch
+function canvasNodeTypes() {
+  const dr = editor.export().drawflow.Home.data;
+  return [...new Set(Object.values(dr).map(n => n.data.type))];
+}
+function renderBranches() {
+  const list = document.getElementById('branch-list');
+  list.innerHTML = '';
+  BRANCHES.forEach((b, i) => {
+    const row = document.createElement('div');
+    row.className = 'group';
+    const id = inputEl('text', b.id, 'branch id', v => { BRANCHES[i].id = v; });
+    const nodeSel = selectEl(
+      [{value: '', label: '(no override — baseline)'}]
+        .concat(canvasNodeTypes().map(t => ({value: t, label: t}))),
+      b.node || '', v => { BRANCHES[i].node = v; });
+    const params = inputEl('text',
+      b.params && Object.keys(b.params).length ? JSON.stringify(b.params) : '',
+      '{"model": "whisper", "size": "tiny"}', v => {
+        try { BRANCHES[i].params = v ? JSON.parse(v) : {}; params.classList.remove('invalid'); }
+        catch (e) { params.classList.add('invalid'); }
+      });
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'secondary'; del.textContent = '✕';
+    del.onclick = () => { BRANCHES.splice(i, 1); renderBranches(); };
+    row.appendChild(fieldRow('id', id));
+    row.appendChild(fieldRow('node', nodeSel));
+    row.appendChild(fieldRow('params', params));
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+document.getElementById('btn-add-branch').onclick = () => {
+  BRANCHES.push({id: 'branch' + (BRANCHES.length + 1), node: '', params: {}});
+  renderBranches();
+};
 
 // E4/E5: serialize the canvas → node-centric {mode, nodes:[{id,type,params}], edges:[{from,to}]}.
 function exportSpec() {
   const dr = editor.export().drawflow.Home.data;
   const nodes = [], edges = [];
   Object.values(dr).forEach(n => {
-    nodes.push({id: n.name, type: n.data.type, params: n.data.params || {}});
+    const params = {};   // omit empty values → canonical CSE keys
+    Object.entries(n.data.params || {}).forEach(([k, v]) => {
+      if (v !== '' && v !== null && v !== undefined &&
+          !(typeof v === 'object' && Object.keys(v).length === 0)) params[k] = v;
+    });
+    nodes.push({id: n.name, type: n.data.type, params});
     Object.values(n.outputs || {}).forEach(out =>
       (out.connections || []).forEach(c => {
         const to = dr[c.node]; if (to) edges.push({from: n.name, to: to.name});
       }));
   });
-  return {mode: document.getElementById('mode').value, nodes, edges};
+  const spec = {mode: document.getElementById('mode').value, nodes, edges};
+  const branches = BRANCHES
+    .filter(b => b.id)
+    .map(b => (b.node ? {id: b.id, [b.node]: b.params || {}} : {id: b.id}));
+  if (branches.length) spec.branches = branches;
+  const llm = llmBlock();
+  if (llm) spec.llm = llm;   // global graph LLM (inherited by every llm-using node)
+  return spec;
 }
 
-// E3: per-node param form — select a node to edit its params (seeded from param_defaults).
-editor.on('nodeSelected', (id) => {
-  const node = editor.getNodeFromId(id);
-  const cat = CATALOGUE[node.data.type] || {};
-  const keys = Object.keys({...(cat.param_defaults || {}), ...(node.data.params || {})});
-  const panel = document.getElementById('param-panel');
-  panel.innerHTML = `<h4>${node.name} <small>(${node.data.type})</small></h4>` +
-    (keys.length ? '' : '<em>no params</em>');
-  keys.forEach(k => {
-    const val = (node.data.params || {})[k] ?? (cat.param_defaults || {})[k] ?? '';
-    const row = document.createElement('label');
-    row.textContent = k + ' ';
-    const inp = document.createElement('input');
-    inp.value = val;
-    inp.onchange = () => {
-      node.data.params = node.data.params || {};
-      node.data.params[k] = inp.value;
-      editor.updateNodeDataFromId(id, node.data);
-    };
-    row.appendChild(inp); panel.appendChild(row);
+// ── Registry-driven param panel ───────────────────────────────────────
+function setParam(dfId, key, value) {
+  const node = editor.getNodeFromId(dfId);
+  node.data.params = node.data.params || {};
+  if (value === '' || value === null) delete node.data.params[key];
+  else node.data.params[key] = value;
+  editor.updateNodeDataFromId(dfId, node.data);
+  refreshNodeBody(dfId);
+}
+function setExtraParam(dfId, key, value) {  // free-form **extra_params channel
+  const node = editor.getNodeFromId(dfId);
+  node.data.params = node.data.params || {};
+  const extra = {...(node.data.params.params || {})};
+  if (value === '' || value === null) delete extra[key];
+  else extra[key] = value;
+  if (Object.keys(extra).length) node.data.params.params = extra;
+  else delete node.data.params.params;
+  editor.updateNodeDataFromId(dfId, node.data);
+}
+function fieldRow(labelText, inputEl) {
+  const row = document.createElement('label');
+  row.textContent = labelText + ' ';
+  row.appendChild(inputEl);
+  return row;
+}
+function selectEl(options, current, onChange) {
+  const sel = document.createElement('select');
+  options.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.value; opt.textContent = o.label;
+    if (o.value === current) opt.selected = true;
+    sel.appendChild(opt);
   });
-});
+  sel.onchange = () => onChange(sel.value);
+  return sel;
+}
+function inputEl(type, current, placeholder, onChange) {
+  const inp = document.createElement('input');
+  inp.type = type; inp.value = current ?? ''; inp.placeholder = placeholder || '';
+  inp.onchange = () => onChange(type === 'number' && inp.value !== ''
+                                ? Number(inp.value) : inp.value);
+  return inp;
+}
+
+// The model's own Params fields (size handled separately) → the `params:{…}` dict.
+function renderSchemaFields(panel, dfId, schema, current) {
+  const extra = current.params || {};
+  Object.entries(schema.params_schema || {}).forEach(([name, meta]) => {
+    if (name === 'size') return;  // rendered as the size select
+    const cur = extra[name] ?? meta.default ?? '';
+    let widget;
+    if (meta.choices && meta.choices.length) {
+      widget = selectEl(meta.choices.map(c => ({value: c, label: c})), String(cur),
+                        v => setExtraParam(dfId, name, v));
+    } else if (typeof meta.default === 'boolean') {
+      widget = document.createElement('input'); widget.type = 'checkbox';
+      widget.checked = Boolean(cur);
+      widget.onchange = () => setExtraParam(dfId, name, widget.checked);
+    } else if (typeof meta.default === 'number') {
+      widget = inputEl('number', cur, String(meta.default),
+                       v => setExtraParam(dfId, name, v));
+    } else {
+      widget = inputEl('text', cur, String(meta.default ?? ''),
+                       v => setExtraParam(dfId, name, v));
+    }
+    panel.appendChild(fieldRow(name, widget));
+  });
+}
+
+function renderModelSection(panel, dfId, spec, current) {
+  const group = document.createElement('div'); group.className = 'group';
+  panel.appendChild(group);
+  modelsPromise().then(models => {
+    const fam = models[spec.family] || [];
+    const opts = [{value: '', label: '(default)'}]
+      .concat(fam.map(m => ({value: m.type, label: `${m.type} — ${m.name}`})));
+    group.appendChild(fieldRow('model', selectEl(opts, current.model || '', v => {
+      setParam(dfId, 'model', v);
+      setParam(dfId, 'size', '');   // size choices belong to the model → reset
+      setParam(dfId, 'params', null);
+      renderParamPanel(dfId);        // re-render with the new model's schema
+    })));
+    if (!current.model) return;
+    schemaPromise(spec.family, current.model).then(schema => {
+      const sizes = Object.keys(schema.sizes || {});
+      if (sizes.length > 1 || (sizes.length === 1 && sizes[0] !== 'default')) {
+        const sizeOpts = sizes.map(s => ({value: s, label: s}));
+        group.appendChild(fieldRow('size',
+          selectEl(sizeOpts, current.size || schema.default_size || sizes[0],
+                   v => setParam(dfId, 'size', v))));
+      }
+      renderSchemaFields(group, dfId, schema, current);
+      const hint = document.createElement('div'); hint.className = 'hint';
+      hint.textContent = 'default: ' + (schema.default_name || '—');
+      group.appendChild(hint);
+    });
+  });
+}
+
+// Dataset picker (mirror of renderModelSection): select a REGISTERED dataset; its
+// descriptor populates the node's columns (params.fields) and surfaces the dataset's
+// required settings as required inputs. Values ride node params (questions/corpus/…)
+// and to_legacy_dict synthesizes the datasets-map entry at config translation.
+let DATASETS = null;            // [{id, modality, domain, description, ...}] from /api/datasets
+const DATASET_INFO = {};        // id -> /api/dataset/{id}/fields payload
+function datasetsPromise() {
+  if (DATASETS) return Promise.resolve(DATASETS);
+  return fetch('/api/datasets').then(r => r.json()).then(d => (DATASETS =
+    d.datasets || (d.known_datasets || []).map(id => ({id, modality: 'other', domain: 'general'}))));
+}
+// dataset <select> grouped into optgroups by "Modality · domain" (Audio · medical, …),
+// description + supported modes on the option tooltip.
+function datasetSelect(datasets, current, onChange) {
+  const sel = document.createElement('select');
+  const blank = document.createElement('option');
+  blank.value = ''; blank.textContent = '(from run config)'; sel.appendChild(blank);
+  const groups = {};
+  datasets.forEach(d => {
+    const mod = (d.modality || 'other');
+    const key = mod.charAt(0).toUpperCase() + mod.slice(1) + ' · ' + (d.domain || 'general');
+    (groups[key] ||= []).push(d);
+  });
+  Object.keys(groups).sort().forEach(key => {
+    const og = document.createElement('optgroup'); og.label = key;
+    groups[key].forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.id; opt.textContent = d.id;
+      opt.title = (d.description || '') +
+        (d.compatible_pipeline_modes ? '\nmodes: ' + d.compatible_pipeline_modes.join(', ') : '');
+      if (d.id === current) opt.selected = true;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
+  sel.onchange = () => onChange(sel.value);
+  return sel;
+}
+function datasetInfoPromise(id) {
+  if (DATASET_INFO[id]) return Promise.resolve(DATASET_INFO[id]);
+  return fetch(`/api/dataset/${id}/fields`).then(r => r.json())
+    .then(d => (DATASET_INFO[id] = d));
+}
+function renderDatasetSection(panel, dfId, current) {
+  const group = document.createElement('div'); group.className = 'group';
+  panel.appendChild(group);
+  datasetsPromise().then(datasets => {
+    group.appendChild(fieldRow('dataset', datasetSelect(datasets, current.dataset || '', v => {
+      setParam(dfId, 'dataset', v);
+      setParam(dfId, 'fields', null);  // columns belong to the dataset → reset
+      if (v) {
+        datasetInfoPromise(v).then(info => {
+          // column schema onto the node card (name -> artifact map, like the
+          // server-side injection) so the diagram updates immediately
+          const fields = {};
+          (info.fields || []).forEach(c => { fields[c.name] = c.artifact; });
+          setParam(dfId, 'fields', fields);
+          refreshNodeBody(dfId);
+          renderParamPanel(dfId);
+        });
+      } else { refreshNodeBody(dfId); renderParamPanel(dfId); }
+    })));
+    if (!current.dataset) return;
+    datasetInfoPromise(current.dataset).then(info => {
+      if ((info.splits || []).length) {
+        const opts = info.splits.map(sp => ({value: sp, label: sp}));
+        group.appendChild(fieldRow('split', selectEl(
+          opts, current.split || info.default_split || info.splits[0],
+          v => setParam(dfId, 'split', v))));
+      }
+      (info.required_settings || []).forEach(rs => {
+        const widget = inputEl('text', current[rs.key] ?? '', rs.field,
+                               v => setParam(dfId, rs.key, v));
+        widget.classList.add('required-setting');
+        if (!(current[rs.key] ?? '')) widget.classList.add('invalid');
+        widget.addEventListener('input',
+          () => widget.classList.toggle('invalid', !widget.value));
+        const row = fieldRow(rs.key + ' *', widget);
+        row.title = `required by dataset '${current.dataset}' (${rs.field})`;
+        group.appendChild(row);
+      });
+      const hint = document.createElement('div'); hint.className = 'hint';
+      hint.textContent = info.description || '';
+      group.appendChild(hint);
+    });
+  });
+}
+
+function renderParamPanel(dfId) {
+  const node = editor.getNodeFromId(dfId);
+  const spec = formFor(node);
+  const current = node.data.params || {};
+  const panel = document.getElementById('param-panel');
+  panel.innerHTML = `<h4>${node.name} <small>(${node.data.type})</small></h4>`;
+
+  // show_if: a field may be conditional on another param's value (e.g. vector_db's
+  // gpu_id only for store=faiss_gpu). Params that control visibility re-render the
+  // panel on change so dependents appear/disappear immediately.
+  const params = spec.node_params || [];
+  const controllers = new Set();
+  params.forEach(p => Object.keys(p.show_if || {}).forEach(k => controllers.add(k)));
+  const effective = key => {
+    if (current[key] !== undefined && current[key] !== '') return String(current[key]);
+    const decl = params.find(q => q.key === key);
+    return decl && decl.default !== undefined ? String(decl.default) : '';
+  };
+  const isVisible = p => !p.show_if ||
+    Object.entries(p.show_if).every(([dep, vals]) => vals.map(String).includes(effective(dep)));
+
+  params.forEach(p => {
+    if (p.kind === 'model' || p.kind === 'size' || p.kind === 'dict') return; // model section
+    if (p.kind === 'dataset') return; // dataset section (picker + required settings)
+    const cur = current[p.key] ?? '';
+    const ph = p.default !== undefined ? String(p.default) : '';
+    const onSet = v => {
+      setParam(dfId, p.key, v);
+      if (p.rerenders) refetchForm(dfId);          // discriminator → field-aware re-resolve
+      else if (controllers.has(p.key)) renderParamPanel(dfId);  // show_if → local re-render
+    };
+    let widget;
+    if (p.kind === 'select') {
+      widget = selectEl([{value: '', label: '(default)'}]
+                          .concat((p.choices || []).map(c => ({value: c, label: c}))),
+                        String(cur), onSet);
+    } else if (p.kind === 'bool') {
+      widget = document.createElement('input');
+      widget.type = 'checkbox';
+      widget.checked = cur === '' ? Boolean(p.default) : Boolean(cur);
+      widget.onchange = () => {
+        setParam(dfId, p.key, widget.checked);
+        if (p.rerenders) refetchForm(dfId);
+        else if (controllers.has(p.key)) renderParamPanel(dfId);
+      };
+    } else if (p.kind === 'number') {
+      widget = inputEl('number', cur, ph, onSet);
+    } else if (p.kind === 'device') {
+      widget = inputEl('text', cur, 'cuda:0', onSet);
+    } else if (p.kind === 'json') {
+      widget = inputEl('text',
+        cur === '' ? '' : (typeof cur === 'object' ? JSON.stringify(cur) : cur),
+        '{} / []', v => {
+          try {
+            setParam(dfId, p.key, v === '' ? '' : JSON.parse(v));
+            widget.classList.remove('invalid');
+          } catch (e) { widget.classList.add('invalid'); }
+        });
+    } else {
+      widget = inputEl('text', cur, ph, onSet);
+    }
+    const row = fieldRow(p.key, widget);
+    if (!isVisible(p)) row.style.display = 'none';
+    panel.appendChild(row);
+  });
+
+  if (params.some(p => p.kind === 'dataset')) renderDatasetSection(panel, dfId, current);
+  if (spec.family) renderModelSection(panel, dfId, spec, current);
+  if (!spec.family && !(spec.node_params || []).length) {
+    const em = document.createElement('em'); em.textContent = 'no declared params';
+    panel.appendChild(em);
+  }
+
+  // open field: any extra key=value → the free-form params dict
+  const add = document.createElement('div'); add.className = 'group';
+  const row = document.createElement('div'); row.className = 'add-row';
+  const k = inputEl('text', '', 'param name', () => {});
+  const v = inputEl('text', '', 'value', () => {});
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = '+ add';
+  btn.onclick = () => {
+    if (!k.value) return;
+    setExtraParam(dfId, k.value, v.value);
+    renderParamPanel(dfId);
+  };
+  row.append(k, v, btn);
+  add.appendChild(row);
+  panel.appendChild(add);
+}
+
+editor.on('nodeSelected', renderParamPanel);
+
+// ── Global LLM panel ──────────────────────────────────────────────────
+function llmBlock() {
+  // the top-level `llm` config block (null = leave it unset → consumers use defaults)
+  if (!LLM.model) return null;
+  const b = {model: LLM.model};
+  if (LLM.endpoint === 'local') {
+    b.use_local_server = true;
+    b.local_server_url = LLM.local_server_url;
+  } else {
+    b.use_local_server = false;
+    b.api_base = LLM.api_base;
+    b.api_key_env = LLM.api_key_env;
+  }
+  if (LLM.temperature !== '' && LLM.temperature != null) b.temperature = Number(LLM.temperature);
+  return b;
+}
+function renderLlmPanel() {
+  const panel = document.getElementById('llm-panel');
+  if (!panel) return;
+  panel.innerHTML = '';
+  panel.appendChild(fieldRow('endpoint', selectEl(
+    [{value: 'local', label: 'local (Ollama)'}, {value: 'api', label: 'API (OpenAI-compat)'}],
+    LLM.endpoint, v => { LLM.endpoint = v; LLM.model = ''; renderLlmPanel(); })));
+  const modelSel = selectEl([{value: '', label: 'loading…'}], '', v => { LLM.model = v; });
+  panel.appendChild(fieldRow('model', modelSel));
+  const status = document.createElement('div'); status.className = 'hint';
+  panel.appendChild(status);
+  // endpoint-specific connection fields
+  if (LLM.endpoint === 'local') {
+    panel.appendChild(fieldRow('server url', inputEl('text', LLM.local_server_url,
+      'http://localhost:11434/v1/chat/completions',
+      v => { LLM.local_server_url = v; renderLlmPanel(); })));   // re-probe on url change
+  } else {
+    panel.appendChild(fieldRow('api base', inputEl('text', LLM.api_base,
+      'https://api.openai.com/v1/chat/completions', v => { LLM.api_base = v; })));
+    panel.appendChild(fieldRow('api key env', inputEl('text', LLM.api_key_env,
+      'OPENAI_API_KEY', v => { LLM.api_key_env = v; })));
+  }
+  panel.appendChild(fieldRow('temperature', inputEl('number', LLM.temperature, '0.3',
+    v => { LLM.temperature = v; })));
+  // fill the model dropdown from the catalogue (+ live Ollama probe for local)
+  const url = '/api/llm/models?endpoint=' + LLM.endpoint +
+    (LLM.endpoint === 'local' ? '&ollama_url=' + encodeURIComponent(LLM.local_server_url) : '');
+  fetch(url).then(r => r.json()).then(d => {
+    modelSel.innerHTML = '';
+    [{value: '', label: '(unset — node defaults)'}]
+      .concat((d.models || []).map(m => ({value: m.id, label: m.label + (m.pulled ? ' ✓' : '')})))
+      .forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = o.value; opt.textContent = o.label;
+        if (o.value === LLM.model) opt.selected = true;
+        modelSel.appendChild(opt);
+      });
+    status.textContent = LLM.endpoint === 'local'
+      ? (d.running ? 'Ollama running · ✓ = pulled' : 'Ollama not reachable — run `ollama serve`')
+      : 'set the api key in the ' + LLM.api_key_env + ' env var';
+  }).catch(() => { status.textContent = 'failed to load models'; });
+}
+renderLlmPanel();
 
 document.getElementById('btn-export').onclick = () => {
   document.getElementById('spec').value = JSON.stringify(exportSpec(), null, 2);
@@ -114,8 +666,14 @@ document.getElementById('btn-validate').onclick = () => {
     body: JSON.stringify(spec)})
     .then(r => r.json().then(j => ({ok: r.ok, j})))
     .then(({ok, j}) => {
+      const expanded = (j.nodes || []).some(n => n.id.includes('@'));
       document.getElementById('validation').innerHTML = ok
-        ? `<p class="ok">Valid ✓ — ${j.levels.length} levels</p>`
+        ? `<p class="ok">Valid ✓ — ${j.levels.length} levels, ${(j.nodes || []).length} nodes` +
+          (expanded ? ' (branches expanded + CSE-collapsed)' : '') + `</p>` +
+          (expanded
+            ? `<p class="muted" style="font-size:11px">` +
+              j.levels.map(l => l.join(', ')).join(' → ') + `</p>`
+            : '')
         : `<p class="error">${j.detail}</p>`;
     });
 };

@@ -3,29 +3,10 @@
 from typing import Any, Dict, List, Protocol, Tuple
 
 from .rag.hybrid import reciprocal_rank_fusion
-from ...constants import MIN_NORM_THRESHOLD
+from .scoring import min_max_norm as _min_max_norm, payload_key as _payload_key
 
 
 SearchResults = List[Tuple[Any, float]]
-
-
-def _payload_key(payload: Any) -> str:
-    if isinstance(payload, dict):
-        if payload.get("doc_id") is not None:
-            return str(payload["doc_id"])
-        if payload.get("text") is not None:
-            return str(payload["text"])
-    return str(payload)
-
-
-def _min_max_norm(scores: Dict[str, float]) -> Dict[str, float]:
-    if not scores:
-        return {}
-    vals = list(scores.values())
-    mn, mx = min(vals), max(vals)
-    if mx - mn < MIN_NORM_THRESHOLD:
-        return {k: 1.0 for k in scores}
-    return {k: (v - mn) / (mx - mn) for k, v in scores.items()}
 
 
 class HybridFusionStrategy(Protocol):

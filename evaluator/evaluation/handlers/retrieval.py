@@ -10,163 +10,36 @@ import numpy as np
 
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger, TimingContext
-from ..helpers import _payload_to_key, _search_results_to_keys
+from ..helpers import _search_results_to_keys
 from ..item_isolation import isolate_batch
 from ..executor.state import RunState
 from ..executor.node_pipeline import _node_reranking
-from ._common import DEBUG_SAMPLE_LIMIT, MATCH_SYMBOL, MISS_SYMBOL
+from ._common import publish_keyed_or_plain
+from .retrieval_debug import log_retrieval_debug as _log_retrieval_debug
 
 logger = get_logger(__name__)
 
 
-def _log_retrieval_debug(
-    retrieval_pipeline,
-    all_retrieved,
-    all_ground_truth,
-    all_relevance,
-    all_hypotheses,
-    all_query_ids,
-    all_embeddings,
-    mode,
-    k,
-) -> None:
-    """Verbose per-query retrieval inspection (dense + no-rerank only).
-
-    Pure diagnostic logging extracted from the retrieval phase; has no effect on
-    results. Logs DB vector stats and a re-search trace for the first 3 queries.
-    """
-    # Debug: Check vector store properties
-    if (
-        hasattr(retrieval_pipeline.vector_store, "vectors")
-        and retrieval_pipeline.vector_store.vectors is not None
-    ):
-        db_vectors = retrieval_pipeline.vector_store.vectors
-        logger.info(f"DB vectors shape: {db_vectors.shape}")
-        logger.info(
-            f"DB vectors stats - mean: {db_vectors.mean():.4f}, std: {db_vectors.std():.4f}"
-        )
-        logger.info(
-            f"DB vectors norms - mean: {np.linalg.norm(db_vectors, axis=1).mean():.4f}"
-        )
-        logger.info(
-            f"DB payload count: {len(getattr(retrieval_pipeline.vector_store, 'payloads', []))}"
-        )
-
-    if not (len(all_retrieved) > 0 and len(all_ground_truth) > 0):
-        return
-
-    can_debug_with_search = (
-        retrieval_pipeline.strategy_config.core.mode == "dense"
-        and retrieval_pipeline.strategy_config.reranking.mode == "none"
-    )
-    if not can_debug_with_search:
-        logger.info(
-            "Skipping dense-only debug re-search for current retrieval mode/reranker"
-        )
-        return
-
-    logger.info("RETRIEVAL DEBUG SAMPLE (first %d queries):", DEBUG_SAMPLE_LIMIT)
-
-    # Build a doc_id → text lookup from vector store payloads for ground-truth display
-    _db_payloads = getattr(retrieval_pipeline.vector_store, "payloads", [])
-    _doc_text_lookup: dict = {}
-    for _p in _db_payloads:
-        if isinstance(_p, dict):
-            _did = str(_p.get("doc_id", ""))
-            _dtxt = _p.get("text") or _p.get("abstract") or _p.get("title") or ""
-            if _did:
-                _doc_text_lookup[_did] = str(_dtxt)
-
-    emb_array = (
-        np.array(all_embeddings) if isinstance(all_embeddings, list) else all_embeddings
-    )
-    for i in range(min(DEBUG_SAMPLE_LIMIT, len(all_embeddings))):
-        results_with_scores = retrieval_pipeline.search(emb_array[i], k=10)
-
-        # gt_doc_id: the expected document id
-        if i < len(all_relevance) and len(all_relevance[i]) > 0:
-            gt_doc_id = next(iter(all_relevance[i].keys()))
-        else:
-            gt_doc_id = str(all_ground_truth[i])
-
-        # query_text: what was actually searched (ASR output or reference)
-        if mode == "asr_text_retrieval" and i < len(all_hypotheses):
-            query_text = all_hypotheses[i]
-        elif i < len(all_ground_truth):
-            query_text = str(all_ground_truth[i])
-        else:
-            query_text = all_query_ids[i] if i < len(all_query_ids) else "?"
-
-        # gt_doc_text: the text of the expected document (from corpus)
-        gt_doc_text = _doc_text_lookup.get(gt_doc_id, "")
-
-        logger.info(f"\nQuery {i+1}:")
-        logger.info(f"  ASR query text:        '{query_text[:120]}'")
-        if mode == "asr_text_retrieval" and i < len(all_ground_truth):
-            ref = str(all_ground_truth[i])
-            if ref != query_text:
-                logger.info(f"  Ground truth question: '{ref[:120]}'")
-        logger.info(f"  Expected doc:  [{gt_doc_id}] '{gt_doc_text[:100]}'")
-        logger.info(f"  Query emb norm: {np.linalg.norm(emb_array[i]):.4f}")
-        logger.info(f"  Top 5 retrieved:")
-
-        for j, (payload, score) in enumerate(results_with_scores[:5], 1):
-            doc_id = (
-                payload.get("doc_id", "") if isinstance(payload, dict) else str(payload)
-            )
-            match = MATCH_SYMBOL if doc_id == gt_doc_id else MISS_SYMBOL
-            preview = (
-                payload.get("text", str(payload))
-                if isinstance(payload, dict)
-                else str(payload)
-            )[:80]
-            logger.info(
-                f"    {j}. [{match}] Score: {score:.4f} | [{doc_id}] '{preview}'"
-            )
-
-        gt_rank = None
-        for rank, (payload, score) in enumerate(results_with_scores, 1):
-            doc_id = (
-                payload.get("doc_id", "") if isinstance(payload, dict) else str(payload)
-            )
-            if doc_id == gt_doc_id:
-                gt_rank = rank
-                logger.info(
-                    f"  Expected doc found at rank: {gt_rank} (score: {score:.4f})"
-                )
-                break
-
-        if gt_rank is None:
-            logger.info(f"  Expected doc NOT found in top-{k}")
-            payload_keys = [_payload_to_key(p) for p in _db_payloads]
-            if gt_doc_id in payload_keys:
-                logger.info(f"  (Doc exists in DB but outside top-{k})")
-            else:
-                logger.info(f"  (Doc NOT in DB at all!)")
+def _publish_retrieved(s: RunState, results_list: list, query_ids: list) -> None:
+    """Publish ``retrieved`` (keyed when ids align 1:1, else plain) via the shared publish
+    contract — so rerank/metrics/answer_gen read the list, metric nodes read it keyed."""
+    publish_keyed_or_plain(s, "retrieved", results_list, query_ids)
 
 
-def _publish_retrieved(s: RunState, results_list: list) -> None:
-    """Publish ``retrieved`` as a keyed ``ItemSet`` when query ids align 1:1 (W3);
-    otherwise the plain list. ``get_artifact('retrieved')`` returns the list either way, so
-    rerank/metrics/answer_gen are unchanged; metric nodes read it keyed via ``get_items``.
-    """
-    ids = [str(i) for i in (s.all_query_ids or [])]
-    if len(ids) == len(results_list) and len(set(ids)) == len(ids):
-        from ..item_set import ItemSet
+def _retrieval_query_texts(s: RunState, rp=None):
+    """Query texts feeding retrieval/rerank (mode-dependent); None for audio_emb.
 
-        s.put_items("retrieved", ItemSet(ids, list(results_list)))
-    else:
-        s.put_artifact("retrieved", results_list)
-
-
-def _retrieval_query_texts(s: RunState):
-    """Query texts feeding retrieval/rerank (mode-dependent); None for audio_emb."""
+    Bus-only since M1d-2: the effective query text (asr modes) / spoken reference
+    (fusion mode) come from the ctx. ``rp`` is the pipeline actually used (the
+    vector_index artifact); falls back to the shared one."""
+    rp = rp if rp is not None else s.retrieval_pipeline
     if s.mode == "asr_text_retrieval":
-        return s.all_hypotheses
+        # the effective (most-processed) query for sparse/hybrid scoring (QUERY_TEXT_CHAIN)
+        return s.input("query_text", default=None)
     if s.mode == "audio_text_retrieval":
-        return s.all_ground_truth
+        return s.get_artifact("reference_transcription", default=None)
     if s.mode == "audio_emb_retrieval":
-        if s.retrieval_pipeline.strategy_config.core.mode != "dense":
+        if rp.strategy_config.core.mode != "dense":
             raise ValueError(
                 "audio_emb_retrieval supports only retrieval_mode='dense'. "
                 "Sparse/hybrid requires query text unavailable in this path."
@@ -174,77 +47,143 @@ def _retrieval_query_texts(s: RunState):
     return None
 
 
-def _finalize_retrieval(s: RunState, results_list) -> None:
-    """Store final (payload, score) results + retrieved keys; log debug."""
-    s.all_results_with_scores = results_list
-    s.all_retrieved = [_search_results_to_keys(results) for results in results_list]
+def _finalize_retrieval(s: RunState, results_list, query_vectors, query_ids, rp=None) -> None:
+    """Publish final (payload, score) results to the bus; log debug.
+
+    Bus-only since M1c-2: downstream (metrics / answer_gen / finalize / aggregate)
+    reads the `retrieved` artifact via `_retrieved_from_bus`, not RunState mirrors."""
+    retrieved_keys = [_search_results_to_keys(results) for results in results_list]
     # Publish the `retrieved` artifact (list of per-query (payload, score) lists) under
     # this node's id so downstream reads the right producer (retrieval or a rerank). Same
     # shape as retrieve_candidates output, so rerank instances chain (R4c/D2). Keyed as an
     # ItemSet (W3) when query ids align — get_artifact unwraps to the list for legacy
     # consumers; metric nodes read it keyed via get_items.
-    _publish_retrieved(s, results_list)
-    logger.info(f"Retrieval complete: {len(s.all_retrieved)} queries")
+    _publish_retrieved(s, results_list, query_ids)
+    logger.info(f"Retrieval complete: {len(retrieved_keys)} queries")
     _log_retrieval_debug(
-        s.retrieval_pipeline,
-        s.all_retrieved,
-        s.all_ground_truth,
-        s.all_relevance,
-        s.all_hypotheses,
-        s.all_query_ids,
-        s.all_embeddings,
+        rp if rp is not None else s.retrieval_pipeline,
+        retrieved_keys,
+        list(s.get_artifact("reference_transcription", default=[])),
+        list(s.get_artifact("relevant_docs", default=[])),
+        list(s.input("query_text", default=[])),
+        query_ids,
+        query_vectors,
         s.mode,
         s.k,
     )
 
 
-@register_stage_handler("retrieval", time_key="retrieval_s")
+@register_stage_handler("index", time_key="retrieval_s")
+def _stage_index(s: RunState) -> None:
+    """Build the per-node vector store + index from ``corpus_vectors`` (§4 split).
+
+    The node's params pick the backend (``store`` + backend essentials); defaults
+    come from the global ``vector_db`` config. Publishes the indexed pipeline as
+    this node's ``vector_index`` — retrieval reads it artifact-first, so two
+    ``vector_db`` nodes with different backends coexist across branches.
+    """
+    cv = s.get_artifact("corpus_vectors", default=None)
+    if cv is None or s.config is None:
+        return
+    from ...models.retrieval.strategy import RetrievalStrategyConfig
+    from ...pipeline.factory import (
+        create_vector_store_from_config,
+        effective_vector_db_config,
+    )
+    from ...pipeline.retrieval_pipeline import RetrievalPipeline
+    from ...services.corpus_index import build_index_from_vectors
+
+    params = s.node_params
+    effective = effective_vector_db_config(s.config.vector_db, params)
+    vectors = np.asarray(cv.vectors)
+    embedding_dim = int(vectors.shape[1]) if vectors.ndim == 2 else None
+    store = create_vector_store_from_config(effective, embedding_dim=embedding_dim)
+    rp = RetrievalPipeline(
+        store,
+        s.cache_manager,
+        strategy_config=RetrievalStrategyConfig.from_vector_db_config(effective),
+        # The shared cross-encoder (built once by the factory) rides along so a
+        # following rerank node refines with the configured model — same instance,
+        # so the offload planner's free-after-last-use semantics are unchanged.
+        reranker=getattr(getattr(s, "retrieval_pipeline", None), "reranker", None),
+    )
+    build_index_from_vectors(rp, cv)
+    rp.embedding_space = cv.space  # space tag rides the index (§4 V[s] typing)
+    s.put_artifact("vector_index", rp)
+
+
+@register_stage_handler("search", time_key="retrieval_s")
+def _stage_search(s: RunState) -> None:
+    """The ``search`` operator: plain retrieval, or the multi-query/decompose fan-out
+    composite (which lives in the query handlers). Bodies unchanged."""
+    from .query import _stage_multi_query_retrieval
+    from ._dispatch import dispatch_operator
+
+    return dispatch_operator("search", {
+        "retrieval": _stage_retrieval,
+        "multi_query_retrieval": _stage_multi_query_retrieval,
+    }, s)
+
+
 def _stage_retrieval(s: RunState) -> None:
     """Candidate generation (dense/sparse/hybrid). When a ``rerank`` node follows
     (refinement configured) this only fetches candidates; otherwise it finalizes."""
-    if s.query_opt_bypassed:
-        return
-    # query_vectors artifact = the retrieval-input embeddings (published by the latest
-    # embedding/fusion producer); fall back to all_embeddings for direct callers (R4b).
-    query_vectors = s.get_artifact("query_vectors", default=s.all_embeddings)
+    # The retrieval-input embeddings: the highest-priority published stream resolved by
+    # s.input (one_of fused > audio > text > precomputed). A result-fusion retrieval
+    # instance pins ONE stream via the `vectors` param (so two retrievals over the audio
+    # and text streams feed result_fusion). Bus-only (M1d): a missing producer is a graph bug.
+    params = s.node_params
+    vname = params.get("vectors")
+    query_vectors = s.get_artifact(vname) if vname else s.input("query_vectors")
     if isinstance(query_vectors, list) and len(query_vectors) > 0:
         query_vectors = np.array(query_vectors)
-    s.all_embeddings = query_vectors  # keep for retrieval-debug logging
     s.cb("phase_3_retrieval", 0, s.total, "Phase 3: Retrieval")
     # The vector_index artifact is the indexed retrieval pipeline (published by
-    # corpus_index); fall back to the shared pipeline for direct callers (R4a).
+    # vector_db); fall back to the shared pipeline for direct callers (R4a).
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
     # Per-node k (R2): a branch may retrieve a different depth.
-    params = getattr(s.current_node, "params", None) or {}
     k = int(params.get("k", s.k))
+    # Per-node retrieval mode (R-hybrid): the hybrid DAG runs its dense + sparse arms as two
+    # retrieval nodes (mode=dense / mode=sparse) feeding result_fusion, instead of the
+    # monolithic in-pipeline hybrid fuse. Absent ⇒ the pipeline's configured mode.
+    rmode = params.get("mode")
     node_id = getattr(s.current_node, "id", "retrieval")
     with TimingContext("Retrieval Phase", logger):
-        s.retrieval_query_texts = _retrieval_query_texts(s)
-        qtexts = s.retrieval_query_texts
+        qtexts = _retrieval_query_texts(s, rp)
         nq = len(query_vectors)
-        ids = [str(i) for i in (s.all_query_ids or range(nq))]
+        # Per-item identity rides the keyed query_vectors ItemSet (M1d-2).
+        keyed = s.keyed_items(vname) if vname else s.input_items("query_vectors")
+        ids = (
+            [str(i) for i in keyed.ids]
+            if keyed is not None
+            else [str(i) for i in range(nq)]
+        )
 
         def _row_texts(i: int):
             return [qtexts[i]] if qtexts is not None else None
 
-        if rp.needs_refinement or s.rerank_in_graph:
+        if rp.needs_refinement or s.refine_in_graph or getattr(s, "fuse_in_graph", False):
             # Per-item isolation (T1): one query failing to fetch candidates drops out (empty
             # candidate list, recorded) instead of aborting; keyed report excludes it.
-            s.retrieval_candidates = isolate_batch(
+            candidates = isolate_batch(
                 ids,
                 list(range(nq)),
                 batch_fn=lambda _idx: rp.retrieve_candidates(
-                    query_vectors, k, query_texts=qtexts
+                    query_vectors, k, query_texts=qtexts, mode=rmode
                 ),
                 item_fn=lambda i: rp.retrieve_candidates(
-                    np.asarray(query_vectors[i : i + 1]), k, query_texts=_row_texts(i)
+                    np.asarray(query_vectors[i : i + 1]),
+                    k,
+                    query_texts=_row_texts(i),
+                    mode=rmode,
                 )[0],
                 node_id=node_id,
                 placeholder=[],
                 sink=s.drop_sink,
             )
-            # Publish candidates as `retrieved` so a following rerank reads them (D2).
-            s.put_artifact("retrieved", s.retrieval_candidates)
+            # Publish candidates as `retrieved` so a following rerank reads them (D2);
+            # keyed so the rerank's finalize keeps the real query ids (M1d-2).
+            _publish_retrieved(s, candidates, ids)
         else:
             _finalize_retrieval(
                 s,
@@ -263,37 +202,146 @@ def _stage_retrieval(s: RunState) -> None:
                     placeholder=[],
                     sink=s.drop_sink,
                 ),
+                query_vectors,
+                ids,
+                rp=rp,
             )
     s.cb("phase_3_retrieval", s.total, s.total, "Retrieval complete")
 
 
-@register_stage_handler("rerank", time_key="retrieval_s")
+def _refine_inputs(s: RunState):
+    """Shared inputs for the rerank / mmr / threshold refine nodes: the candidate
+    ``retrieved`` (from the bound producer — retrieval or a prior refine node), the keyed
+    ids, the indexed pipeline, and the per-query k (consistent — the retrieve node's k)."""
+    candidates = s.get_artifact("retrieved")
+    keyed = s.keyed_items("retrieved")
+    ids = (
+        [str(i) for i in keyed.ids]
+        if keyed is not None
+        else [str(i) for i in range(len(candidates))]
+    )
+    rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
+    k = int(s.node_params.get("k", s.k))
+    return candidates, ids, rp, k
+
+
+@register_stage_handler("refine", time_key="retrieval_s")
+def _stage_refine(s: RunState) -> None:
+    """The ``refine`` operator: dispatch by op to rerank / mmr / threshold (each
+    retrieved→retrieved; bodies unchanged)."""
+    from ._dispatch import dispatch_operator
+
+    dispatch_operator("refine", {
+        "rerank": _stage_rerank,
+        "mmr": _stage_mmr,
+        "threshold": _stage_threshold,
+    }, s)
+
+
 def _stage_rerank(s: RunState) -> None:
-    """Refine retrieved candidates: rerank (cross-encoder / token-overlap) + MMR /
-    threshold + truncate to k. Present only when refinement is configured."""
-    if s.query_opt_bypassed:
-        return
+    """Rerank node: reorder candidates (cross-encoder / token-overlap). Keeps the larger
+    fetch_k pool when an MMR node follows (it re-selects k diverse from the pool), else
+    truncates to k. Republishes ``retrieved`` for the next refine node / metrics."""
     s.cb("phase_3_5_rerank", 0, s.total, "Phase 3.5: Rerank")
     with TimingContext("Rerank Phase", logger):
-        # Read the candidates from this node's bound producer (retrieval, or a prior
-        # rerank when chained) — so duplicate rerank instances route correctly (D2).
-        candidates = s.get_artifact("retrieved", default=s.retrieval_candidates)
-        rp = s.retrieval_pipeline
-        params = getattr(s.current_node, "params", None)
-        with _node_reranking(rp, params, getattr(s, "service_provider", None)):
-            results_list = rp.refine_candidates(
-                candidates,
-                s.all_embeddings,
-                s.k,
-                query_texts=s.retrieval_query_texts,
-            )
-        _finalize_retrieval(s, results_list)
+        candidates, ids, rp, k = _refine_inputs(s)
+        target = rp._fetch_k(k) if getattr(s, "mmr_in_graph", False) else k
+        with _node_reranking(rp, s.node_params, getattr(s, "service_provider", None)):
+            refined = rp.rerank_only(candidates, _retrieval_query_texts(s, rp), target)
+        _publish_retrieved(s, refined, ids)
     s.cb("phase_3_5_rerank", s.total, s.total, "Rerank complete")
 
 
-def _rehydrate_retrieved(s: RunState) -> None:
-    """Pull the `retrieved` artifact from the bound producer (retrieval/rerank) onto the
-    state's result fields (R4c). Shared by the metrics + answer_gen handlers."""
-    results_list = s.get_artifact("retrieved", default=s.all_results_with_scores)
-    s.all_results_with_scores = results_list
-    s.all_retrieved = [_search_results_to_keys(r) for r in results_list]
+def _stage_mmr(s: RunState) -> None:
+    """MMR node: re-select k diverse results per query (from the rerank pool / candidates)."""
+    candidates, ids, rp, k = _refine_inputs(s)
+    query_vectors = s.input("query_vectors", default=None)
+    if isinstance(query_vectors, list) and len(query_vectors) > 0:
+        query_vectors = np.array(query_vectors)
+    _publish_retrieved(s, rp.mmr_only(candidates, query_vectors, k), ids)
+
+
+def _stage_threshold(s: RunState) -> None:
+    """Threshold node: truncate to k + drop results below the similarity threshold."""
+    candidates, ids, rp, k = _refine_inputs(s)
+    _publish_retrieved(s, rp.threshold_only(candidates, k), ids)
+
+
+def _retrieved_from_bus(s: RunState):
+    """The `retrieved` artifact from the bound producer (retrieval/rerank), as
+    ``(results_with_scores, retrieved_keys, query_ids)`` locals (R4c, bus-only since
+    M1c-2/M1d). Per-item identity rides the keyed ItemSet; index ids otherwise."""
+    results_list = s.get_artifact("retrieved", default=[])
+    keyed = s.keyed_items("retrieved")
+    ids = (
+        [str(i) for i in keyed.ids]
+        if keyed is not None
+        else [str(i) for i in range(len(results_list))]
+    )
+    return results_list, [_search_results_to_keys(r) for r in results_list], ids
+
+
+def _stage_result_fusion(s: RunState) -> None:
+    """Result-level fusion (second fusion level): combine the ranked results of the two
+    upstream retrievals (audio-stream + text-stream) into one ranked set per query, reusing
+    the registered hybrid rank-fusion strategies. Republishes ``retrieved`` so metrics /
+    answer_gen bind the fused results."""
+    from ..item_set import ItemSet
+    from ...models.retrieval.fusion_registry import fuse_hybrid_results
+
+    producers = s._producers("retrieved")
+    sets = [
+        s.ctx.get(pid, "retrieved")
+        for pid in producers
+        if s.ctx.has(pid, "retrieved")
+    ]
+    sets = [x for x in sets if isinstance(x, ItemSet)]
+    if len(sets) < 2:
+        # nothing to fuse — pass the single ranked set through unchanged.
+        if sets:
+            s.put_items("retrieved", sets[0])
+        return
+
+    params = s.node_params
+    # Hybrid composition (R-hybrid): the two upstream arms are the dense + sparse retrievals
+    # over ONE query stream. Fusion params come from the pipeline's core config (the same
+    # hybrid_fusion_method / dense_weight / rrf_k the monolithic hybrid used), and the fused
+    # pool keeps fetch_k depth when a refine node follows (so rerank/MMR see the full pool —
+    # byte-identical to the in-pipeline hybrid path). The audio↔text result-level fusion keeps
+    # its own params + per-query depth.
+    hybrid = bool(params.get("hybrid"))
+    rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
+    core = getattr(getattr(rp, "strategy_config", None), "core", None)
+    if hybrid and core is not None:
+        method = params.get("method") or core.hybrid_fusion_method
+        weight = float(params.get("weight", core.hybrid_dense_weight))
+        rrf_k = int(params.get("rrf_k", core.rrf_k))
+        k = int(params.get("k", s.k))
+        hybrid_top_k = rp._fetch_k(k) if getattr(s, "refine_in_graph", False) else k
+    else:
+        method = params.get("method", "rrf")
+        weight = float(params.get("weight", 0.5))
+        rrf_k = int(params.get("rrf_k", 60))
+        hybrid_top_k = None
+    a, b = sets[0], sets[1]
+    b_by_id = dict(zip(b.ids, b.values))
+    fused_values = []
+    for qid, a_results in zip(a.ids, a.values):
+        b_results = b_by_id.get(qid, [])
+        top_k = hybrid_top_k or int(
+            params.get("top_k") or max(len(a_results), len(b_results)) or s.k
+        )
+        fused_values.append(
+            fuse_hybrid_results(
+                method,
+                list(a_results),
+                list(b_results),
+                dense_weight=weight,
+                top_k=top_k,
+                rrf_k=rrf_k,
+            )
+        )
+    s.put_items("retrieved", ItemSet(list(a.ids), fused_values))
+    logger.info(
+        "result_fusion: fused %d query result sets via %s", len(fused_values), method
+    )

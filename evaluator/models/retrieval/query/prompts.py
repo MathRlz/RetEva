@@ -106,6 +106,26 @@ MEDICAL_CONTEXT_EXAMPLES = """Example medical query refinements:
 """
 
 
+SELF_RAG_CRITIQUE_SYSTEM_PROMPT = (
+    "You are a clinical search assistant. Given a query and the documents an initial "
+    "retrieval returned, judge whether the documents actually answer the query. If they "
+    "miss the intent or are off-topic, rewrite the query to retrieve better documents "
+    "(add the missing concept, disambiguate, or narrow it). Reply with ONLY the improved "
+    "search query — no explanation."
+)
+SELF_RAG_CRITIQUE_USER_PROMPT = (
+    "Query: {query}\n\nInitial retrieved documents:\n{context}\n\nImproved query:"
+)
+
+
+def get_self_rag_prompt(query: str, context: str) -> tuple[str, str]:
+    """System + user prompts for the self-RAG critique refine strategy."""
+    return (
+        SELF_RAG_CRITIQUE_SYSTEM_PROMPT,
+        SELF_RAG_CRITIQUE_USER_PROMPT.format(query=query, context=context),
+    )
+
+
 def get_rewrite_prompt(query: str, context: Optional[str] = None) -> tuple[str, str]:
     """Get system and user prompts for query rewriting.
     

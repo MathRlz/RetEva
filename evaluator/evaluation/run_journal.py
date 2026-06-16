@@ -26,20 +26,6 @@ logger = get_logger(__name__)
 # Plain-data fields snapshotted from RunState (everything downstream nodes read). ctx and
 # drop_sink are handled specially (their locks aren't picklable).
 _SNAPSHOT_FIELDS = (
-    "all_hypotheses",
-    "all_ground_truth",
-    "all_embeddings",
-    "audio_embeddings",
-    "text_embeddings_for_fusion",
-    "all_relevance",
-    "all_query_ids",
-    "all_results_with_scores",
-    "all_retrieved",
-    "retrieval_candidates",
-    "retrieval_query_texts",
-    "audio_emb_for_alignment",
-    "text_emb_for_alignment",
-    "query_opt_bypassed",
     "metrics_all_relevant",
     "wer_scores",
     "cer_scores",

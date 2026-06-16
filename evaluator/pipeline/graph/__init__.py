@@ -18,17 +18,25 @@ shim both keep working unchanged.
 """
 
 from .branches import build_branched_graph, expand_branches  # noqa: F401
+from .display import display_label  # noqa: F401
+from .operators import (  # noqa: F401  (re-export surface)
+    ALIASES,
+    OPERATORS,
+    expand_alias,
+    is_operator,
+    node_kind,
+)
 from .cse import (  # noqa: F401  (re-export surface)
     _freeze_params,
     _topo_order,
     collapse_common_subexpressions,
 )
+from .assembly import FeatureSet, assemble_specs  # noqa: F401  (re-export surface)
 from .modes import (  # noqa: F401  (re-export surface)
     PIPELINE_MODE_SPECS,
     PipelineModeSpec,
-    _config_rerank_enabled,
+    _features_from_config,
     _make_spec,
-    _mode_node_ids,
     _required_model_fields,
     build_graph_for_config,
     build_stage_graph,
@@ -42,22 +50,38 @@ from .registry import (  # noqa: F401  (re-export surface)
     ARTIFACT_QUERY_AUDIO,
     ARTIFACT_QUERY_TEXT,
     ARTIFACT_QUERY_VECTORS,
+    ARTIFACT_AUDIO_QUERY_VECTORS,
+    ARTIFACT_TEXT_QUERY_VECTORS,
+    ARTIFACT_FUSED_QUERY_VECTORS,
+    ARTIFACT_REFERENCE_TRANSCRIPTION,
+    ARTIFACT_EMBEDDING_ALIGNMENT,
     ARTIFACT_RELEVANT_DOCS,
     ARTIFACT_RETRIEVED,
     ARTIFACT_SHORT_ANSWERS,
+    ARTIFACT_CORPUS_VECTORS,
     ARTIFACT_VECTOR_INDEX,
     DATASET_ROLE_BOTH,
     DATASET_ROLE_CORPUS,
     DATASET_ROLE_QUESTIONS,
     SOURCE_ARTIFACTS,
     _DATASET_SOURCE_ROLE_OUTPUTS,
+    _effective_inputs,
     _effective_outputs,
+    dataset_columns,
+    display_artifact_names,
     _NODE_REGISTRY,
+    OneOf,
+    one_of,
     StageGraph,
     StageNode,
     StageNodeDef,
     get_stage_node_def,
+    node_category,
+    node_domain,
+    node_model_field,
     register_stage_node,
+    registered_stage_names,
+    stages_in_category,
     validate_graph_artifacts,
 )
 from .wiring import (  # noqa: F401  (re-export surface)
@@ -74,8 +98,22 @@ __all__ = [
     "PipelineModeSpec",
     # Registry
     "register_stage_node",
+    "registered_stage_names",
+    "stages_in_category",
+    "node_category",
+    "node_domain",
+    "node_model_field",
     "get_stage_node_def",
     "validate_graph_artifacts",
+    # Operators (alias bijection)
+    "ALIASES",
+    "OPERATORS",
+    "expand_alias",
+    "is_operator",
+    "node_kind",
+    "OneOf",
+    "one_of",
+    "display_artifact_names",
     # Wiring
     "build_graph_from_spec",
     # CSE
@@ -83,6 +121,8 @@ __all__ = [
     # Branches
     "expand_branches",
     "build_branched_graph",
+    # Display
+    "display_label",
     # Modes
     "build_stage_graph",
     "build_graph_for_config",
@@ -101,8 +141,14 @@ __all__ = [
     "ARTIFACT_QUERY_AUDIO",
     "ARTIFACT_QUERY_TEXT",
     "ARTIFACT_QUERY_VECTORS",
+    "ARTIFACT_AUDIO_QUERY_VECTORS",
+    "ARTIFACT_TEXT_QUERY_VECTORS",
+    "ARTIFACT_FUSED_QUERY_VECTORS",
+    "ARTIFACT_REFERENCE_TRANSCRIPTION",
+    "ARTIFACT_EMBEDDING_ALIGNMENT",
     "ARTIFACT_RELEVANT_DOCS",
     "ARTIFACT_RETRIEVED",
     "ARTIFACT_SHORT_ANSWERS",
+    "ARTIFACT_CORPUS_VECTORS",
     "ARTIFACT_VECTOR_INDEX",
 ]

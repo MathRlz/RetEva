@@ -44,6 +44,70 @@ class AttentionPooling(nn.Module):
         return pooled
 
 
+class MeanPooling(nn.Module):
+    """Masked mean over the sequence axis (no learnable params)."""
+
+    def forward(self, x, mask=None):
+        # x: (batch_size, seq_len, input_dim)
+        if mask is not None:
+            m = mask.unsqueeze(-1).to(x.dtype)
+            return (x * m).sum(dim=1) / m.sum(dim=1).clamp(min=1e-9)
+        return x.mean(dim=1)
+
+
+class MeanPoolingWithWhitening(nn.Module):
+    """Masked mean, then whiten with precomputed stats (buffers loaded from the checkpoint)."""
+
+    def __init__(self, m: torch.Tensor, W: torch.Tensor):
+        super().__init__()
+        self.register_buffer("m", m)
+        self.register_buffer("W", W)
+
+    def forward(self, x, mask=None):
+        from .postprocessing import whiten_batch
+
+        pooled = MeanPooling().forward(x, mask)
+        return whiten_batch(pooled, self.m, self.W)
+
+
+class MeanPoolingWithAbtt(nn.Module):
+    """Masked mean, then All-But-The-Top with precomputed stats (buffers from the checkpoint)."""
+
+    def __init__(self, mu: torch.Tensor, pc1: torch.Tensor):
+        super().__init__()
+        self.register_buffer("mu", mu)
+        self.register_buffer("pc1", pc1)
+
+    def forward(self, x, mask=None):
+        from .postprocessing import abtt_batch
+
+        pooled = MeanPooling().forward(x, mask)
+        return abtt_batch(pooled, self.mu, self.pc1)
+
+
+# Pooling strategies selectable via the ``pooling`` model param (CHOICES, surfaced in the
+# builder). All pool to ``hidden_dim``; the projection head then maps to ``emb_dim``.
+POOLING_CHOICES = ["attention", "mean", "mean_whiten", "mean_abtt"]
+
+
+def _make_pooling(pooling: str, hidden_dim: int, dropout: float) -> nn.Module:
+    """Build the selected pooling module. The whiten/ABTT stats are placeholder buffers of the
+    right shape so a checkpoint's ``attn_pool.*`` buffers overwrite them via ``load_state_dict``."""
+    if pooling == "attention":
+        return AttentionPooling(input_dim=hidden_dim, output_dim=hidden_dim, dropout=dropout)
+    if pooling == "mean":
+        return MeanPooling()
+    if pooling == "mean_whiten":
+        return MeanPoolingWithWhitening(
+            m=torch.zeros(hidden_dim), W=torch.eye(hidden_dim)
+        )
+    if pooling == "mean_abtt":
+        return MeanPoolingWithAbtt(
+            mu=torch.zeros(hidden_dim), pc1=torch.zeros(hidden_dim)
+        )
+    raise ValueError(f"Unknown pooling '{pooling}'. Options: {POOLING_CHOICES}")
+
+
 class ProjectionHead(nn.Module):
     """Projection head to map pooled features to embedding space."""
 
@@ -193,6 +257,7 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         size: str = "large"
         emb_dim: int = 2048
         dropout: float = 0.1
+        pooling: str = "attention"
         SIZES: ClassVar[Dict[str, str]] = {
             "base": "openai/whisper-base",
             "small": "openai/whisper-small",
@@ -201,12 +266,14 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
             "large-v2": "openai/whisper-large-v2",
             "large-v3": "openai/whisper-large-v3",
         }
+        CHOICES: ClassVar[Dict[str, List[str]]] = {"pooling": POOLING_CHOICES}
 
     def __init__(self,
                  audio_encoder_name: str = "openai/whisper-large",
                  emb_dim: int = 2048,
                  model_path: Optional[str] = None,
-                 dropout: float = 0.1):
+                 dropout: float = 0.1,
+                 pooling: str = "attention"):
         """
         Initialize attention pool audio model.
 
@@ -215,10 +282,13 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
             emb_dim: Embedding dimension (should match text embedder).
             model_path: Path to pre-trained APM model weights (.pt file).
             dropout: Dropout rate for attention pooling and projection.
+            pooling: Sequence-pooling strategy — one of ``POOLING_CHOICES`` (attention /
+                mean / mean_whiten / mean_abtt). The whiten/ABTT stats load from the checkpoint.
         """
         self.audio_encoder_name = audio_encoder_name
         self.emb_dim = emb_dim
         self.model_path = model_path
+        self.pooling_kind = pooling
         self.device = torch.device("cpu")
 
         # Encoder-specific backend (feature extractor + frozen encoder + mask logic).
@@ -228,12 +298,10 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         self.audio_encoder = self.backend.encoder
         self.feature_extractor = self.backend.processor
 
-        # Attention pooling and projection operate at the encoder's hidden dim.
-        self.attention_pool = AttentionPooling(
-            input_dim=self.hidden_dim,
-            output_dim=self.hidden_dim,
-            dropout=dropout,
-        )
+        # Pooling (selected strategy) and projection operate at the encoder's hidden dim.
+        self.pooling = _make_pooling(pooling, self.hidden_dim, dropout)
+        # Back-compat alias: external code/tests reference ``attention_pool`` as the pooling slot.
+        self.attention_pool = self.pooling
         self.projection_head = ProjectionHead(
             input_dim=self.hidden_dim,
             emb_dim=emb_dim,
@@ -244,25 +312,29 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
             self._load_weights(model_path)
 
     def _load_weights(self, model_path: str):
-        """Load pre-trained APM weights (attn_pool.* and proj.proj.*)."""
+        """Load pre-trained APM weights (attn_pool.* and proj.proj.*).
+
+        ``attn_pool.*`` carries the active pooling's trained state — attention params, or the
+        whiten ``m``/``W`` / ABTT ``mu``/``pc1`` buffers; ``mean`` pooling has none. Strict per
+        pooling kind: the checkpoint must match the selected ``pooling``."""
         state_dict = torch.load(model_path, map_location=self.device)
 
         # APM checkpoint has keys: audio_enc.*, attn_pool.*, proj.* — we load only
         # the trained pooling + projection (the encoder is frozen / from_pretrained).
-        attn_pool_state = {}
+        pooling_state = {}
         proj_head_state = {}
 
         for key, value in state_dict.items():
             if key.startswith('attn_pool.'):
                 new_key = key.replace('attn_pool.', '')
-                attn_pool_state[new_key] = value
+                pooling_state[new_key] = value
             elif key.startswith('proj.proj.'):
                 # Strip 'proj.' prefix to get 'proj.0.weight' etc.
                 new_key = key.replace('proj.', '', 1)
                 proj_head_state[new_key] = value
 
-        if attn_pool_state:
-            self.attention_pool.load_state_dict(attn_pool_state, strict=True)
+        if pooling_state:
+            self.pooling.load_state_dict(pooling_state, strict=True)
         if proj_head_state:
             self.projection_head.load_state_dict(proj_head_state, strict=True)
 
@@ -271,7 +343,8 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         self.device = device
         self.backend.to(device)
         self.audio_encoder = self.backend.encoder
-        self.attention_pool.to(device)
+        self.pooling.to(device)
+        self.attention_pool = self.pooling  # keep the alias in sync
         self.projection_head.to(device)
         return self
 
@@ -288,7 +361,7 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
 
         with torch.no_grad():
             self.backend.eval()
-            self.attention_pool.eval()
+            self.pooling.eval()
             self.projection_head.eval()
 
             # Run the (model-owned) encoder; the backend returns the hidden states
@@ -297,7 +370,7 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
                 self.audio_encoder, features, attention_mask
             )
 
-            pooled = self.attention_pool(enc_hidden, pooled_mask)  # (batch, hidden_dim)
+            pooled = self.pooling(enc_hidden, pooled_mask)  # (batch, hidden_dim)
             embeddings = self.projection_head(pooled)              # (batch, emb_dim)
             embeddings = F.normalize(embeddings, p=2, dim=-1)
 
@@ -313,7 +386,8 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
 
     def name(self) -> str:
         """Return model name."""
-        name = f"AttentionPoolAudioModel - encoder:{self.audio_encoder_name} - emb_dim:{self.emb_dim}"
+        name = (f"AttentionPoolAudioModel - encoder:{self.audio_encoder_name}"
+                f" - emb_dim:{self.emb_dim} - pooling:{self.pooling_kind}")
         if self.model_path:
             name += f" - weights:{self.model_path}"
         return name
@@ -334,13 +408,16 @@ class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
         size: str = "v2-large"
         emb_dim: int = 2048
         dropout: float = 0.1
+        pooling: str = "attention"
         SIZES: ClassVar[Dict[str, str]] = {
             "v2-large": "facebook/seamless-m4t-v2-large",
         }
+        CHOICES: ClassVar[Dict[str, List[str]]] = {"pooling": POOLING_CHOICES}
 
     def __init__(self,
                  audio_encoder_name: str = "facebook/seamless-m4t-v2-large",
                  emb_dim: int = 2048,
                  model_path: Optional[str] = None,
-                 dropout: float = 0.1):
-        super().__init__(audio_encoder_name, emb_dim, model_path, dropout)
+                 dropout: float = 0.1,
+                 pooling: str = "attention"):
+        super().__init__(audio_encoder_name, emb_dim, model_path, dropout, pooling)

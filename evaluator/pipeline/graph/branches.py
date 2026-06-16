@@ -33,16 +33,28 @@ def expand_branches(
         bid = str(branch["id"])
         overrides = {k: v for k, v in branch.items() if k != "id"}
         idmap: Dict[str, str] = {}
-        for ntype in base_node_ids:
-            nid = f"{ntype}@{bid}"
-            idmap[ntype] = nid
-            override = overrides.get(ntype)
-            if override is None:
-                params: Optional[dict] = None
-            elif isinstance(override, dict):
-                params = dict(override)
+        for entry in base_node_ids:
+            # Template entries may be node-type strings or {id, type, params} dicts
+            # (e.g. dataset_source carrying its injected `fields` column schema).
+            if isinstance(entry, dict):
+                ntype = entry.get("type") or entry["id"]
+                # The branch id stems on the node's *id* (the pinned legacy name), not its
+                # type — so an operator template (id="asr", type="convert") still yields
+                # `asr@ref` and matches the user's `{asr: …}` override by legacy name.
+                stem = entry.get("id") or ntype
+                base_params: Optional[dict] = dict(entry.get("params") or {}) or None
             else:
-                params = {"model": override}
+                ntype = stem = entry
+                base_params = None
+            nid = f"{stem}@{bid}"
+            idmap[stem] = nid
+            override = overrides.get(stem)
+            if override is None:
+                params = base_params
+            elif isinstance(override, dict):
+                params = {**(base_params or {}), **override}
+            else:
+                params = {**(base_params or {}), "model": override}
             specs.append({"id": nid, "type": ntype, "params": params})
         for to_t, froms in (edges or {}).items():
             new_edges[idmap.get(to_t, to_t)] = [idmap.get(f, f) for f in froms]
@@ -69,12 +81,26 @@ def build_branched_graph(
         all_nodes.extend(graph.nodes)
     collapsed = collapse_common_subexpressions(tuple(all_nodes))
     # One terminal aggregate node depends on every branch's metrics → builds the
-    # per-branch report + cross-branch deltas (scans the ctx, W6/A9).
+    # per-branch report + cross-branch deltas (scans the ctx, W6/A9). Resolve via
+    # node_kind so the predicate matches ONLY the report node (`metrics`) + retrieval —
+    # not every `measure`/`search` operator node (which would shift aggregate's deps).
+    from .operators import expand_alias, node_kind
+
     ordering = tuple(
-        sorted(n.id for n in collapsed if n.stage in ("metrics", "retrieval"))
+        sorted(
+            n.id
+            for n in collapsed
+            if node_kind(n.stage, n.params) in ("metrics", "retrieval")
+        )
     )
     if ordering:
+        # The aggregate node is the `sink` operator (target:aggregate) — create it directly
+        # in operator form (it bypasses _normalize_spec_item) so it has a registered handler,
+        # keeping the pinned id "aggregate".
+        agg_op, agg_params = expand_alias("aggregate", None)
         collapsed = collapsed + (
-            StageNode(id="aggregate", stage="aggregate", depends_on=ordering),
+            StageNode(
+                id="aggregate", stage=agg_op, depends_on=ordering, params=agg_params
+            ),
         )
     return StageGraph(mode=mode, nodes=collapsed)

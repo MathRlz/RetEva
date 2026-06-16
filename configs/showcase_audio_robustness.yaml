@@ -1,0 +1,57 @@
+# SHOWCASE: audio-axis robustness — the `augment_audio` node (§4.1 P4, §5 A→A).
+# The node sits between TTS and ASR: each synthesized query clip is perturbed with
+# white noise (seeded per item — reproducible), the perturbed REFS ride the bus, and
+# ASR transcribes the noisy clips via the ref-decoding view. Compare against the clean
+# e2e_pubmed_qa_small leaderboard entry to quantify ASR/retrieval noise sensitivity.
+experiment:
+  name: showcase_audio_robustness
+  output_dir: evaluation_results/showcase
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  nodes:
+    - dataset_source
+    - corpus_embedding
+    - vector_db
+    - tts
+    - id: noise
+      type: augment_audio
+      params:
+        add_noise: true
+        snr_db: 5.0
+    - asr
+    - text_embedding
+    - retrieval
+    - metrics
+    - finalize
+nodes:
+  asr:
+    model: whisper
+    size: base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: false   # noisy clips must not collide with clean transcription cache entries
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/showcase/audio

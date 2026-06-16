@@ -1,0 +1,59 @@
+# SHOWCASE: text robustness perturbation — the `augmenter` node (architecture §5, C2).
+# An explicit graph inserts an augmenter between ASR and embedding: it corrupts each
+# query deterministically (seeded per item) with ASR-confusion homophones and the
+# clinically dangerous dose/unit swaps (mg <-> mcg) that drive the CEER metric. Compare
+# this run's leaderboard entry against showcase_asr_model_compare's clean whisper_base
+# branch to quantify retrieval robustness under realistic transcription noise.
+experiment:
+  name: showcase_robustness_augmenter
+  output_dir: evaluation_results/showcase
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_small/questions.json
+  corpus: examples/data/pubmed_qa_small/corpus.json
+  trace_limit: 5
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  mode: asr_text_retrieval
+  nodes:
+    - dataset_source
+    - corpus_embedding
+    - vector_db
+    - tts
+    - asr
+    - id: augmenter
+      type: augmenter
+      params:
+        homophones: true
+        unit_corruption: true
+        max_edits: 2
+    - text_embedding
+    - retrieval
+    - metrics
+    - finalize
+nodes:
+  asr:
+    model: whisper
+    size: base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+  logging:
+    console_level: WARNING
+audio_synthesis:
+  enabled: true
+  provider: mms
+  voice: en
+  sample_rate: 16000
+  seed: 42
+  output_dir: evaluation_results/showcase/audio

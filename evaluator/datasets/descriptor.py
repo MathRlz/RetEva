@@ -11,7 +11,7 @@ built-in datasets are defined as per-type ABC subclasses in :mod:`.builtins`
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, TYPE_CHECKING
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, TYPE_CHECKING
 
 from ..config.types import DatasetType
 from ..errors import ConfigurationError
@@ -29,6 +29,37 @@ METRICS_BY_MODE: Dict[str, Sequence[str]] = {
     "qa_retrieval":  ("wer", "cer", "mrr", "ndcg", "precision", "recall"),
     "qa":            ("mrr", "ndcg", "llm_judge"),
     "ranking":       ("ndcg", "precision"),
+}
+
+
+# ── Default column schema per dataset type ────────────────────────────
+# Column name → registered artifact (§2 "field → registered artifact"). A descriptor
+# may declare its own `fields`; these defaults keep builtins terse. The dataset_source
+# node advertises exactly these columns on the DAG (name + modality), so the diagram
+# reads what data an experiment consumes.
+
+FIELDS_BY_DATASET_TYPE: Dict[DatasetType, Dict[str, str]] = {
+    DatasetType.AUDIO_TRANSCRIPTION: {
+        "audio": "query_audio",
+        "transcription": "query_text",
+    },
+    DatasetType.AUDIO_QUERY_RETRIEVAL: {
+        "audio": "query_audio",
+        "documents": "corpus",
+        "relevance": "relevant_docs",
+    },
+    DatasetType.TEXT_QUERY_RETRIEVAL: {
+        "question": "query_text",
+        "documents": "corpus",
+        "relevance": "relevant_docs",
+    },
+    DatasetType.MULTIMODAL_QA: {
+        "question": "query_text",
+        "audio": "query_audio",
+        "documents": "corpus",
+        "relevance": "relevant_docs",
+        "answers": "short_answers",
+    },
 }
 
 
@@ -55,6 +86,10 @@ class DatasetDescriptor:
         default_metrics: Metrics to compute; auto-filled from evaluation_mode
             when left empty.
         required_data_fields: DataConfig attribute names that must be non-empty.
+        fields: Column schema — ``{column_name: registered_artifact_name}``. The
+            dataset_source node advertises these columns (name + modality) on the
+            DAG; auto-filled from ``FIELDS_BY_DATASET_TYPE`` when left empty and
+            validated against the artifact registry.
         load_fn: ``(DataConfig) -> QueryDataset`` called by :meth:`load`.
         validate_fn: Optional ``(DataConfig) -> List[str]`` for custom
             validation logic (overrides required_data_fields check when set).
@@ -70,6 +105,17 @@ class DatasetDescriptor:
     compatible_pipeline_modes: Sequence[str]
     default_metrics: Sequence[str] = field(default_factory=list)
     required_data_fields: Sequence[str] = field(default_factory=list)
+    fields: Mapping[str, str] = field(default_factory=dict)
+    #: Free-form subject-area tag for grouping the dataset picker (e.g. "medical",
+    #: "multilingual", "general"). Modality is derived from ``dataset_type``.
+    domain: str = "general"
+    #: Embedding-space id for precomputed-vector columns (§4.1 T4) — set when a
+    #: column maps to query_vectors/corpus_vectors so retrieval's V[s] pairing holds.
+    embedding_space: Optional[str] = None
+    #: Splits the dataset offers (empty = no split concept; the picker stays hidden).
+    splits: Sequence[str] = ()
+    #: The split used when the config names none; first declared split if unset.
+    default_split: Optional[str] = None
     load_fn: Optional[Callable[["DataConfig"], "QueryDataset"]] = field(
         default=None, repr=False
     )
@@ -78,8 +124,17 @@ class DatasetDescriptor:
     )
 
     def __post_init__(self) -> None:
+        if self.splits and not self.default_split:
+            self.default_split = str(self.splits[0])
         if not self.default_metrics:
             self.default_metrics = list(METRICS_BY_MODE.get(self.evaluation_mode, ()))
+        if not self.fields:
+            self.fields = dict(FIELDS_BY_DATASET_TYPE.get(self.dataset_type, {}))
+        if self.fields:
+            # Fail loud at registration on a typo'd artifact name (§2 contract).
+            from ..pipeline.artifacts import validate_field_mapping
+
+            validate_field_mapping(self.fields)
 
     # ── Public helpers ────────────────────────────────────────────────
 
@@ -92,9 +147,10 @@ class DatasetDescriptor:
 
         Uses validate_fn when provided, otherwise checks required_data_fields.
         """
+        split_errors = self._validate_split(data)
         if self.validate_fn is not None:
-            return self.validate_fn(data)
-        errors: List[str] = []
+            return split_errors + self.validate_fn(data)
+        errors: List[str] = list(split_errors)
         for fname in self.required_data_fields:
             val = getattr(data, fname, None)
             if val in (None, "", []):
@@ -110,6 +166,18 @@ class DatasetDescriptor:
                 f"No load_fn registered for dataset '{self.id}'"
             )
         return self.load_fn(data_config)
+
+    def _validate_split(self, data: "DataConfig") -> List[str]:
+        """Reject a configured split the dataset doesn't declare (no-op without splits)."""
+        if not self.splits:
+            return []
+        chosen = getattr(data, "huggingface_split", None)
+        if chosen in (None, "") or chosen in set(self.splits):
+            return []
+        return [
+            f"dataset '{self.id}' has no split '{chosen}' "
+            f"(available: {', '.join(self.splits)})"
+        ]
 
 
 # ── Registry ──────────────────────────────────────────────────────────

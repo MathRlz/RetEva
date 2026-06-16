@@ -11,12 +11,9 @@ from typing import Dict
 
 from .state import RunState
 
-# Stage id -> the RunState attribute holding the pipeline whose model that stage runs.
-_STAGE_PIPELINE_ATTR = {
-    "asr": "asr_pipeline",
-    "text_embedding": "text_embedding_pipeline",
-    "audio_embedding": "audio_embedding_pipeline",
-}
+# Stage id -> the RunState attribute holding the pipeline whose model that stage runs (from the
+# shared stage-metadata table; corpus_embedding has no own pipeline attr and is handled below).
+from .stage_meta import PIPELINE_ATTR as _STAGE_PIPELINE_ATTR
 
 
 def _stage_model(state: "RunState", stage: str):
@@ -28,7 +25,7 @@ def _stage_model(state: "RunState", stage: str):
     if stage == "rerank":
         rp = getattr(state, "retrieval_pipeline", None)
         return getattr(rp, "reranker", None) if rp is not None else None
-    if stage == "corpus_index":
+    if stage == "corpus_embedding":
         # Corpus embedding uses the same embedder instance as the query side (text
         # preferred, else audio); returning it lets the offload planner free that model
         # only after the LATER of the corpus and query embedding stages.
@@ -57,9 +54,11 @@ def _plan_stage_offloads(state: "RunState", flat_nodes, query_opt_enabled: bool)
         te = _stage_model(state, "text_embedding")
         if te is not None:
             excluded.add(id(te))
+    from ...pipeline.graph.operators import node_kind
+
     last: Dict[int, tuple] = {}
     for pos, node in enumerate(flat_nodes):
-        model = _stage_model(state, node.stage)
+        model = _stage_model(state, node_kind(node.stage, getattr(node, "params", None)))
         if model is not None and id(model) not in excluded:
             last[id(model)] = (pos, model)
     by_pos: Dict[int, list] = {}

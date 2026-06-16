@@ -1,0 +1,41 @@
+# ADMED self-retrieval — v1: ASR + text embedding.
+# "Fake" retrieval: the vector DB IS the set of text queries (admed_voice has no corpus, so
+# AudioSamplesQueryDataset.get_corpus() derives one from the unique transcriptions; each audio
+# query's relevant doc is its own transcription). Pipeline: audio -> ASR -> text embed ->
+# search the transcription corpus. Whisper-medium, full GPU.
+experiment:
+  name: admed_selfretr_asr_text
+  output_dir: evaluation_results
+dataset:
+  id: admed_voice
+  batch_size: 32
+data:
+  num_workers: 4
+  test_size: 0.0
+graph:
+  mode: asr_text_retrieval
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-medium
+    adapter: null            # optional: a Polish medical ASR adapter dir improves transcription
+    device: cuda:0
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    device: cuda:1
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 5
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

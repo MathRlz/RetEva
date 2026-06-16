@@ -108,7 +108,7 @@ class EvictionMixin:
             shutil.rmtree(cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
             if self.enabled and self.manifest_db_path.exists():
-                with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+                with closing(self._connect()) as conn, conn:
                     conn.execute(
                         "DELETE FROM cache_entries WHERE cache_type = ?", (cache_type,)
                     )
@@ -119,11 +119,43 @@ class EvictionMixin:
         """Return total size of cached artifacts tracked by manifest."""
         if not self.enabled or not self.manifest_db_path.exists():
             return 0
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with closing(self._connect()) as conn, conn:
             row = conn.execute(
                 "SELECT COALESCE(SUM(file_size_bytes), 0) FROM cache_entries"
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def compact_manifest(self) -> int:
+        """Drop manifest rows whose artifact file no longer exists (audit M4).
+
+        The size-limit eviction only runs when ``max_size_gb`` triggers (default 0 =
+        disabled), so rows for externally-deleted / stale artifacts otherwise accumulate
+        forever on long-lived servers. Runs at manager init; returns the row count removed.
+        """
+        if not self.enabled or not self.manifest_db_path.exists():
+            return 0
+        removed = 0
+        with closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT cache_type, cache_key, artifact_path FROM cache_entries"
+            ).fetchall()
+            for cache_type, cache_key, artifact_path in rows:
+                try:
+                    if self._abs_artifact_path(artifact_path).exists():
+                        continue
+                except OSError:
+                    pass  # unresolvable path == stale
+                conn.execute(
+                    "DELETE FROM cache_entries WHERE cache_type = ? AND cache_key = ?",
+                    (cache_type, cache_key),
+                )
+                removed += 1
+            conn.commit()
+        if removed:
+            logger.info(
+                "Cache manifest compaction: removed %d orphaned entries", removed
+            )
+        return removed
 
     def _enforce_size_limit(self) -> None:
         """Evict least-recently-used entries until cache is within max_size_gb."""
@@ -135,7 +167,7 @@ class EvictionMixin:
             return
 
         evicted = 0
-        with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute("""
                 SELECT cache_type, cache_key, artifact_path,
                        COALESCE(file_size_bytes, 0)
@@ -182,7 +214,7 @@ class EvictionMixin:
         cleared_count = 0
 
         if self.enabled and self.manifest_db_path.exists():
-            with closing(sqlite3.connect(self.manifest_db_path)) as conn, conn:
+            with closing(self._connect()) as conn, conn:
                 rows = conn.execute(
                     """
                     SELECT cache_type, cache_key, artifact_path

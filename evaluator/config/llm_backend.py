@@ -34,3 +34,28 @@ class LLMConfig:
                 )
             return self.local_server_url
         return self.api_base
+
+
+class LLMBackendMixin:
+    """Shared ``to_llm_config`` + ``get_api_base`` for the LLM-using feature configs.
+
+    Methods only (no fields), so mixing it into a ``@dataclass`` doesn't disturb that config's
+    field layout. The host config must declare the standard LLM fields (``model``, ``api_base``,
+    ``api_key_env``, ``temperature``, ``timeout_s``, ``use_local_server``, ``local_server_url``).
+    """
+
+    def get_api_base(self) -> str:
+        if self.use_local_server and self.local_server_url:
+            return self.local_server_url
+        return self.api_base
+
+    def to_llm_config(self) -> "LLMConfig":
+        return LLMConfig(
+            model=self.model,
+            api_base=self.api_base,
+            api_key_env=self.api_key_env,
+            temperature=self.temperature,
+            timeout_s=self.timeout_s,
+            use_local_server=self.use_local_server,
+            local_server_url=self.local_server_url,
+        )

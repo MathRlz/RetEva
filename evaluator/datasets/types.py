@@ -28,7 +28,7 @@ Example::
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, List, Sequence
+from typing import Mapping, TYPE_CHECKING, List, Sequence
 
 from ..config.types import DatasetType
 from .core import QueryDataset
@@ -57,8 +57,19 @@ class EvalDataset(QueryDataset):
     requires_text: bool = True
     supports_generation: bool = False
     evaluation_mode: str = "retrieval"
+    #: Subject-area tag for the categorized picker (e.g. "medical"); modality is derived
+    #: from ``dataset_type``.
+    domain: str = "general"
     native_pipeline_modes: Sequence[str] = ()
     required_data_fields: Sequence[str] = ()
+    #: Column schema {name: registered artifact}; empty = per-type default
+    #: (descriptor.FIELDS_BY_DATASET_TYPE). Shown on the DAG's dataset node.
+    fields: Mapping[str, str] = {}
+    #: Embedding-space id when a column carries precomputed vectors (§4.1 T4).
+    embedding_space: str | None = None
+    #: Splits the dataset offers (empty = none); default_split used when unset.
+    splits: Sequence[str] = ()
+    default_split: str | None = None
     description: str = ""
 
     @classmethod
@@ -159,9 +170,14 @@ def register_eval_dataset(*, id: str, description: str = ""):
             requires_text=cls.requires_text,
             supports_generation=cls.supports_generation,
             evaluation_mode=cls.evaluation_mode,
+            domain=cls.domain,
             compatible_pipeline_modes=cls.compatible_pipeline_modes(),
             default_metrics=list(cls.default_metrics()),
             required_data_fields=list(cls.required_data_fields),
+            fields=dict(cls.fields),
+            embedding_space=cls.embedding_space,
+            splits=tuple(cls.splits),
+            default_split=cls.default_split,
             load_fn=cls.from_config,
             validate_fn=cls.validate,
         ))

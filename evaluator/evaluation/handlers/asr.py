@@ -7,6 +7,7 @@ Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X6). Registers
 from __future__ import annotations
 
 from ..stage_registry import register_stage_handler
+from ._common import publish_keyed_or_plain as _publish_keyed_or_plain  # noqa: F401
 from ...logging_config import get_logger
 from ..helpers import _build_relevant_from_item
 from ..executor.state import RunState
@@ -74,14 +75,26 @@ def _run_asr_phase(
     return hypotheses, ground_truth, asr_hyps_for_wer, relevance, query_ids
 
 
-@register_stage_handler("asr", time_key="asr_s")
+@register_stage_handler("convert", time_key="asr_s")
+def _stage_convert(s: RunState) -> None:
+    """The ``convert`` operator (modality change): dispatch by op to ASR (audio→text) or
+    TTS (text→audio). Bodies unchanged; tts lives in the audio handlers."""
+    from .audio import _stage_tts
+    from ._dispatch import dispatch_operator
+
+    return dispatch_operator("convert", {
+        "asr": _stage_asr,
+        "tts": _stage_tts,
+    }, s)
+
+
 def _stage_asr(s: RunState) -> None:
     """ASR (or oracle bypass): produce query texts + relevance for ASR modes.
 
     Per-branch divergence (R2): a node ``params.oracle: true`` makes *this* branch use the
     reference transcriptions (the oracle/ref branch) even when the run isn't globally oracle.
     """
-    params = getattr(s.current_node, "params", None) or {}
+    params = s.node_params
     oracle = bool(s.oracle_mode or params.get("oracle"))
     s.cb(
         "phase_1_asr",
@@ -89,15 +102,20 @@ def _stage_asr(s: RunState) -> None:
         s.total,
         "Phase 1: Oracle bypass" if oracle else "Phase 1: ASR transcription",
     )
+    # Bus-first audio (P4): a republished query_audio ref set (augment_audio /
+    # union) wraps the dataset in a ref-decoding view; matching refs pass through.
+    from ..audio_refs import resolve_audio_dataset
+
+    audio_dataset = resolve_audio_dataset(s, s.dataset)
     with _node_pipeline(s, "asr", params):
         (
-            s.all_hypotheses,
-            s.all_ground_truth,
+            hypotheses,
+            ground_truth,
             asr_hypotheses_for_wer,
-            s.all_relevance,
-            s.all_query_ids,
+            relevance,
+            query_ids,
         ) = _run_asr_phase(
-            s.dataset,
+            audio_dataset,
             s.asr_pipeline,
             s.mode,
             oracle,
@@ -107,20 +125,22 @@ def _stage_asr(s: RunState) -> None:
             s.experiment_id,
             s.resume_from_checkpoint,
         )
-    _publish_query_text(s, s.all_hypotheses)  # ASR hypotheses feed embedding (R4d)
-    # Also publish the RAW ASR output (pre-correction) as a keyed artifact so the registry
-    # can score raw_wer/raw_cer against it even when a downstream query_correction node
-    # republishes a corrected `query_text` (L1). This is the bus copy of the raw snapshot —
-    # the metrics node reads it from here (no RunState mirror, T4). Keyed only when ids align.
-    _ids = [str(i) for i in (s.all_query_ids or [])]
-    if len(_ids) == len(asr_hypotheses_for_wer) and len(set(_ids)) == len(_ids):
-        from ..item_set import ItemSet
-
-        s.put_items("raw_query_text", ItemSet(_ids, list(asr_hypotheses_for_wer)))
-    else:
-        # Non-aligned ids (no keying): still publish the raw snapshot as a plain list so the
-        # metrics node reads raw ASR text from the bus rather than a RunState mirror (T4).
-        s.put_artifact("raw_query_text", list(asr_hypotheses_for_wer))
+    # A checkpoint resume can leave a longer, batch-overlapping hypotheses list (the
+    # legacy zip-truncation leniency); trim to the dataset's query ids so the keyed
+    # publish stays aligned (M1d-2 — was handled by the metrics-side trim before).
+    if query_ids and len(hypotheses) > len(query_ids):
+        logger.debug(
+            "asr: trimming %d hypotheses to %d query ids (checkpoint overlap)",
+            len(hypotheses),
+            len(query_ids),
+        )
+        hypotheses = hypotheses[: len(query_ids)]
+    # Bus-only handoff (M1d-2): everything downstream reads keyed ctx artifacts.
+    # Pure transform: asr publishes ONLY its hypothesis. It is never overwritten
+    # (correction/optimization emit distinct names), so query_text stays the un-rewritten
+    # ASR output WER/CER score against — no raw_query_text needed. Ground truth comes from
+    # dataset_source.
+    _publish_keyed_or_plain(s, "query_text", hypotheses, query_ids)  # feeds embedding (R4d)
     s.cb(
         "phase_1_asr",
         s.total,
@@ -129,15 +149,3 @@ def _stage_asr(s: RunState) -> None:
     )
 
 
-def _publish_query_text(s: RunState, texts: list) -> None:
-    """Publish ``query_text`` as a keyed ``ItemSet`` when query ids align 1:1 (W2);
-    otherwise the plain list (legacy path, e.g. asr_only with no query ids). Either way
-    ``get_artifact('query_text')`` returns the list, so embedding/optimization are unchanged.
-    """
-    ids = [str(i) for i in (s.all_query_ids or [])]
-    if len(ids) == len(texts) and len(set(ids)) == len(ids):
-        from ..item_set import ItemSet
-
-        s.put_items("query_text", ItemSet(ids, list(texts)))
-    else:
-        s.put_artifact("query_text", texts)

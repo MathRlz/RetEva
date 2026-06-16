@@ -1,9 +1,109 @@
 <section class="step">
-  <h4>Execution DAG</h4>
-  {% set io = node_io|default({}) %}
-  {% for level in levels %}
-  <div class="graph-level">
-    {% for node in level %}<span class="graph-node" title="{{ io.get(node, '') }}">{{ node }}{% if io.get(node) %}<br><small class="muted">{{ io.get(node) }}</small>{% endif %}</span>{% endfor %}
+  <h4>Execution DAG <small class="muted">{{ mode }}</small></h4>
+  <p id="dag-loading" class="muted">rendering diagram…</p>
+  {# no class attribute: drawflow's fixed-mode pan requires classList[0] to be its own
+   'parent-drawflow' — a custom first class disables canvas dragging #}
+  <div id="dag-preview-canvas"></div>
+  <div id="dag-fallback">
+    {% for level in levels %}
+    <div class="graph-level">
+      {% for node in level %}<span class="graph-node">{{ node }}</span>{% endfor %}
+    </div>
+    {% endfor %}
   </div>
-  {% endfor %}
+  <div class="row">
+    <button id="dag-open-builder" type="button">Open in builder</button>
+  </div>
+  <div id="dag-inspect" class="muted"><em>click a node to inspect its model + params</em></div>
+  {# preview_json is pre-escaped server-side for script context ("</" -> "<\/");
+     autoescape would entity-encode quotes, which browsers do NOT decode inside
+     <script> -> JSON.parse failure. #}
+  <script type="application/json" id="dag-preview-data">{{ preview_json | safe }}</script>
 </section>
+<script>
+(function () {
+  let data;
+  try {
+    data = JSON.parse(document.getElementById('dag-preview-data').textContent);
+  } catch (e) {
+    document.getElementById('dag-loading').textContent = 'diagram unavailable';
+    document.getElementById('dag-preview-canvas').style.display = 'none';
+    return;
+  }
+  // The field-aware contract for a preview node (operator + its resolved ports / label /
+  // model family / param switches) — carried into both the read-only preview render and the
+  // builder seed so an operator instance renders as itself (corpus_embedding ≠ text_embedding).
+  const contractOf = n => ({
+    id: n.id, type: n.stage, label: n.label, bindings: n.bindings || [],
+    inputs: n.inputs, outputs: n.outputs, optional_inputs: n.optional_inputs,
+    category: n.category, domain: n.domain, family: n.family,
+    model_field: n.model_field, node_params: n.node_params, columns: n.columns || [],
+  });
+  // B5: hand this exact graph to the builder, editable (sessionStorage seed).
+  document.getElementById('dag-open-builder').onclick = () => {
+    sessionStorage.setItem('dag_builder_seed', JSON.stringify({
+      mode: data.mode,
+      levels: data.levels,
+      nodes: data.nodes.map(n => ({ ...contractOf(n), params: n.inspect || {} })),
+    }));
+    window.location = '/ui/builder?seed=1';
+  };
+  const done = () => {
+    const l = document.getElementById('dag-loading');
+    if (l) l.remove();
+  };
+  const fallback = () => { /* keep the text chips; hide the empty canvas */
+    done();
+    document.getElementById('dag-preview-canvas').style.display = 'none';
+  };
+  const withDagView = (cb) => {
+    if (window.DagView) return cb();
+    const s = document.createElement('script');
+    s.src = '/static/dag_view.js?v={{ asset_version('dag_view.js') }}';
+    s.onload = cb; s.onerror = fallback;
+    document.head.appendChild(s);
+  };
+  withDagView(() => DagView.ensureDrawflow(() => {
+    // catalogue gives port contracts (same source as the builder palette)
+    fetch('/api/graph/nodes').then(r => r.json()).then(cat => {
+      const catalogue = {};
+      cat.nodes.forEach(n => { catalogue[n.type] = n; });
+      const canvas = document.getElementById('dag-preview-canvas');
+      const rows = Math.max(...data.levels.map(l => l.length), 1);
+      canvas.style.height = (60 + rows * 145) + 'px';
+      const editor = new Drawflow(canvas);
+      editor.start();
+      editor.editor_mode = 'fixed';  // read-only: pan/zoom yes, edit no
+      // model line on the card comes from the resolved inspect payload
+      const nodes = data.nodes.map(n => ({
+        ...contractOf(n),
+        params: {
+          model: (n.inspect || {}).model || '',
+          size: (n.inspect || {}).size || '',
+        },
+      }));
+      const dfIds = DagView.drawGraph(editor, {nodes, levels: data.levels}, catalogue);
+      DagView.attachZoom(editor, canvas);  // wheel scroll-in/out + controls (B4c)
+      DagView.zoomFit(editor, canvas);
+      const panel = document.getElementById('dag-inspect');
+      data.nodes.forEach(n => {
+        const el = document.getElementById('node-' + dfIds[n.id]);
+        if (!el) return;
+        el.addEventListener('click', () => {
+          DagView.renderInspect(panel, {
+            id: n.id, stage: n.stage, label: n.label,
+            inputs: n.inputs || [], outputs: n.outputs || [],
+            columns: n.columns || [],
+            config: n.inspect || {},
+          });
+          document.querySelectorAll('#dag-preview-canvas .drawflow-node')
+            .forEach(o => o.classList.remove('dag-selected'));
+          el.classList.add('dag-selected');
+        });
+      });
+      document.getElementById('dag-fallback').style.display = 'none';
+      done();
+    }).catch(fallback);
+  }, fallback));
+})();
+</script>

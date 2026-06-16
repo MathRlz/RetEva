@@ -128,36 +128,9 @@ HYBRID_RRF = {
     "bm25_b": 0.75,
 }
 
-HYBRID_ADAPTIVE = {
-    "retrieval_mode": "hybrid",
-    "hybrid_dense_weight": 0.5,
-    "hybrid_fusion_method": "weighted",
-    "adaptive_fusion_enabled": True,
-    "confidence_threshold": 0.7,
-}
-
-
 # ===========================
 # Advanced RAG Presets
 # ===========================
-
-ADVANCED_RAG_MULTI_VECTOR = {
-    "multi_vector_enabled": True,
-    "vectors_per_doc": 3,
-    "multi_vector_strategy": "max_sim",
-}
-
-ADVANCED_RAG_QUERY_EXPANSION = {
-    "query_expansion_enabled": True,
-    "query_expansion_method": "synonyms",
-    "expansion_terms": 5,
-}
-
-ADVANCED_RAG_PSEUDO_FEEDBACK = {
-    "pseudo_feedback_enabled": True,
-    "pseudo_feedback_top_k": 3,
-    "pseudo_feedback_weight": 0.3,
-}
 
 ADVANCED_RAG_DIVERSITY = {
     "use_mmr": True,
@@ -181,9 +154,6 @@ MEDICAL_OPTIMIZED = {
         reranker_enabled=True,
         use_mmr=True,
         mmr_lambda=0.7,
-        query_expansion_enabled=True,
-        query_expansion_method="synonyms",
-        expansion_terms=5,
     ),
 }
 
@@ -203,13 +173,6 @@ FULL_RAG_ADVANCED = {
         reranker_top_k=50,
         use_mmr=True,
         mmr_lambda=0.6,
-        multi_vector_enabled=True,
-        vectors_per_doc=3,
-        multi_vector_strategy="max_sim",
-        query_expansion_enabled=True,
-        query_expansion_method="synonyms",
-        pseudo_feedback_enabled=True,
-        pseudo_feedback_top_k=3,
         diversity_penalty=0.2,
     ),
     "judge": JudgeConfig(
@@ -248,9 +211,6 @@ QUALITY_FOCUSED = {
         reranker_top_k=100,
         use_mmr=True,
         mmr_lambda=0.7,
-        query_expansion_enabled=True,
-        pseudo_feedback_enabled=True,
-        adaptive_fusion_enabled=True,
         k=10,
     ),
     "judge": JudgeConfig(
@@ -291,8 +251,7 @@ PRESET_REGISTRY: Dict[str, Dict[str, Any]] = {
     "hybrid_semantic": {"vector_db": VectorDBConfig(**HYBRID_SEMANTIC_FOCUS)},
     "hybrid_keyword": {"vector_db": VectorDBConfig(**HYBRID_KEYWORD_FOCUS)},
     "hybrid_rrf": {"vector_db": VectorDBConfig(**HYBRID_RRF)},
-    "hybrid_adaptive": {"vector_db": VectorDBConfig(**HYBRID_ADAPTIVE)},
-    
+
     # Full stack presets
     "medical_optimized": MEDICAL_OPTIMIZED,
     "full_rag_advanced": FULL_RAG_ADVANCED,
@@ -348,10 +307,9 @@ def list_presets() -> Dict[str, str]:
         "hybrid_semantic": "Semantic-focused hybrid (70/30)",
         "hybrid_keyword": "Keyword-focused hybrid (30/70)",
         "hybrid_rrf": "Reciprocal Rank Fusion hybrid",
-        "hybrid_adaptive": "Adaptive hybrid with confidence-based weighting",
-        
+
         "medical_optimized": "Full stack optimized for medical domain",
-        "full_rag_advanced": "All advanced RAG features enabled",
+        "full_rag_advanced": "Hybrid RRF + reranking + MMR + LLM judge",
         "fast_baseline": "Minimal configuration for fast baseline",
         "quality_focused": "Maximum quality with all enhancements",
     }

@@ -14,26 +14,6 @@ from .core import (
 )
 
 
-@dataclass(frozen=True)
-class DatasetRuntimeSpec:
-    """Declarative dataset runtime spec for evaluation entrypoints."""
-
-    id: str
-    source: str
-    description: str
-    required_fields: tuple[str, ...]
-    supports_corpus: bool
-
-
-def _get_path_value(config: Any, dotted_path: str) -> Any:
-    current: Any = config
-    for part in dotted_path.split("."):
-        if not hasattr(current, part):
-            return None
-        current = getattr(current, part)
-    return current
-
-
 class AudioSamplesQueryDataset(QueryDataset):
     """Adapter converting loader AudioSample rows into QueryDataset contract."""
 
@@ -129,23 +109,13 @@ def _load_corpus_entries(path: str) -> List[Dict[str, Any]]:
                 )
         else:
             raise ConfigurationError(f"Unsupported corpus file format in {path}")
+    from .core import parse_corpus_row
+
     corpus: List[Dict[str, Any]] = []
     for row in rows:
-        if not isinstance(row, dict):
-            continue
-        doc_id = str(row.get("doc_id") or row.get("id") or row.get("pmid") or "")
-        text = row.get("text") or row.get("abstract") or row.get("content")
-        if not doc_id or text is None:
-            continue
-        corpus.append(
-            {
-                "doc_id": doc_id,
-                "text": str(text),
-                "title": str(row.get("title", "")),
-                "language": str(row.get("language", "en")),
-                "metadata": row.get("metadata", {}),
-            }
-        )
+        fields = parse_corpus_row(row)  # shared field-name fallbacks
+        if fields is not None:  # rows missing doc_id/text are skipped
+            corpus.append({**fields, "language": str(fields["language"])})
     return corpus
 
 
@@ -206,85 +176,29 @@ class LazyAudioQueryDataset(QueryDataset):
         ]
 
 
-def list_dataset_runtime_specs() -> List[DatasetRuntimeSpec]:
-    return [
-        DatasetRuntimeSpec(
-            id="prepared_pubmed",
-            source="prepared_dataset_dir",
-            description="Prepared benchmark directory with questions.json/corpus.json",
-            required_fields=("data.prepared_dataset_dir",),
-            supports_corpus=True,
-        ),
-        DatasetRuntimeSpec(
-            id="pubmed_paths",
-            source="questions_path",
-            description="PubMed QA style questions/corpus files",
-            required_fields=("data.questions_path", "data.corpus_path"),
-            supports_corpus=True,
-        ),
-        DatasetRuntimeSpec(
-            id="admed_voice",
-            source="dataset_name",
-            description="Built-in admed_voice dataset",
-            required_fields=("data.dataset_name",),
-            # Retrieval corpus is derived from the samples' transcriptions
-            # (AudioSamplesQueryDataset.get_corpus), matching the CLI.
-            supports_corpus=True,
-        ),
-        DatasetRuntimeSpec(
-            id="loader_local",
-            source="dataset_source",
-            description="Local audio directory dataset loader",
-            required_fields=("data.dataset_source", "data.audio_dir"),
-            supports_corpus=True,
-        ),
-        DatasetRuntimeSpec(
-            id="loader_huggingface",
-            source="dataset_source",
-            description="HuggingFace audio dataset loader",
-            required_fields=("data.dataset_source", "data.huggingface_dataset"),
-            supports_corpus=True,
-        ),
-    ]
+def validate_dataset_runtime_config(config: Any, *, retrieval_required: bool = False):
+    """Validate the dataset config via its descriptor (the single source of truth).
 
+    Returns the resolved :class:`~evaluator.datasets.descriptor.DatasetDescriptor`.
+    ``retrieval_required`` rejects datasets none of whose compatible pipeline modes
+    retrieve (replaces the retired DatasetRuntimeSpec.supports_corpus check — every
+    retired spec declared corpus support, so default-mode behavior is unchanged).
+    """
+    from .descriptor import resolve_dataset_descriptor
 
-def resolve_dataset_runtime_spec(config: Any) -> DatasetRuntimeSpec:
-    if config.data.prepared_dataset_dir:
-        return list_dataset_runtime_specs()[0]
-    if config.data.questions_path:
-        return list_dataset_runtime_specs()[1]
-    if config.data.dataset_name == "admed_voice":
-        return list_dataset_runtime_specs()[2]
-    if config.data.dataset_source == "local":
-        return list_dataset_runtime_specs()[3]
-    if config.data.dataset_source == "huggingface":
-        return list_dataset_runtime_specs()[4]
-    raise ConfigurationError(
-        "No supported data source specified. Use one of: "
-        "prepared_dataset_dir/questions_path, dataset_name=admed_voice, "
-        "or data.dataset_source in {local, huggingface} with matching fields."
-    )
-
-
-def validate_dataset_runtime_config(
-    config: Any, *, retrieval_required: bool = False
-) -> DatasetRuntimeSpec:
-    """Validate dataset runtime requirements and return resolved runtime spec."""
-    spec = resolve_dataset_runtime_spec(config)
-    missing = [
-        field_name
-        for field_name in spec.required_fields
-        if _get_path_value(config, field_name) in (None, "", [])
-    ]
-    if missing:
+    descriptor = resolve_dataset_descriptor(config.data)
+    errors = descriptor.validate_data_config(config.data)
+    if errors:
         raise ConfigurationError(
-            f"Dataset runtime '{spec.id}' missing required fields: {', '.join(missing)}"
+            f"Dataset '{descriptor.id}' configuration invalid: " + "; ".join(errors)
         )
-    if retrieval_required and not spec.supports_corpus:
+    if retrieval_required and not any(
+        "retrieval" in str(mode) for mode in descriptor.compatible_pipeline_modes
+    ):
         raise ConfigurationError(
-            f"Dataset runtime '{spec.id}' does not provide corpus required for retrieval pipelines."
+            f"Dataset '{descriptor.id}' supports no retrieval pipeline mode."
         )
-    return spec
+    return descriptor
 
 
 def load_runtime_dataset(config: Any) -> QueryDataset:

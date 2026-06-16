@@ -94,6 +94,10 @@ def collapse_common_subexpressions(
             stage=n.stage,
             depends_on=deps,
             bindings=binds,
+            # input_aliases map a canonical key → candidate ARTIFACT names (not producer
+            # ids), so they survive canonicalization unchanged — but must be carried through
+            # or s.input() can't resolve the OneOf streams in a branched graph.
+            input_aliases=n.input_aliases,
             params=n.params,
         )
 

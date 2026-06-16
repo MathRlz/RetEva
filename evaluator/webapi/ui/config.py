@@ -12,13 +12,50 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 import yaml
 
 from evaluator.services import ModelServiceProvider
-from evaluator.webapi.config_helpers import graph_preview
+from evaluator.webapi.form_builder import graph_preview
 from evaluator.webapi.ui._common import _default_preset
-from evaluator.webapi.ui_helpers import (
+
+
+from evaluator.webapi.form_builder import (
     _model_section,
     _prepared_config_or_error,
     _preset_form_context,
 )
+
+
+def _graph_diagram_context(preview: dict) -> dict:
+    """Template vars for the read-only DAG preview partial (``_graph.html``): the preview
+    payload as embedded JSON (the shared ``dag_view.js`` renders it via Drawflow in fixed
+    mode, same architecture as the builder — BUILDER_UX.md B3) plus the levels for the
+    no-JS / CDN-failure text-chips fallback."""
+    import json as _json
+
+    payload = _json.dumps(
+        {
+            "mode": preview.get("mode", ""),
+            "levels": preview.get("levels", []),
+            "nodes": [
+                {
+                    "id": n["id"],
+                    "stage": n["stage"],
+                    "bindings": n.get("bindings") or [],
+                    "inputs": n.get("inputs") or [],
+                    "outputs": n.get("outputs") or [],
+                    "columns": n.get("columns") or [],
+                    "inspect": n.get("inspect") or {},
+                }
+                for n in preview.get("nodes", [])
+            ],
+        }
+    )
+    return {
+        # rendered with `| safe` inside a <script type="application/json"> block —
+        # browsers do NOT decode HTML entities there, so Jinja's autoescape would
+        # break JSON.parse; escape the one dangerous sequence instead.
+        "preview_json": payload.replace("</", "<\\/"),
+        "levels": preview.get("levels", []),
+        "mode": preview.get("mode", ""),
+    }
 
 
 def register_config_routes(
@@ -39,10 +76,14 @@ def register_config_routes(
     def ui_models(
         request: Request, pipeline_mode: str = "asr_text_retrieval"
     ) -> HTMLResponse:
+        # hx-include sends the whole form: the chosen model types ride along, so the
+        # re-rendered section carries that model's registry-declared sizes + params
+        # (same author-declared schema the builder uses).
+        current = dict(request.query_params)
         return page(
             request,
             "_models.html",
-            model_sections=_model_section(provider_factory, pipeline_mode, {}),
+            model_sections=_model_section(provider_factory, pipeline_mode, current),
         )
 
     @router.get("/ui/preset", response_class=HTMLResponse, include_in_schema=False)
@@ -65,19 +106,7 @@ def register_config_routes(
         if error is not None:
             return error
         preview = graph_preview(config)
-        node_io = {
-            n["id"]: "{} → {}".format(
-                ", ".join(n.get("inputs") or []) or "·",
-                ", ".join(n.get("outputs") or []) or "·",
-            )
-            for n in preview.get("nodes", [])
-        }
-        return page(
-            request,
-            "_graph.html",
-            levels=preview.get("levels", []),
-            node_io=node_io,
-        )
+        return page(request, "_graph.html", **_graph_diagram_context(preview))
 
     @router.post("/ui/yaml", response_class=HTMLResponse, include_in_schema=False)
     async def ui_yaml(request: Request) -> HTMLResponse:

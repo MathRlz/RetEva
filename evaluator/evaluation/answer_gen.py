@@ -1,4 +1,15 @@
-"""Answer generation using retrieved context (RAG Phase 4.5)."""
+"""Answer generation (RAG Phase 4.5).
+
+Two modes, selected by whether a context (retrieved docs) is present:
+
+* **RAG / open-book** — a ``retrieved`` edge feeds the ``generate`` node; the model answers
+  *grounded in* the retrieved passages (the default prompts say "use ONLY the context").
+* **Closed-book** — no ``retrieved`` edge (no-corpus dataset, or a graph wired without a
+  retrieval node); the context is empty, so the model answers from its own parametric
+  knowledge. The prompts switch to a no-context variant (no dangling "Context:" block, no
+  "use only the context" instruction), and the hallucination heuristic is N/A (there is no
+  context to ground against). This quantifies how much retrieval *adds* over the model alone.
+"""
 
 from __future__ import annotations
 
@@ -28,6 +39,45 @@ _COT_PROMPT_TEMPLATE = (
     "Think step by step:\n1. What does the context say?\n2. What is the direct answer?\n\n"
     "Final answer:"
 )
+
+# Closed-book (no retrieved context): answer from the model's own knowledge. No "Context:"
+# block, no "use only the context" instruction (which is contradictory with no context).
+_CLOSED_BOOK_SYSTEM_PROMPT = (
+    "You are a concise medical research assistant. "
+    "Answer from your own knowledge. Be brief and direct."
+)
+
+_CLOSED_BOOK_PROMPT_TEMPLATE = "Question: {question}\n\nAnswer:"
+
+_CLOSED_BOOK_COT_SYSTEM_PROMPT = (
+    "You are a medical research assistant. "
+    "Think step by step from your own knowledge, then give a concise answer."
+)
+
+_CLOSED_BOOK_COT_PROMPT_TEMPLATE = (
+    "Question: {question}\n\n"
+    "Think step by step:\n1. What do you know?\n2. What is the direct answer?\n\n"
+    "Final answer:"
+)
+
+
+def _prompt_defaults(method: str, closed_book: bool) -> Tuple[str, str]:
+    """Default (system_prompt, prompt_template) for a method, in the right context mode.
+
+    A user-set ``config.system_prompt`` / ``config.prompt_template`` still overrides these;
+    the closed-book templates simply drop the ``{context}`` placeholder (``str.format``
+    ignores the unused ``context`` kwarg)."""
+    if method == "chain_of_thought":
+        return (
+            (_CLOSED_BOOK_COT_SYSTEM_PROMPT, _CLOSED_BOOK_COT_PROMPT_TEMPLATE)
+            if closed_book
+            else (_COT_SYSTEM_PROMPT, _COT_PROMPT_TEMPLATE)
+        )
+    return (
+        (_CLOSED_BOOK_SYSTEM_PROMPT, _CLOSED_BOOK_PROMPT_TEMPLATE)
+        if closed_book
+        else (DEFAULT_SYSTEM_PROMPT, DEFAULT_PROMPT_TEMPLATE)
+    )
 
 
 def _build_context(
@@ -59,11 +109,14 @@ def generate_single_answer(
     context, doc_ids = _build_context(
         retrieved_payloads, config.context_docs, config.context_max_chars
     )
+    # No context ⇒ closed-book: switch to the no-context prompts (answer from own knowledge).
+    closed_book = not context
     method = config.method
 
     if method == "simple":
-        sys_p = config.system_prompt or DEFAULT_SYSTEM_PROMPT
-        tmpl = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
+        d_sys, d_tmpl = _prompt_defaults("simple", closed_book)
+        sys_p = config.system_prompt or d_sys
+        tmpl = config.prompt_template or d_tmpl
         msgs = [
             {"role": "system", "content": sys_p},
             {
@@ -74,8 +127,9 @@ def generate_single_answer(
         answer = client.call(msgs)
 
     elif method == "chain_of_thought":
-        sys_p = config.system_prompt or _COT_SYSTEM_PROMPT
-        tmpl = config.prompt_template or _COT_PROMPT_TEMPLATE
+        d_sys, d_tmpl = _prompt_defaults("chain_of_thought", closed_book)
+        sys_p = config.system_prompt or d_sys
+        tmpl = config.prompt_template or d_tmpl
         msgs = [
             {"role": "system", "content": sys_p},
             {
@@ -102,8 +156,9 @@ def generate_single_answer(
         if not rephrases:
             rephrases = [question]
 
-        base_sys = config.system_prompt or DEFAULT_SYSTEM_PROMPT
-        tmpl = config.prompt_template or DEFAULT_PROMPT_TEMPLATE
+        d_sys, d_tmpl = _prompt_defaults("simple", closed_book)
+        base_sys = config.system_prompt or d_sys
+        tmpl = config.prompt_template or d_tmpl
         partials = []
         for q in rephrases:
             msgs = [
@@ -137,7 +192,12 @@ def generate_single_answer(
             f"Unknown method: {method!r}. Options: simple, chain_of_thought, multi_query"
         )
 
-    return {"generated_answer": answer, "method": method, "context_doc_ids": doc_ids}
+    return {
+        "generated_answer": answer,
+        "method": method,
+        "context_doc_ids": doc_ids,
+        "closed_book": closed_book,
+    }
 
 
 def _tokenize(text: str) -> set:
@@ -146,8 +206,12 @@ def _tokenize(text: str) -> set:
 
 def _compute_hallucination_rate(
     answer: str, retrieved_payloads: List[Dict[str, Any]]
-) -> float:
-    """Fraction of answer tokens not present in retrieved context (simple token-overlap heuristic)."""
+) -> Optional[float]:
+    """Fraction of answer tokens not present in retrieved context (simple token-overlap
+    heuristic). Closed-book (no context docs at all) ⇒ ``None``: there is no context to ground
+    against, so a grounding score is undefined (≠ a RAG run whose docs are present but empty)."""
+    if not retrieved_payloads:
+        return None
     context_text = " ".join(
         p.get("text", p.get("content", "")) for p in retrieved_payloads
     )
@@ -206,15 +270,9 @@ def generate_answers(
         n = min(n, config.max_cases)
 
     details: List[Dict[str, Any]] = []
-    rouge1_list: List[float] = []
-    rouge2_list: List[float] = []
-    rougeL_list: List[float] = []
-    hallucination_list: List[float] = []
-    dosage_safety_list: List[float] = []
-    context_recall_list: List[float] = []
     failed = 0
 
-    for i in tqdm(range(n), desc="Generating answers"):
+    for i in tqdm(range(n), desc="Generating answers", disable=None):
         query_id = all_query_ids[i] if i < len(all_query_ids) else str(i)
         question = all_query_texts[i] if i < len(all_query_texts) else ""
         retrieved_payloads = (
@@ -231,81 +289,114 @@ def generate_answers(
                 "generated_answer": "",
                 "method": config.method,
                 "context_doc_ids": [],
+                "closed_book": not retrieved_payloads,
             }
             failed += 1
 
-        hal_rate = _compute_hallucination_rate(
-            gen["generated_answer"], retrieved_payloads
-        )
-        hallucination_list.append(hal_rate)
-
-        detail: Dict[str, Any] = {
+        # Generation only — the comparison metrics are the answer_metrics node's job.
+        detail = {
             "query_id": query_id,
             "question": question,
             "generated_answer": gen["generated_answer"],
             "reference_answer": "",
-            "rouge1": None,
-            "rouge2": None,
-            "rougeL": None,
             "context_doc_ids": gen["context_doc_ids"],
-            "hallucination_rate": hal_rate,
         }
-
-        if config.compute_rouge and config.reference_metadata_field:
-            ref_answer = _lookup_reference(
-                query_id,
-                all_relevant,
-                i,
-                corpus_lookup,
-                config.reference_metadata_field,
-            )
-            if ref_answer and gen["generated_answer"]:
-                detail["reference_answer"] = ref_answer
-                try:
-                    rouge = _compute_rouge(gen["generated_answer"], ref_answer)
-                    detail.update(rouge)
-                    rouge1_list.append(rouge["rouge1"])
-                    rouge2_list.append(rouge["rouge2"])
-                    rougeL_list.append(rouge["rougeL"])
-                except Exception as exc:
-                    logger.warning("ROUGE computation failed for %s: %s", query_id, exc)
-                # RAG-generation metrics (C4): dose safety vs reference + grounding recall.
-                from ..metrics.rag import context_recall, drug_dosage_safety
-
-                contexts = [
-                    p.get("text", p.get("content", "")) for p in retrieved_payloads
-                ]
-                safety = drug_dosage_safety(gen["generated_answer"], ref_answer)
-                crecall = context_recall(ref_answer, contexts)
-                detail["drug_dosage_safety"] = safety
-                detail["context_recall"] = crecall
-                dosage_safety_list.append(safety)
-                context_recall_list.append(crecall)
-
+        # Tag only closed-book details (additive); RAG details stay byte-identical (parity).
+        if gen.get("closed_book"):
+            detail["closed_book"] = True
         details.append(detail)
 
-    def _mean(xs: List[float]) -> Optional[float]:
-        return sum(xs) / len(xs) if xs else None
-
     if failed > 0:
-        logger.warning(
-            "Answer generation: %d/%d queries failed (empty answers included in metrics)",
-            failed,
-            n,
-        )
+        logger.warning("Answer generation: %d/%d queries failed", failed, n)
     return {
         "model": config.model,
         "method": config.method,
         "cases": len(details),
         "failed_cases": failed,
         "details": details,
-        "mean_rouge1": _mean(rouge1_list),
-        "mean_rouge2": _mean(rouge2_list),
-        "mean_rougeL": _mean(rougeL_list),
-        "mean_hallucination_rate": _mean(hallucination_list),
-        "mean_drug_dosage_safety": _mean(dosage_safety_list),
-        "mean_context_recall": _mean(context_recall_list),
     }
+
+
+def score_answers(
+    answer_results: Dict[str, Any],
+    traces_data: Tuple[List, List, List],
+    corpus_lookup: Dict[str, Dict[str, Any]],
+    config,
+) -> Dict[str, Any]:
+    """answer_metrics comparison: score the generated answers vs their reference answers +
+    retrieved context. Enriches each detail (rouge / hallucination / dose-safety /
+    context-recall) IN PLACE and adds the ``mean_*`` aggregates to ``answer_results``."""
+    all_query_ids, all_relevant, all_results_with_scores = traces_data
+    rouge1_list: List[float] = []
+    rouge2_list: List[float] = []
+    rougeL_list: List[float] = []
+    hallucination_list: List[float] = []
+    dosage_safety_list: List[float] = []
+    context_recall_list: List[float] = []
+
+    for i, detail in enumerate(answer_results.get("details", [])):
+        answer = detail.get("generated_answer", "")
+        retrieved_payloads = (
+            [p for p, _ in all_results_with_scores[i]]
+            if i < len(all_results_with_scores)
+            else []
+        )
+        hal_rate = _compute_hallucination_rate(answer, retrieved_payloads)
+        detail["hallucination_rate"] = hal_rate  # None ⇒ closed-book (N/A)
+        if hal_rate is not None:
+            hallucination_list.append(hal_rate)
+        detail.setdefault("rouge1", None)
+        detail.setdefault("rouge2", None)
+        detail.setdefault("rougeL", None)
+
+        if config.compute_rouge and config.reference_metadata_field:
+            ref_answer = _lookup_reference(
+                detail.get("query_id"),
+                all_relevant,
+                i,
+                corpus_lookup,
+                config.reference_metadata_field,
+            )
+            if ref_answer and answer:
+                detail["reference_answer"] = ref_answer
+                try:
+                    rouge = _compute_rouge(answer, ref_answer)
+                    detail.update(rouge)
+                    rouge1_list.append(rouge["rouge1"])
+                    rouge2_list.append(rouge["rouge2"])
+                    rougeL_list.append(rouge["rougeL"])
+                except Exception as exc:
+                    logger.warning(
+                        "ROUGE computation failed for %s: %s",
+                        detail.get("query_id"),
+                        exc,
+                    )
+                from ..metrics.rag import context_recall, drug_dosage_safety
+
+                contexts = [
+                    p.get("text", p.get("content", "")) for p in retrieved_payloads
+                ]
+                safety = drug_dosage_safety(answer, ref_answer)
+                crecall = context_recall(ref_answer, contexts)
+                detail["drug_dosage_safety"] = safety
+                detail["context_recall"] = crecall
+                dosage_safety_list.append(safety)
+                context_recall_list.append(crecall)
+
+    def _mean(xs: List[float]) -> Optional[float]:
+        return sum(xs) / len(xs) if xs else None
+
+    answer_results.update(
+        {
+            "mean_rouge1": _mean(rouge1_list),
+            "mean_rouge2": _mean(rouge2_list),
+            "mean_rougeL": _mean(rougeL_list),
+            "mean_hallucination_rate": _mean(hallucination_list),
+            "mean_drug_dosage_safety": _mean(dosage_safety_list),
+            "mean_context_recall": _mean(context_recall_list),
+        }
+    )
+    return answer_results
 
 
 def _lookup_reference(

@@ -56,3 +56,19 @@ def get_stage_spec(stage: str) -> StageSpec:
 def stage_registry() -> Dict[str, StageSpec]:
     """Return a copy of the full stage registry."""
     return dict(_STAGE_REGISTRY)
+
+
+def validate_graph_handlers(graph: Any) -> None:
+    """Pre-flight (audit M3): every node in ``graph`` must have a registered handler.
+
+    Called before dispatch so a typo'd / unregistered stage fails immediately with a
+    clear message, instead of crashing mid-run after heavy setup (model loads, TTS)."""
+    missing = sorted(
+        {node.stage for node in graph.nodes if node.stage not in _STAGE_REGISTRY}
+    )
+    if missing:
+        registered = ", ".join(sorted(_STAGE_REGISTRY))
+        raise ValueError(
+            f"No stage handler registered for node type(s): {', '.join(missing)}. "
+            f"Registered handlers: {registered}"
+        )

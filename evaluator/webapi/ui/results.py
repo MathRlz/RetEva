@@ -1,12 +1,51 @@
-"""Results-page UI routes: leaderboard table/chart, run detail, and run delete.
-Mounted under ``/ui/results``, ``/ui/leaderboard`` and ``/ui/runs/...``.
+"""Results-page UI routes: leaderboard table/chart, run detail, run compare
+and run delete. Mounted under ``/ui/results``, ``/ui/leaderboard``,
+``/ui/compare`` and ``/ui/runs/...``.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+
+def _numeric_metrics(metrics: Dict[str, Any]) -> Dict[str, float]:
+    """Flatten a run's metrics to comparable numbers (one nested level, no CIs)."""
+    flat: Dict[str, float] = {}
+    for key, value in (metrics or {}).items():
+        if key.endswith("_ci") or isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            flat[key] = float(value)
+        elif isinstance(value, dict):
+            for sub, sub_value in value.items():
+                if isinstance(sub_value, (int, float)) and not isinstance(
+                    sub_value, bool
+                ):
+                    flat[f"{key}.{sub}"] = float(sub_value)
+    return flat
+
+
+def _config_diff(run_a: Dict[str, Any], run_b: Dict[str, Any]) -> List[str]:
+    """Unified YAML diff of two runs' configs (canonical key order)."""
+    import yaml
+
+    def dump(run: Dict[str, Any]) -> List[str]:
+        return yaml.safe_dump(
+            run.get("config") or {}, sort_keys=True, default_flow_style=False
+        ).splitlines()
+
+    return list(
+        difflib.unified_diff(
+            dump(run_a),
+            dump(run_b),
+            fromfile=f"run {run_a['run_id']} ({run_a.get('experiment_name')})",
+            tofile=f"run {run_b['run_id']} ({run_b.get('experiment_name')})",
+            lineterm="",
+        )
+    )
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
@@ -156,6 +195,51 @@ def register_results_routes(router: APIRouter, page) -> None:
             asr_model_type,
             text_emb_model_type,
             audio_emb_model_type,
+        )
+
+    @router.get("/ui/compare", response_class=HTMLResponse, include_in_schema=False)
+    def ui_compare(
+        request: Request, a: int, b: int, output_dir: str = "evaluation_results"
+    ) -> HTMLResponse:
+        from evaluator.storage import ExperimentStore
+
+        run_a: Optional[Dict[str, Any]] = None
+        run_b: Optional[Dict[str, Any]] = None
+        try:
+            store = ExperimentStore(
+                db_path=str(Path(output_dir) / "leaderboard.sqlite")
+            )
+            run_a = store.get_run(a)
+            run_b = store.get_run(b)
+        except Exception:
+            pass
+        if run_a is None or run_b is None:
+            missing = a if run_a is None else b
+            return HTMLResponse(f'<p class="error">run {missing} not found</p>')
+        metrics_a = _numeric_metrics(run_a.get("metrics") or {})
+        metrics_b = _numeric_metrics(run_b.get("metrics") or {})
+        metric_rows = [
+            {
+                "name": name,
+                "a": metrics_a.get(name),
+                "b": metrics_b.get(name),
+                "delta": (
+                    metrics_b[name] - metrics_a[name]
+                    if name in metrics_a and name in metrics_b
+                    else None
+                ),
+            }
+            for name in sorted(set(metrics_a) | set(metrics_b))
+        ]
+        return page(
+            request,
+            "compare.html",
+            active="results",
+            run_a=run_a,
+            run_b=run_b,
+            metric_rows=metric_rows,
+            diff_lines=_config_diff(run_a, run_b),
+            output_dir=output_dir,
         )
 
     @router.get(

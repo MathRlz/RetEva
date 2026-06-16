@@ -18,6 +18,12 @@ from .export import (
     export_sample_results,
 )
 
+from .branch_report import (
+    latex_branch_table,
+    plot_branch_deltas,
+    export_per_query_failures,
+)
+
 from .errors import (
     analyze_asr_errors,
     analyze_retrieval_failures,
@@ -50,6 +56,10 @@ __all__ = [
     "export_to_latex",
     "compare_experiments_to_latex",
     "export_sample_results",
+    # Branched-report thesis artifacts
+    "latex_branch_table",
+    "plot_branch_deltas",
+    "export_per_query_failures",
     # Error analysis
     "analyze_asr_errors",
     "analyze_retrieval_failures",

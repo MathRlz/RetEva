@@ -40,22 +40,6 @@ class DiversityConfig:
 
 
 @dataclass
-class AdvancedRetrievalConfig:
-    """Multi-vector, query expansion, pseudo-relevance feedback, adaptive fusion."""
-    multi_vector_enabled: bool = False
-    vectors_per_doc: int = 3
-    multi_vector_strategy: str = "max_sim"  # max_sim | avg_sim | late_interaction
-    query_expansion_enabled: bool = False
-    query_expansion_method: str = "synonyms"  # synonyms | embeddings | llm
-    expansion_terms: int = 5
-    pseudo_feedback_enabled: bool = False
-    pseudo_feedback_top_k: int = 3
-    pseudo_feedback_weight: float = 0.3
-    adaptive_fusion_enabled: bool = False
-    confidence_threshold: float = 0.7
-
-
-@dataclass
 class BackendConfig:
     """Backend-specific connection settings."""
     chromadb_path: Optional[str] = None
@@ -158,26 +142,7 @@ class VectorDBConfig:
     max_similarity_threshold: Optional[float] = None  # Filter results above this score (for diversity)
     distance_metric: str = "cosine"  # cosine | euclidean | dot_product
     diversity_penalty: float = 0.0  # Penalty for similar documents (0.0-1.0)
-    
-    # Multi-vector retrieval settings
-    multi_vector_enabled: bool = False
-    vectors_per_doc: int = 3  # Number of vectors per document (e.g., sentence-level)
-    multi_vector_strategy: str = "max_sim"  # max_sim | avg_sim | late_interaction
-    
-    # Query expansion settings
-    query_expansion_enabled: bool = False
-    query_expansion_method: str = "synonyms"  # synonyms | embeddings | llm
-    expansion_terms: int = 5  # Number of expansion terms to add
-    
-    # Pseudo-relevance feedback settings
-    pseudo_feedback_enabled: bool = False
-    pseudo_feedback_top_k: int = 3  # Number of top docs to use for feedback
-    pseudo_feedback_weight: float = 0.3  # Weight for feedback terms (0.0-1.0)
-    
-    # Adaptive fusion settings
-    adaptive_fusion_enabled: bool = False
-    confidence_threshold: float = 0.7  # Threshold for switching fusion strategies
-    
+
     # ChromaDB-specific settings
     chromadb_path: Optional[str] = None
     chromadb_collection_name: str = "documents"
@@ -213,31 +178,6 @@ class VectorDBConfig:
         
         if not 0.0 <= self.diversity_penalty <= 1.0:
             raise ValueError(f"diversity_penalty must be in [0, 1], got {self.diversity_penalty}")
-        
-        if not 0.0 <= self.pseudo_feedback_weight <= 1.0:
-            raise ValueError(f"pseudo_feedback_weight must be in [0, 1], got {self.pseudo_feedback_weight}")
-        
-        if not 0.0 <= self.confidence_threshold <= 1.0:
-            raise ValueError(f"confidence_threshold must be in [0, 1], got {self.confidence_threshold}")
-        
-        # Validate multi-vector settings
-        if self.multi_vector_enabled and self.vectors_per_doc < 1:
-            raise ValueError(f"vectors_per_doc must be >= 1, got {self.vectors_per_doc}")
-        
-        valid_mv_strategies = {"max_sim", "avg_sim", "late_interaction"}
-        if self.multi_vector_strategy not in valid_mv_strategies:
-            raise ValueError(
-                f"multi_vector_strategy must be one of {valid_mv_strategies}, "
-                f"got {self.multi_vector_strategy}"
-            )
-        
-        # Validate query expansion settings
-        valid_expansion_methods = {"synonyms", "embeddings", "llm"}
-        if self.query_expansion_method not in valid_expansion_methods:
-            raise ValueError(
-                f"query_expansion_method must be one of {valid_expansion_methods}, "
-                f"got {self.query_expansion_method}"
-            )
 
     # ── Sub-config accessors (read-only views over flat fields) ──────
 
@@ -264,22 +204,6 @@ class VectorDBConfig:
             diversity_penalty=self.diversity_penalty,
             min_similarity_threshold=self.min_similarity_threshold,
             max_similarity_threshold=self.max_similarity_threshold,
-        )
-
-    @property
-    def advanced(self) -> AdvancedRetrievalConfig:
-        return AdvancedRetrievalConfig(
-            multi_vector_enabled=self.multi_vector_enabled,
-            vectors_per_doc=self.vectors_per_doc,
-            multi_vector_strategy=self.multi_vector_strategy,
-            query_expansion_enabled=self.query_expansion_enabled,
-            query_expansion_method=self.query_expansion_method,
-            expansion_terms=self.expansion_terms,
-            pseudo_feedback_enabled=self.pseudo_feedback_enabled,
-            pseudo_feedback_top_k=self.pseudo_feedback_top_k,
-            pseudo_feedback_weight=self.pseudo_feedback_weight,
-            adaptive_fusion_enabled=self.adaptive_fusion_enabled,
-            confidence_threshold=self.confidence_threshold,
         )
 
     @property

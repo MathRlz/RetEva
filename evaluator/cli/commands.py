@@ -112,6 +112,12 @@ def _save_results(results, output_path, config, logger) -> None:
 def _print_graph(config: EvaluationConfig) -> None:
     """Print the execution DAG for *config* without loading any models."""
     from evaluator.pipeline import build_graph_for_config, get_stage_node_def
+    from evaluator.pipeline.graph.display import display_label
+    from evaluator.pipeline.stage_graph import (
+        _effective_inputs,
+        _effective_outputs,
+        dataset_columns,
+    )
 
     graph = build_graph_for_config(config)
     print(f"Execution DAG (mode={graph.mode}):")
@@ -120,13 +126,19 @@ def _print_graph(config: EvaluationConfig) -> None:
     print("  nodes (inputs -> outputs) [deps]:")
     for node in graph.nodes:
         d = get_stage_node_def(node.stage)
-        ins = ", ".join(d.inputs) or "-"
-        outs = ", ".join(d.outputs) or "-"
-        # show "id (type)" only for instance nodes where id != type
-        label = node.id if node.id == node.stage else f"{node.id} ({node.stage})"
+        ins = ", ".join(_effective_inputs(node.stage, node.params)) or "-"
+        outs = ", ".join(_effective_outputs(node.stage, node.params)) or "-"
         deps = f"  [after {', '.join(node.depends_on)}]" if node.depends_on else ""
-        params = f"  params={node.params}" if node.params else ""
-        print(f"    {label}: ({ins}) -> ({outs}){deps}{params}")
+        shown_params = {k: v for k, v in (node.params or {}).items() if k != "fields"}
+        params = f"  params={shown_params}" if shown_params else ""
+        # technical id prefix (stable/parseable) + the friendly operator label (display.py)
+        friendly = display_label(node.stage, node.params)
+        suffix = f"  «{friendly}»" if friendly != node.id else ""
+        print(f"    {node.id}: ({ins}) -> ({outs}){deps}{params}{suffix}")
+        columns = dataset_columns(node.params)
+        if columns:
+            cols = ", ".join(f"{c['name']}:{c['type']}" for c in columns)
+            print(f"      columns: {cols}")
 
 
 def main() -> None:

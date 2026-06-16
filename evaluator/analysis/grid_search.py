@@ -230,8 +230,6 @@ def create_advanced_rag_grid(base_config: EvaluationConfig) -> GridSearch:
     grid = GridSearch(base_config)
     grid.add_param("vector_db.use_mmr", [False, True])
     grid.add_param("vector_db.mmr_lambda", [0.5, 0.6, 0.7])
-    grid.add_param("vector_db.query_expansion_enabled", [False, True])
-    grid.add_param("vector_db.pseudo_feedback_enabled", [False, True])
     return grid
 
 

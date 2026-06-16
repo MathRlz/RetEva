@@ -29,7 +29,7 @@ nodes:
     dim: 2048
     dropout: 0.1
     device: cuda:3
-  corpus_index:
+  vector_db:
     store: inmemory
   retrieval:
     k: 5

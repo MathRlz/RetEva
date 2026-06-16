@@ -9,6 +9,7 @@ to ``import evaluator.evaluation.handlers`` (or anything that does, e.g. ``execu
 
 from . import sinks  # noqa: F401
 from . import source  # noqa: F401
+from . import audio  # noqa: F401
 from . import asr  # noqa: F401
 from . import embedding  # noqa: F401
 from . import retrieval  # noqa: F401

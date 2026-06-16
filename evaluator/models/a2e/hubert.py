@@ -24,6 +24,8 @@ class HuBERTAudioModel(AudioEmbeddingModel):
             "base": "facebook/hubert-base-ls960",
             "large": "facebook/hubert-large-ll60k",
         }
+        # Model-author-declared value choices (rendered by the builder, registry.get_params_schema)
+        CHOICES: ClassVar[Dict[str, list]] = {"pooling": ["mean", "cls"]}
     """
     Audio embedding model using HuBERT (Hidden-Unit BERT) from Facebook/Meta.
     

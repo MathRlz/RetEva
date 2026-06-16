@@ -52,12 +52,24 @@ def _graph_view_from_config(config_dict: dict):
         if not mode:
             return [], {}
         mode = str(mode)
+        graph = None
+        try:
+            # Full reconstruction (incl. dataset column schema) when the stored
+            # config still parses; falls back to the tolerant mode-only path.
+            from evaluator import EvaluationConfig
+            from evaluator.pipeline import build_graph_for_config
+
+            graph = build_graph_for_config(
+                EvaluationConfig.from_dict(dict(config_dict), validate=False)
+            )
+        except Exception:
+            graph = None
         override = config_dict.get("graph_override")
-        if override and override.get("nodes"):
+        if graph is None and override and override.get("nodes"):
             graph = build_graph_from_spec(
                 override["nodes"], mode=mode, edges=override.get("edges")
             )
-        else:
+        elif graph is None:
             fusion = bool(
                 (config_dict.get("embedding_fusion") or {}).get("enabled")
                 or (config_dict.get("features") or {})
@@ -65,14 +77,25 @@ def _graph_view_from_config(config_dict: dict):
                 .get("enabled")
             )
             graph = build_stage_graph(mode, embedding_fusion_enabled=fusion)
+        from evaluator.pipeline.stage_graph import (
+            _effective_inputs,
+            _effective_outputs,
+            dataset_columns,
+        )
+
         levels = [[n.id for n in level] for level in graph.topological_levels()]
-        node_io = {
-            n.id: "{} → {}".format(
-                ", ".join(get_stage_node_def(n.stage).inputs) or "·",
-                ", ".join(get_stage_node_def(n.stage).outputs) or "·",
+        node_io = {}
+        for n in graph.nodes:
+            io = "{} → {}".format(
+                ", ".join(_effective_inputs(n.stage, n.params)) or "·",
+                ", ".join(_effective_outputs(n.stage, n.params)) or "·",
             )
-            for n in graph.nodes
-        }
+            columns = dataset_columns(n.params)
+            if columns:
+                io += " · columns: " + ", ".join(
+                    f"{c['name']}:{c['type']}" for c in columns
+                )
+            node_io[n.id] = io
         return levels, node_io
     except Exception:
         return [], {}

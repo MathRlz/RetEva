@@ -67,6 +67,12 @@ _DATASET_FIELDS = {
     "questions": "questions_path",
     "corpus": "corpus_path",
     "prepared_dir": "prepared_dataset_dir",
+    "audio_dir": "audio_dir",
+    "transcripts": "transcripts_file",
+    "hf_dataset": "huggingface_dataset",
+    "hf_subset": "huggingface_subset",
+    "hf_split": "huggingface_split",
+    "split": "huggingface_split",
     "batch_size": "batch_size",
     "trace_limit": "trace_limit",
     "type": "dataset_type",
@@ -75,6 +81,10 @@ _DATASET_FIELDS = {
     "language": "default_language",
 }
 
+# DataConfig field → node-centric YAML key (inverse of _DATASET_FIELDS; the builder's
+# required-settings form and the dataset_source node-param translation speak this).
+_DATA_FIELD_TO_KEY = {v: k for k, v in _DATASET_FIELDS.items()}
+
 # nodes.retrieval scalar keys → VectorDBConfig field.
 _RETRIEVAL_SCALARS = {
     "k": "k",
@@ -82,6 +92,31 @@ _RETRIEVAL_SCALARS = {
     "distance": "distance_metric",
     "gpu_id": "gpu_id",
 }
+
+# nodes.vector_db keys → VectorDBConfig field(s) — the canonical home for the store
+# backend choice (the §4 split node). `collection` fans out to both backends' fields.
+_VECTOR_DB_NODE_KEYS = {
+    "store": ("type",),
+    "gpu_id": ("gpu_id",),
+    "path": ("chromadb_path",),
+    "url": ("qdrant_url",),
+    "collection": ("chromadb_collection_name", "qdrant_collection_name"),
+}
+
+
+def _vector_db_node_to_config(node: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate a nodes.vector_db block into vector_db fields (typo-protected)."""
+    vdb: Dict[str, Any] = {}
+    for key, value in node.items():
+        fields = _VECTOR_DB_NODE_KEYS.get(key)
+        if fields is None:
+            raise GraphConfigError(
+                f"Unknown key '{key}' under nodes.vector_db. "
+                f"Allowed: {sorted(_VECTOR_DB_NODE_KEYS)}"
+            )
+        for f in fields:
+            vdb[f] = value
+    return vdb
 
 
 def _map_keys(
@@ -98,27 +133,40 @@ def _map_keys(
     return out
 
 
+# nested retrieval groups → vector_db field names. Explicit (not a passthrough) so a typo in a
+# nested key (e.g. retrieval.reranker.enabld) is a hard error, not a silently-dropped vdb key.
+_FUSION_KEYS = {
+    "method": "hybrid_fusion_method",
+    "dense_weight": "hybrid_dense_weight",
+    "rrf_k": "rrf_k",
+}
+_RERANKER_KEYS = {
+    k: f"reranker_{k}" for k in ("enabled", "mode", "top_k", "weight", "model", "device")
+}
+_MMR_KEYS = {"enabled": "use_mmr", "lambda": "mmr_lambda"}
+
+
 def _retrieval_to_vector_db(node: Dict[str, Any]) -> Dict[str, Any]:
     """Translate a nodes.retrieval block into vector_db fields."""
     vdb: Dict[str, Any] = {}
+
+    def _nested(value: Dict[str, Any], mapping: Dict[str, str], group: str) -> None:
+        for k, v in value.items():
+            if k not in mapping:
+                raise GraphConfigError(
+                    f"Unknown key 'retrieval.{group}.{k}'. Allowed: {sorted(mapping)}"
+                )
+            vdb[mapping[k]] = v
+
     for key, value in node.items():
         if key in _RETRIEVAL_SCALARS:
             vdb[_RETRIEVAL_SCALARS[key]] = value
         elif key == "fusion" and isinstance(value, dict):
-            for fk, fv in value.items():
-                vdb[
-                    {
-                        "method": "hybrid_fusion_method",
-                        "dense_weight": "hybrid_dense_weight",
-                        "rrf_k": "rrf_k",
-                    }.get(fk, fk)
-                ] = fv
+            _nested(value, _FUSION_KEYS, "fusion")
         elif key == "reranker" and isinstance(value, dict):
-            for rk, rv in value.items():
-                vdb["reranker_" + ("enabled" if rk == "enabled" else rk)] = rv
+            _nested(value, _RERANKER_KEYS, "reranker")
         elif key == "mmr" and isinstance(value, dict):
-            for mk, mv in value.items():
-                vdb[{"enabled": "use_mmr", "lambda": "mmr_lambda"}.get(mk, mk)] = mv
+            _nested(value, _MMR_KEYS, "mmr")
         else:
             raise GraphConfigError(f"Unknown key 'retrieval.{key}'")
     return vdb
@@ -222,15 +270,15 @@ def _translate_graph(
             ds_id = params.get("dataset")
             if ds_id is None:
                 continue
-            if (
-                datasets is not None
-                and str(ds_id) not in role_by_dataset_id
-                and (str(ds_id) not in (legacy.get("data", {}).get("datasets") or {}))
-            ):
-                raise GraphConfigError(
-                    f"dataset_source '{item.get('id')}' references unknown dataset "
-                    f"'{ds_id}' (not in datasets:)."
-                )
+            map_entries = legacy.get("data", {}).get("datasets") or {}
+            in_map = str(ds_id) in role_by_dataset_id or str(ds_id) in map_entries
+            if not in_map:
+                # Not a datasets-map id → must be a REGISTERED dataset id (the
+                # builder's picker). Synthesize a per-node datasets entry from the
+                # node's data-setting params and rewrite the reference, so the
+                # existing multi-source loader (B1/B4) runs it unchanged.
+                _synthesize_dataset_entry(item, params, str(ds_id), legacy)
+                continue
             if "role" not in params and str(ds_id) in role_by_dataset_id:
                 params["role"] = role_by_dataset_id[str(ds_id)]
                 item["params"] = params
@@ -262,6 +310,66 @@ def _translate_graph(
         ] = branches
 
 
+# dataset_source node params that are NOT data settings (kept on the node).
+_DATASET_NODE_CONTROL_PARAMS = {"dataset", "role", "fields"}
+
+
+def _synthesize_dataset_entry(
+    item: Dict[str, Any],
+    params: Dict[str, Any],
+    dataset_id: str,
+    legacy: Dict[str, Any],
+) -> None:
+    """A dataset_source node naming a REGISTERED dataset (builder picker path).
+
+    Builds ``data.datasets[<node_id>] = {dataset_name: id, **node data settings}``
+    and rewrites ``params.dataset`` to the node id; validates the descriptor's
+    ``required_data_fields`` are satisfied (node params or global data fields).
+    """
+    from ..datasets.descriptor import get_descriptor, list_registered_datasets
+
+    node_id = str(item.get("id") or "dataset_source")
+    descriptor = get_descriptor(dataset_id)
+    if descriptor is None:
+        known = ", ".join(list_registered_datasets())
+        raise GraphConfigError(
+            f"dataset_source '{node_id}' references unknown dataset '{dataset_id}' "
+            f"(not a datasets: map id and not a registered dataset). "
+            f"Registered: {known}"
+        )
+    settings = {
+        k: v
+        for k, v in params.items()
+        if k not in _DATASET_NODE_CONTROL_PARAMS and v not in (None, "")
+    }
+    mapped = _map_keys(
+        settings, _DATASET_FIELDS, f"graph node '{node_id}' dataset settings"
+    )
+    entry = {"dataset_name": dataset_id, **mapped}
+    # Validate with the descriptor's own validator (the authority — it knows
+    # alternatives like pubmed_qa's prepared_dataset_dir) over node-entry settings
+    # overlaid on the global dataset block.
+    from types import SimpleNamespace
+
+    global_data = legacy.get("data", {}) or {}
+    overlay = SimpleNamespace(**{**global_data, **entry})
+    errors = descriptor.validate_data_config(overlay)  # type: ignore[arg-type]
+    if errors:
+        required = ", ".join(
+            _DATA_FIELD_TO_KEY.get(f, f) for f in descriptor.required_data_fields
+        )
+        raise GraphConfigError(
+            f"dataset '{dataset_id}' on node '{node_id}' is missing required "
+            f"setting(s) (expects: {required}): " + "; ".join(errors)
+        )
+    legacy.setdefault("data", {}).setdefault("datasets", {})[node_id] = entry
+    new_params = {
+        k: v for k, v in params.items() if k in _DATASET_NODE_CONTROL_PARAMS
+    }
+    new_params["dataset"] = node_id
+    item["params"] = new_params
+
+
 def _translate_nodes(
     new: Dict[str, Any], legacy: Dict[str, Any], model: Dict[str, Any]
 ) -> None:
@@ -272,12 +380,13 @@ def _translate_nodes(
         node = node or {}
         if name in _MODEL_NODE_FIELDS:
             model.update(_map_keys(node, _MODEL_NODE_FIELDS[name], f"nodes.{name}"))
-        elif name == "corpus_index":
-            if "store" in node:
-                vector_db["type"] = node.pop("store")
+        elif name == "vector_db":
+            vector_db.update(_vector_db_node_to_config(node))
+        elif name == "corpus_embedding":
+            # Structural in YAML (its model rides graph-override node params).
             if node:
                 raise GraphConfigError(
-                    f"Unknown keys under nodes.corpus_index: {sorted(node)}"
+                    f"Unknown keys under nodes.corpus_embedding: {sorted(node)}"
                 )
         elif name == "retrieval":
             vector_db.update(_retrieval_to_vector_db(node))
@@ -287,6 +396,9 @@ def _translate_nodes(
             legacy["dataset_sink"] = {"enabled": True, **dict(node)}
         elif name in (
             "fusion",
+            "corpus_merge",
+            "dataset_union",
+            "augment_audio",
             "metrics",
             "finalize",
             "dataset_source",
@@ -438,7 +550,8 @@ def legacy_yaml_to_graph_yaml(old: Dict[str, Any]) -> Dict[str, Any]:
         vdb = dict(vdb)
         retrieval: Dict[str, Any] = {}
         if "type" in vdb:
-            nodes.setdefault("corpus_index", {})["store"] = vdb.pop("type")
+            # Canonical home for the store choice is the vector_db node (§4 split).
+            nodes.setdefault("vector_db", {})["store"] = vdb.pop("type")
         leftover_vdb = {}
         for k, v in vdb.items():
             if k in _VDB_TO_RETRIEVAL:

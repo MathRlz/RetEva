@@ -21,6 +21,26 @@ import torchaudio
 from pathlib import Path
 
 
+def parse_corpus_row(row: Any) -> Optional[Dict[str, Any]]:
+    """Normalize one corpus row to ``{doc_id, text, title, language, metadata}``, or ``None``
+    when it lacks a doc id / text. The single source for the corpus field-name fallbacks
+    (``doc_id|pmid|id``, ``text|abstract|content``) both corpus loaders share — each caller
+    decides how to treat ``None`` (``_load_corpus`` raises, ``_load_corpus_entries`` skips)."""
+    if not isinstance(row, dict):
+        return None
+    doc_id = str(row.get("doc_id") or row.get("pmid") or row.get("id") or "")
+    text = row.get("text") or row.get("abstract") or row.get("content")
+    if not doc_id or not text:
+        return None
+    return {
+        "doc_id": doc_id,
+        "text": str(text),
+        "title": str(row.get("title", "")),
+        "language": row.get("language", "en"),
+        "metadata": row.get("metadata", {}),
+    }
+
+
 def load_audio_file(path: str):
     """Load an audio file as (waveform_tensor[channels, samples], sample_rate).
 
@@ -49,6 +69,75 @@ def get_data_dir() -> Path:
     return Path.cwd()
 
 
+# ── Questions / corpus file loaders (used by the pubmed_qa descriptor path) ───────────
+
+
+def load_json_or_jsonl(path: Path) -> List[Dict[str, Any]]:
+    """Load a questions/corpus file as a list of row dicts (JSON list, JSONL, or a dict
+    wrapping one under questions/documents/corpus/items)."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Dataset file not found: {path}\n"
+            f"Searched path: {path.resolve()}\n"
+            f"Tip: Set EVALUATOR_DATA_DIR environment variable to specify the base data directory."
+        )
+    data = DatasetLoader(path).load()
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ["questions", "documents", "corpus", "items"]:
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        raise ValueError(f"Unsupported JSON structure in {path}")
+    raise ValueError(f"Unsupported data type for {path}. Expected list or dict.")
+
+
+def load_questions_file(path: Path) -> List[BenchmarkQuestion]:
+    """Parse a questions file into :class:`BenchmarkQuestion`s (field-name fallbacks +
+    groundtruth/relevance derivation)."""
+    questions: List[BenchmarkQuestion] = []
+    for row in load_json_or_jsonl(path):
+        question_id = str(row.get("question_id") or row.get("id") or "")
+        question_text = row.get("question_text") or row.get("question") or row.get("text")
+        if not question_id or not question_text:
+            raise ValueError(
+                f"Each question must contain 'question_id' and 'question_text'.\n"
+                f"Found fields: {list(row.keys())}\n"
+                f"Example: {{\"question_id\": \"q1\", \"question_text\": \"What is...\"}}"
+            )
+        gt_ids = row.get("groundtruth_doc_ids") or row.get("relevant_doc_ids") or []
+        relevance = row.get("relevance_grades") or {}
+        if not relevance and gt_ids:
+            relevance = {str(doc_id): 1 for doc_id in gt_ids}
+        questions.append(
+            BenchmarkQuestion(
+                question_id=question_id,
+                question_text=str(question_text),
+                groundtruth_doc_ids=[str(doc_id) for doc_id in gt_ids],
+                relevance_grades={str(k): int(v) for k, v in relevance.items()},
+                audio_path=row.get("audio_path"),
+                language=row.get("language", "en"),
+                metadata=row.get("metadata", {}),
+            )
+        )
+    return questions
+
+
+def load_corpus_documents(path: Path) -> List[CorpusDocument]:
+    """Parse a corpus file into :class:`CorpusDocument`s (shared ``parse_corpus_row`` fallbacks)."""
+    corpus: List[CorpusDocument] = []
+    for row in load_json_or_jsonl(path):
+        fields = parse_corpus_row(row)
+        if fields is None:
+            raise ValueError(
+                f"Each corpus row must contain 'doc_id' and 'text'.\n"
+                f"Found fields: {list(row.keys()) if isinstance(row, dict) else type(row)}\n"
+                f"Example: {{\"doc_id\": \"12345\", \"text\": \"Document content...\"}}"
+            )
+        corpus.append(CorpusDocument(abstract=str(row.get("abstract", "")), **fields))
+    return corpus
+
+
 class QueryDataset(ABC):
     @abstractmethod
     def __len__(self) -> int:
@@ -57,197 +146,6 @@ class QueryDataset(ABC):
     @abstractmethod
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         pass
-
-class AdmedQueryDataset(QueryDataset, Dataset):
-    """Deprecated: use the descriptor registry (datasets.descriptor) to load ADMED data."""
-
-    def __init__(self, corpus_df: pd.DataFrame):
-        import warnings
-        warnings.warn(
-            "AdmedQueryDataset is deprecated. Use the DatasetDescriptor registry "
-            "(evaluator.datasets.descriptor) to load datasets.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.corpus = corpus_df.reset_index(drop=True)
-
-    def __len__(self):
-        return len(self.corpus)
-
-    def __getitem__(self, idx):
-        item = self.corpus.iloc[idx]
-
-        file_path = item["file_path"]
-        waveform, sample_rate = load_audio_file(file_path)
-
-        transcription = item['phrase']
-
-        return {
-            "audio_array": waveform.squeeze().numpy(),
-            "sampling_rate": sample_rate,
-            "transcription": transcription,
-            "language": "pl"
-        }
-
-
-class PubMedQADataset(QueryDataset, Dataset):
-    """Deprecated: use the descriptor registry (datasets.descriptor) to load PubMed QA data.
-
-    ``_load_pubmed_qa`` in the descriptor now returns a ``LazyAudioQueryDataset``
-    backed by the same parsed questions/corpus.  This class is kept only for
-    direct backward-compatible instantiation.
-    """
-
-    def __init__(self, questions_path: str, corpus_path: str, trace_limit: int = 0):
-        import warnings
-        warnings.warn(
-            "PubMedQADataset is deprecated. Use the DatasetDescriptor registry "
-            "(evaluator.datasets.descriptor) to load datasets.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.questions_path = Path(questions_path)
-        self.corpus_path = Path(corpus_path)
-        self.questions = self._load_questions(self.questions_path)
-        self.corpus = self._load_corpus(self.corpus_path)
-        if trace_limit and trace_limit > 0:
-            self.questions = self.questions[:trace_limit]
-
-    @staticmethod
-    def _load_json_or_jsonl(path: Path) -> List[Dict[str, Any]]:
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Dataset file not found: {path}\n"
-                f"Searched path: {path.resolve()}\n"
-                f"Tip: Set EVALUATOR_DATA_DIR environment variable to specify the base data directory."
-            )
-
-        loader = DatasetLoader(path)
-        data = loader.load()
-
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            for key in ["questions", "documents", "corpus", "items"]:
-                if key in data and isinstance(data[key], list):
-                    return data[key]
-            raise ValueError(f"Unsupported JSON structure in {path}")
-
-        raise ValueError(f"Unsupported data type for {path}. Expected list or dict.")
-
-    @staticmethod
-    def _load_questions(path: Path) -> List[BenchmarkQuestion]:
-        rows = PubMedQADataset._load_json_or_jsonl(path)
-        questions: List[BenchmarkQuestion] = []
-        for row in rows:
-            question_id = str(row.get("question_id") or row.get("id") or "")
-            question_text = row.get("question_text") or row.get("question") or row.get("text")
-            if not question_id or not question_text:
-                raise ValueError(
-                    f"Each question must contain 'question_id' and 'question_text'.\n"
-                    f"Found fields: {list(row.keys())}\n"
-                    f"Example: {{\"question_id\": \"q1\", \"question_text\": \"What is...\"}}"
-                )
-
-            gt_ids = row.get("groundtruth_doc_ids") or row.get("relevant_doc_ids") or []
-            relevance = row.get("relevance_grades") or {}
-            if not relevance and gt_ids:
-                relevance = {str(doc_id): 1 for doc_id in gt_ids}
-
-            questions.append(
-                BenchmarkQuestion(
-                    question_id=question_id,
-                    question_text=str(question_text),
-                    groundtruth_doc_ids=[str(doc_id) for doc_id in gt_ids],
-                    relevance_grades={str(k): int(v) for k, v in relevance.items()},
-                    audio_path=row.get("audio_path"),
-                    language=row.get("language", "en"),
-                    metadata=row.get("metadata", {}),
-                )
-            )
-        return questions
-
-    @staticmethod
-    def _load_corpus(path: Path) -> List[CorpusDocument]:
-        rows = PubMedQADataset._load_json_or_jsonl(path)
-        corpus: List[CorpusDocument] = []
-        for row in rows:
-            doc_id = str(row.get("doc_id") or row.get("pmid") or row.get("id") or "")
-            text = row.get("text") or row.get("abstract") or row.get("content")
-            if not doc_id or not text:
-                raise ValueError(
-                    f"Each corpus row must contain 'doc_id' and 'text'.\n"
-                    f"Found fields: {list(row.keys())}\n"
-                    f"Example: {{\"doc_id\": \"12345\", \"text\": \"Document content...\"}}"
-                )
-
-            corpus.append(
-                CorpusDocument(
-                    doc_id=doc_id,
-                    text=str(text),
-                    title=str(row.get("title", "")),
-                    abstract=str(row.get("abstract", "")),
-                    language=row.get("language", "en"),
-                    metadata=row.get("metadata", {}),
-                )
-            )
-        return corpus
-
-    def __len__(self) -> int:
-        return len(self.questions)
-
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        question = self.questions[idx]
-
-        if not question.audio_path:
-            raise ValueError(
-                f"Question {question.question_id} has no audio_path. "
-                "Enable audio_synthesis in config or provide pre-recorded audio."
-            )
-
-        waveform, sample_rate = load_audio_file(question.audio_path)
-
-        return {
-            "audio_array": waveform.squeeze().numpy(),
-            "sampling_rate": sample_rate,
-            "transcription": question.question_text,
-            "question_text": question.question_text,
-            "question_id": question.question_id,
-            "groundtruth_doc_ids": question.groundtruth_doc_ids,
-            "relevance_grades": question.relevance_grades,
-            "language": question.language,
-            "metadata": question.metadata,
-        }
-
-    def get_corpus_entries(self) -> List[Dict[str, Any]]:
-        """Return corpus entries for index population."""
-        return [
-            {
-                "doc_id": doc.doc_id,
-                "text": doc.text,
-                "title": doc.title,
-                "language": doc.language,
-                "metadata": doc.metadata,
-            }
-            for doc in self.corpus
-        ]
-
-    def get_corpus(self) -> List[Dict[str, Any]]:
-        """Return corpus entries (compat alias used by service path)."""
-        return self.get_corpus_entries()
-
-
-def load_pubmed_qa_dataset(
-    questions_path: str,
-    corpus_path: str,
-    trace_limit: int = 0,
-) -> PubMedQADataset:
-    """Load benchmark dataset where each question maps to one or more PubMed document ids."""
-    return PubMedQADataset(
-        questions_path=questions_path,
-        corpus_path=corpus_path,
-        trace_limit=trace_limit,
-    )
 
 def get_admed_voice_path() -> Path:
     """Get path to admed_voice dataset.
