@@ -334,6 +334,13 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
                 proj_head_state[new_key] = value
 
         if pooling_state:
+            # Stat buffers (whiten m/W, ABTT mu/pc1) can carry trailing singleton dims from
+            # the training pipeline (e.g. mu (1,H), pc1 (H,1)) vs. our flat (H,) placeholders.
+            # Re-register each to the checkpoint's shape so strict load succeeds; the transforms
+            # normalize the shape at apply time (postprocessing.abtt_batch / whiten_batch).
+            for name, tensor in pooling_state.items():
+                if name in self.pooling._buffers:
+                    self.pooling.register_buffer(name, torch.empty_like(tensor))
             self.pooling.load_state_dict(pooling_state, strict=True)
         if proj_head_state:
             self.projection_head.load_state_dict(proj_head_state, strict=True)

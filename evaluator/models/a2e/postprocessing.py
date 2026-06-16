@@ -33,13 +33,15 @@ def abtt_batch(emb: torch.Tensor, mu: torch.Tensor, pc1: torch.Tensor) -> torch.
 
     Args:
         emb: ``(B, H)`` embeddings.
-        mu:  ``(H,)`` mean used during fitting.
-        pc1: top principal component(s) — ``(H,)`` for a single component or ``(k, H)`` for the
-             top-``k`` (each row a unit vector).
+        mu:  the mean used during fitting — ``(H,)`` or ``(1, H)`` (a trailing singleton from
+             the training pipeline is squeezed).
+        pc1: top principal component(s) — accepts ``(H,)`` / ``(1, H)`` / ``(H, 1)`` for a single
+             component or ``(k, H)`` for the top-``k`` (each a unit vector). Reshaped to ``(k, H)``.
     Returns ``(B, H)``.
     """
-    v = emb - mu
-    comps = pc1.unsqueeze(0) if pc1.dim() == 1 else pc1  # (k, H)
+    h = emb.shape[-1]
+    v = emb - mu.reshape(-1)  # (H,) broadcasts over (B, H); tolerates a (1, H) mean
+    comps = pc1.reshape(-1, h)  # (k, H) from (H,), (1, H), (H, 1) → single component, or (k, H)
     # remove the projection of each row of `v` onto every principal component
     coeffs = v @ comps.transpose(0, 1)  # (B, k)
     return v - coeffs @ comps  # (B, H)
