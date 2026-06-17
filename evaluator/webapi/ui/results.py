@@ -7,8 +7,18 @@ from __future__ import annotations
 
 import difflib
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from ...logging_config import get_logger
+
+logger = get_logger(__name__)
+
+#: DB-access failures that legitimately yield an empty/None view (missing, locked, or
+#: corrupt leaderboard sqlite). Narrower than ``Exception`` so a real bug 500s instead of
+#: silently rendering an empty page (C1/F20).
+_STORE_ERRORS = (sqlite3.Error, OSError)
 
 
 def _numeric_metrics(metrics: Dict[str, Any]) -> Dict[str, float]:
@@ -66,7 +76,9 @@ def register_results_routes(router: APIRouter, page) -> None:
             )
             metrics = store.available_metrics()
             filters = store.filter_options()
-        except Exception:
+        except _STORE_ERRORS as exc:
+            logger.warning("results page: leaderboard store unavailable (%s): %s",
+                           output_dir, exc)
             metrics, filters = [], {}
         if metric not in metrics:
             metric = metrics[0] if metrics else "MRR"
@@ -108,7 +120,8 @@ def register_results_routes(router: APIRouter, page) -> None:
                 name=name or None,
                 model_filters=model_filters,
             )
-        except Exception:
+        except _STORE_ERRORS as exc:
+            logger.warning("leaderboard render: query failed (%s): %s", output_dir, exc)
             rows = []
         labels = [
             str(r.get("experiment_name") or r.get("run_id") or i)
@@ -149,6 +162,67 @@ def register_results_routes(router: APIRouter, page) -> None:
             audio_emb_model_type,
         )
 
+    @router.get("/ui/pareto", response_class=HTMLResponse, include_in_schema=False)
+    def ui_pareto(
+        request: Request,
+        experiment_group: str = "",
+        objectives: str = "MRR:max,latency_ms:min",
+        output_dir: str = "evaluation_results",
+    ) -> HTMLResponse:
+        """Cross-run Pareto view for an experiment group (Roadmap 4a): a 2-objective scatter
+        with the non-dominated frontier highlighted + a table tagging each comparable run."""
+        from evaluator.storage import ExperimentStore
+        from evaluator.webapi.routers.leaderboard import pareto_rows
+
+        try:
+            groups = ExperimentStore(
+                db_path=str(Path(output_dir) / "leaderboard.sqlite")
+            ).experiment_groups()
+        except _STORE_ERRORS as exc:
+            logger.warning("pareto page: group list unavailable (%s): %s", output_dir, exc)
+            groups = []
+        if not experiment_group and groups:
+            experiment_group = groups[0]
+
+        data: Optional[Dict[str, Any]] = None
+        error = None
+        if experiment_group:
+            try:
+                data = pareto_rows(experiment_group, objectives=objectives, output_dir=output_dir)
+            except ValueError as exc:
+                error = str(exc)
+            except _STORE_ERRORS as exc:
+                logger.warning("pareto render: query failed (%s): %s", output_dir, exc)
+
+        rows = (data or {}).get("rows", [])
+        objs = (data or {}).get("objectives", [])
+        ykey = objs[0]["metric"] if objs else None
+        xkey = objs[1]["metric"] if len(objs) > 1 else ykey  # 1 objective → 1-D strip
+
+        def _trace(on_frontier: bool) -> Dict[str, list]:
+            picks = [r for r in rows if r.get("on_frontier") is on_frontier]
+            return {
+                "x": [r["metrics"].get(xkey) for r in picks],
+                "y": [r["metrics"].get(ykey) for r in picks],
+                "text": [r.get("experiment_name") for r in picks],
+            }
+
+        return page(
+            request,
+            "_pareto.html",
+            groups=groups,
+            experiment_group=experiment_group,
+            objectives=objectives,
+            rows=rows,
+            objs=objs,
+            xkey=xkey,
+            ykey=ykey,
+            error=error,
+            output_dir=output_dir,
+            frontier_pts=json.dumps(_trace(True)),
+            dominated_pts=json.dumps(_trace(False)),
+        )
+
     @router.get(
         "/ui/runs/{run_id}/confirm-delete",
         response_class=HTMLResponse,
@@ -183,8 +257,9 @@ def register_results_routes(router: APIRouter, page) -> None:
             delete_run_and_cache(
                 run_id, delete_cache=(delete_cache == "on"), output_dir=output_dir
             )
-        except Exception:
-            pass  # Re-render the (now-updated) list regardless.
+        except _STORE_ERRORS as exc:
+            # Re-render the (now-updated) list regardless, but don't hide the failure.
+            logger.warning("delete run %s failed: %s", run_id, exc)
         return _render_leaderboard(
             request,
             metric,
@@ -211,8 +286,8 @@ def register_results_routes(router: APIRouter, page) -> None:
             )
             run_a = store.get_run(a)
             run_b = store.get_run(b)
-        except Exception:
-            pass
+        except _STORE_ERRORS as exc:
+            logger.warning("compare runs %s/%s: store read failed: %s", a, b, exc)
         if run_a is None or run_b is None:
             missing = a if run_a is None else b
             return HTMLResponse(f'<p class="error">run {missing} not found</p>')
@@ -255,7 +330,8 @@ def register_results_routes(router: APIRouter, page) -> None:
                 db_path=str(Path(output_dir) / "leaderboard.sqlite")
             )
             run = store.get_run(run_id)
-        except Exception:
+        except _STORE_ERRORS as exc:
+            logger.warning("run detail %s: store read failed: %s", run_id, exc)
             run = None
         if run is None:
             return HTMLResponse('<p class="error">run not found</p>')

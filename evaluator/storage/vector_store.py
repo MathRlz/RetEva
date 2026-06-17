@@ -36,11 +36,17 @@ class VectorStore(ABC):
         return [self.search(q, k) for q in queries]
 
     def _payload_at(self, idx: int) -> Any:
-        """Bounds-checked payload lookup (A4/F4). A backend can hand back a stale/oversized
-        ``_payload_idx`` (or a ``load()`` with mismatched payloads); index it blindly and the
-        search either returns the wrong document or raises ``IndexError`` mid-run. Return None
-        for an out-of-range index (logged, not raised) so callers skip the bad hit."""
-        payloads = getattr(self, "_payloads", None) or []
+        """Bounds-checked payload lookup (A4/F4; H3). A backend can hand back a stale/oversized
+        index (or a ``load()`` with mismatched payloads); index it blindly and the search either
+        returns the wrong document or raises ``IndexError`` mid-run. Return None for an
+        out-of-range index (logged, not raised) so callers skip the bad hit. Handles both the
+        ``payloads`` (in-memory/FAISS stores) and ``_payloads`` (chromadb/qdrant) attribute names.
+        """
+        payloads = getattr(self, "payloads", None)
+        if payloads is None:
+            payloads = getattr(self, "_payloads", None)
+        if payloads is None:
+            payloads = []
         if 0 <= idx < len(payloads):
             return payloads[idx]
         logging.getLogger("evaluator").warning(
@@ -48,6 +54,19 @@ class VectorStore(ABC):
             type(self).__name__, idx, len(payloads),
         )
         return None
+
+    def _verify_payload_count(self, n_vectors: int, payloads: list, where: str) -> None:
+        """Fail loudly when a reloaded index's vector count and payload count disagree (R5).
+
+        Save/load writes the index and payload sidecar separately, so a stale/truncated
+        sidecar otherwise surfaces as wrong documents or an ``IndexError`` deep in a search
+        (the H3 runtime guard catches it per-hit; this catches the whole-file mismatch at load,
+        loudly, before any query runs)."""
+        if len(payloads) != n_vectors:
+            raise ValueError(
+                f"{type(self).__name__}.load: {where} has {n_vectors} vectors but "
+                f"{len(payloads)} payloads — index/payload mismatch (corrupt or stale sidecar)"
+            )
 
     @abstractmethod
     def save(self, path: Union[str, Path]) -> None:
@@ -81,7 +100,10 @@ class InMemoryVectorStore(VectorStore):
         
         sims = np.dot(self.vectors, query.T).squeeze()
         indices = np.argsort(-sims)[:k]
-        return [(self.payloads[i], sims[i]) for i in indices]
+        return [
+            (p, sims[i]) for i in indices
+            if (p := self._payload_at(int(i))) is not None
+        ]
 
     def search_batch(self, queries: np.ndarray, k: int) -> List[List[Tuple[Any, float]]]:
         if self.vectors is None:
@@ -100,7 +122,10 @@ class InMemoryVectorStore(VectorStore):
             else:
                 part_idx = np.argpartition(-row, k)[:k]
                 top_idx = part_idx[np.argsort(-row[part_idx])]
-            results.append([(self.payloads[i], float(row[i])) for i in top_idx])
+            results.append([
+                (p, float(row[i])) for i in top_idx
+                if (p := self._payload_at(int(i))) is not None
+            ])
         return results
 
     def save(self, path: Union[str, Path]) -> None:
@@ -123,10 +148,12 @@ class InMemoryVectorStore(VectorStore):
         
         # Load vectors
         self.vectors = np.load(load_path / "vectors.npy")
-        
+
         # Load payloads
         with open(load_path / "payloads.json", 'r') as f:
             self.payloads = json.load(f)
+        self._verify_payload_count(self.vectors.shape[0], self.payloads, str(load_path))
+
 
 class FaissVectorStore(VectorStore):
     def __init__(self, dim: int) -> None:
@@ -145,8 +172,9 @@ class FaissVectorStore(VectorStore):
         faiss.normalize_L2(q)
 
         scores, indices = self.index.search(q, k)
-        return [(self.payloads[i], scores[0][j])
-                for j, i in enumerate(indices[0]) if i >= 0]
+        return [(p, scores[0][j])
+                for j, i in enumerate(indices[0])
+                if i >= 0 and (p := self._payload_at(int(i))) is not None]
 
     def search_batch(self, queries: np.ndarray, k: int) -> List[List[Tuple[Any, float]]]:
         q = np.asarray(queries, dtype=np.float32)
@@ -156,8 +184,9 @@ class FaissVectorStore(VectorStore):
         scores, indices = self.index.search(q, k)
         results: List[List[Tuple[Any, float]]] = []
         for row_scores, row_indices in zip(scores, indices):
-            results.append([(self.payloads[i], float(s))
-                            for s, i in zip(row_scores, row_indices) if i >= 0])
+            results.append([(p, float(s))
+                            for s, i in zip(row_scores, row_indices)
+                            if i >= 0 and (p := self._payload_at(int(i))) is not None])
         return results
 
     def save(self, path: Union[str, Path]) -> None:
@@ -174,7 +203,113 @@ class FaissVectorStore(VectorStore):
         self.index = faiss.read_index(str(load_path / "faiss.index"))
         with open(load_path / "payloads.json", 'r') as f:
             self.payloads = json.load(f)
-    
+        self._verify_payload_count(self.index.ntotal, self.payloads, str(load_path))
+
+
+def _read_index_mmap(index_path: str):
+    """Read a FAISS index memory-mapped (pages from disk on demand → bounded RAM). Flat indexes
+    that the build can't mmap fall back to a normal read (logged)."""
+    try:
+        return faiss.read_index(index_path, faiss.IO_FLAG_MMAP)
+    except Exception as exc:  # noqa: BLE001 - mmap is an optimization, never a hard requirement
+        logging.getLogger("evaluator").info(
+            "faiss mmap unavailable for this index (%s); reading in-RAM", exc
+        )
+        return faiss.read_index(index_path)
+
+
+class FaissMmapVectorStore(VectorStore):
+    """Off-RAM FAISS store (Roadmap 3b): the index is memory-mapped from disk and payloads are
+    fetched on demand from a Parquet store, so neither the full index nor the full corpus is
+    bounded by one box's RAM. The search is the same normalized ``IndexFlatIP`` dot product, so
+    results are identical to :class:`FaissVectorStore` — off-RAM is a memory trade, not a
+    different ranking."""
+
+    def __init__(self, dim: int, *, work_dir: Union[str, Path, None] = None,
+                 row_group_size: int = 1024) -> None:
+        _ensure_faiss()
+        import tempfile
+
+        self.dim = dim
+        self._row_group_size = int(row_group_size)
+        self._work_dir = Path(work_dir) if work_dir else Path(
+            tempfile.mkdtemp(prefix="faiss_mmap_")
+        )
+        self.index = None
+        self._store = None  # ParquetPayloadStore (off-RAM payloads)
+        self._n = 0
+
+    def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
+        from .payload_store import ParquetPayloadStore
+
+        v = np.asarray(vectors, dtype=np.float32).copy()
+        faiss.normalize_L2(v)
+        idx = faiss.IndexFlatIP(self.dim)
+        idx.add(v)
+        self._work_dir.mkdir(parents=True, exist_ok=True)
+        index_path = self._work_dir / "faiss.index"
+        faiss.write_index(idx, str(index_path))
+        del idx  # drop the in-RAM index; reopen it memory-mapped
+        self.index = _read_index_mmap(str(index_path))
+        self._store = ParquetPayloadStore.write(
+            payloads, self._work_dir / "payloads.parquet",
+            row_group_size=self._row_group_size,
+        )
+        self._n = len(payloads)
+
+    def _payload_at(self, idx: int) -> Any:
+        """Fetch the payload off-disk (one row group resident) instead of from a RAM list."""
+        if self._store is None or not 0 <= idx < self._n:
+            if self._store is not None:
+                logging.getLogger("evaluator").warning(
+                    "FaissMmapVectorStore: payload index %d out of range (n=%d)", idx, self._n
+                )
+            return None
+        return self._store.get(idx)
+
+    def search(self, query: np.ndarray, k: int = 5) -> List[Tuple[Any, float]]:
+        q = query.astype(np.float32).reshape(1, -1)
+        faiss.normalize_L2(q)
+        scores, indices = self.index.search(q, k)
+        return [(p, scores[0][j])
+                for j, i in enumerate(indices[0])
+                if i >= 0 and (p := self._payload_at(int(i))) is not None]
+
+    def search_batch(self, queries: np.ndarray, k: int) -> List[List[Tuple[Any, float]]]:
+        q = np.asarray(queries, dtype=np.float32)
+        if q.ndim == 1:
+            q = q.reshape(1, -1)
+        faiss.normalize_L2(q)
+        scores, indices = self.index.search(q, k)
+        results: List[List[Tuple[Any, float]]] = []
+        for row_scores, row_indices in zip(scores, indices):
+            results.append([(p, float(s))
+                            for s, i in zip(row_scores, row_indices)
+                            if i >= 0 and (p := self._payload_at(int(i))) is not None])
+        return results
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Copy the on-disk index + payload file to ``path`` (both already materialized)."""
+        import shutil
+
+        save_path = Path(path)
+        save_path.mkdir(parents=True, exist_ok=True)
+        shutil.copy(self._work_dir / "faiss.index", save_path / "faiss.index")
+        shutil.copy(self._work_dir / "payloads.parquet", save_path / "payloads.parquet")
+
+    def load(self, path: Union[str, Path]) -> None:
+        """Memory-map the index + open the Parquet payload store from ``path``."""
+        from .payload_store import ParquetPayloadStore
+
+        load_path = Path(path)
+        self.index = _read_index_mmap(str(load_path / "faiss.index"))
+        self._store = ParquetPayloadStore(
+            load_path / "payloads.parquet", row_group_size=self._row_group_size
+        )
+        self._n = len(self._store)
+        self._verify_payload_count(self.index.ntotal, list(range(self._n)), str(load_path))
+
+
 class FaissGpuVectorStore(VectorStore):
     def __init__(self, dim: int, gpu_id: int = 0) -> None:
         _ensure_faiss()
@@ -199,8 +334,9 @@ class FaissGpuVectorStore(VectorStore):
         faiss.normalize_L2(q)
 
         scores, indices = self.index.search(q, k)
-        return [(self.payloads[i], scores[0][j])
-                for j, i in enumerate(indices[0]) if i >= 0]
+        return [(p, scores[0][j])
+                for j, i in enumerate(indices[0])
+                if i >= 0 and (p := self._payload_at(int(i))) is not None]
 
     def search_batch(self, queries: np.ndarray, k: int) -> List[List[Tuple[Any, float]]]:
         q = np.asarray(queries, dtype=np.float32)
@@ -210,8 +346,9 @@ class FaissGpuVectorStore(VectorStore):
         scores, indices = self.index.search(q, k)
         results: List[List[Tuple[Any, float]]] = []
         for row_scores, row_indices in zip(scores, indices):
-            results.append([(self.payloads[i], float(s))
-                            for s, i in zip(row_scores, row_indices) if i >= 0])
+            results.append([(p, float(s))
+                            for s, i in zip(row_scores, row_indices)
+                            if i >= 0 and (p := self._payload_at(int(i))) is not None])
         return results
 
     def save(self, path: Union[str, Path]) -> None:

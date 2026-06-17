@@ -43,6 +43,19 @@ _CLI_MODULE = "evaluator.cli"
 def _cli_command(interpreter: str, cfg_path: Path) -> list:
     """Argv for one eval job (module form — patchable test seam)."""
     return [interpreter, "-m", _CLI_MODULE, "--config", str(cfg_path)]
+
+
+def _head_tail_excerpt(lines: list, n: int) -> str:
+    """First ``n`` + last ``n`` lines joined (with an omitted-count marker between) so a
+    root cause at either end of a long log survives the excerpt (L3)."""
+    if len(lines) <= 2 * n:
+        return "\n".join(lines)
+    omitted = len(lines) - 2 * n
+    return "\n".join(
+        list(lines[:n]) + [f"... ({omitted} lines omitted) ..."] + list(lines[-n:])
+    )
+
+
 _PROGRESS_FILENAME = "progress.jsonl"
 _ERR_TAIL_LINES = 50
 _LOG_CAP = 5000  # max console lines retained per job
@@ -75,6 +88,11 @@ def _subprocess_env(progress_path: Optional[Path] = None) -> Dict[str, str]:
         env["OMP_NUM_THREADS"] = "1"
         env["MKL_NUM_THREADS"] = "1"
     env["EVALUATOR_FAULTHANDLER"] = "1"
+    # The job's stderr is a pipe (not a TTY), so tqdm bars would auto-disable. Force them on
+    # so the per-loop progress bars still appear in the streamed job console — unless the
+    # operator has explicitly silenced them via EVALUATOR_NO_PROGRESS (which wins).
+    if not env.get("EVALUATOR_NO_PROGRESS"):
+        env.setdefault("EVALUATOR_FORCE_PROGRESS", "1")
     # Structured node-granular progress: the executor's ProgressSink.from_env writes
     # node_start/node_complete JSONL here, which the supervisor tails (no stdout scraping).
     if progress_path is not None:
@@ -331,8 +349,15 @@ class JobManager:
         if self._cancel_requested(job_id):
             raise _JobCancelled()
         if proc.returncode != 0:
-            tail = "\n".join(self.get_log(job_id, tail=_ERR_TAIL_LINES))
-            raise _JobFailed(f"worker exited with code {proc.returncode}\n{tail}")
+            raise _JobFailed(
+                f"worker exited with code {proc.returncode}\n{self._error_excerpt(job_id)}"
+            )
+
+    def _error_excerpt(self, job_id: str) -> str:
+        """Head + tail of the job log for a failure message (L3). A long traceback (e.g. a
+        CUDA OOM whose root-cause line is at the *top*) used to lose that line to a
+        tail-only excerpt; keep the first and last ``_ERR_TAIL_LINES`` so both ends survive."""
+        return _head_tail_excerpt(self.get_log(job_id), _ERR_TAIL_LINES)
 
     def _push_progress_event(self, job_id: str, record: Dict[str, Any]) -> None:
         """Translate one structured progress record (ProgressSink JSONL) into the job's

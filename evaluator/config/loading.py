@@ -203,6 +203,36 @@ def build_from_yaml(cls, yaml_path: str, validate: bool = True) -> "Any":
     return cls.from_dict(to_legacy_dict(config_dict), validate=validate)
 
 
+# Config sections addressable by the legacy underscore override notation. Matched
+# longest-prefix-first so "vector_db_k" resolves to the vector_db section (there is no
+# standalone "vector" section); a key matching no section is set at the top level.
+_OVERRIDE_SECTIONS = (
+    "audio_synthesis",
+    "service_runtime",
+    "device_pool",
+    "vector_db",
+    "cache",
+    "logging",
+    "model",
+    "data",
+    "judge",
+    "tracking",
+)
+
+
+def _resolve_underscore_override(key: str):
+    """Map a legacy ``section_subkey`` override to ``(section, sub_key)`` (F13).
+
+    Returns ``(None, key)`` for a plain top-level key. Replaces the hand-sliced prefix
+    decoder; the dotted-path branch already does the nested assignment generically.
+    """
+    for section in _OVERRIDE_SECTIONS:
+        prefix = section + "_"
+        if key.startswith(prefix) and len(key) > len(prefix):
+            return section, key[len(prefix):]
+    return None, key
+
+
 def build_from_preset(
     cls, preset_name: str, validate: bool = True, **overrides: Any
 ) -> "Any":
@@ -247,65 +277,11 @@ def build_from_preset(
             d[segments[-1]] = value
             continue
 
-        # Legacy underscore notation
-        parts = key.split("_", 1)
-        if len(parts) == 2 and parts[0] in [
-            "cache",
-            "logging",
-            "model",
-            "data",
-            "judge",
-            "vector",
-            "device",
-            "tracking",
-            "service",
-        ]:
-            section = parts[0]
-            # Handle 'vector_db' special case
-            if section == "vector":
-                remaining = parts[1]
-                if remaining.startswith("db_"):
-                    section = "vector_db"
-                    sub_key = remaining[3:]  # Remove 'db_' prefix
-                else:
-                    # Not a vector_db key, treat as top-level
-                    config_dict[key] = value
-                    continue
-            # Handle 'device_pool' special case
-            elif section == "device":
-                remaining = parts[1]
-                if remaining.startswith("pool_"):
-                    section = "device_pool"
-                    sub_key = remaining[5:]  # Remove 'pool_' prefix
-                else:
-                    # Not a device_pool key, treat as top-level
-                    config_dict[key] = value
-                    continue
-            elif section == "service":
-                remaining = parts[1]
-                if remaining.startswith("runtime_"):
-                    section = "service_runtime"
-                    sub_key = remaining[8:]  # Remove 'runtime_' prefix
-                else:
-                    config_dict[key] = value
-                    continue
-            else:
-                sub_key = parts[1]
-
-            if section not in config_dict:
-                config_dict[section] = {}
-            config_dict[section][sub_key] = value
-        elif (
-            len(parts) == 2
-            and parts[0] == "audio"
-            and parts[1].startswith("synthesis_")
-        ):
-            # Handle audio_synthesis section
-            sub_key = parts[1][10:]  # Remove 'synthesis_' prefix
-            if "audio_synthesis" not in config_dict:
-                config_dict["audio_synthesis"] = {}
-            config_dict["audio_synthesis"][sub_key] = value
-        else:
+        # Legacy underscore notation → generic section/sub_key resolution (F13).
+        section, sub_key = _resolve_underscore_override(key)
+        if section is None:
             config_dict[key] = value
+        else:
+            config_dict.setdefault(section, {})[sub_key] = value
 
     return cls.from_dict(config_dict, validate=validate)

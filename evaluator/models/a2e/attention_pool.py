@@ -17,6 +17,9 @@ import torchaudio
 import numpy as np
 from ..base import AudioEmbeddingModel
 from ..registry import register_audio_embedding_model
+from ...logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class AttentionPooling(nn.Module):
@@ -311,39 +314,114 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         if model_path:
             self._load_weights(model_path)
 
-    def _load_weights(self, model_path: str):
-        """Load pre-trained APM weights (attn_pool.* and proj.proj.*).
+    #: Checkpoint key prefixes (the trained ``AudioEmbedder`` state_dict from ``apm_new``):
+    #: ``audio_enc.encoder.*`` (the frozen encoder), ``attn_pool.*`` (the selected pooling), and
+    #: ``proj.proj.*`` (the projection head — ``AudioEmbedder.proj`` is a ``ProjectionHead`` whose
+    #: own ``self.proj`` is the Sequential, hence the doubled prefix).
+    _ENCODER_PREFIX = 'audio_enc.encoder.'
+    _POOLING_PREFIX = 'attn_pool.'
+    _PROJ_PREFIX = 'proj.proj.'
 
-        ``attn_pool.*`` carries the active pooling's trained state — attention params, or the
-        whiten ``m``/``W`` / ABTT ``mu``/``pc1`` buffers; ``mean`` pooling has none. Strict per
-        pooling kind: the checkpoint must match the selected ``pooling``."""
+    def _load_weights(self, model_path: str):
+        """Load a pre-trained APM checkpoint into the encoder + pooling + projection.
+
+        The checkpoint is a full ``AudioEmbedder`` state_dict. We load:
+        ``audio_enc.encoder.*`` → the encoder (so the encoder matches what training used, not
+        just the HF name), ``attn_pool.*`` → the selected pooling (attention params, or the
+        whiten ``m``/``W`` / ABTT ``mu``/``pc1`` buffers; ``mean`` has none), and ``proj.proj.*``
+        → the projection head. A key mismatch is a **loud error** (no silent random init); an
+        encoder size mismatch (wrong Whisper variant) is a loud error too."""
         state_dict = torch.load(model_path, map_location=self.device)
 
-        # APM checkpoint has keys: audio_enc.*, attn_pool.*, proj.* — we load only
-        # the trained pooling + projection (the encoder is frozen / from_pretrained).
-        pooling_state = {}
-        proj_head_state = {}
-
+        enc_state, pooling_state, proj_head_state, unexpected = {}, {}, {}, []
         for key, value in state_dict.items():
-            if key.startswith('attn_pool.'):
-                new_key = key.replace('attn_pool.', '')
-                pooling_state[new_key] = value
-            elif key.startswith('proj.proj.'):
-                # Strip 'proj.' prefix to get 'proj.0.weight' etc.
-                new_key = key.replace('proj.', '', 1)
-                proj_head_state[new_key] = value
+            if key.startswith(self._ENCODER_PREFIX):
+                enc_state[key[len(self._ENCODER_PREFIX):]] = value
+            elif key.startswith(self._POOLING_PREFIX):
+                pooling_state[key[len(self._POOLING_PREFIX):]] = value
+            elif key.startswith(self._PROJ_PREFIX):
+                proj_head_state[key[len('proj.'):]] = value  # strip one 'proj.' → 'proj.0.weight'
+            else:
+                unexpected.append(key)
 
-        if pooling_state:
-            # Stat buffers (whiten m/W, ABTT mu/pc1) can carry trailing singleton dims from
-            # the training pipeline (e.g. mu (1,H), pc1 (H,1)) vs. our flat (H,) placeholders.
-            # Re-register each to the checkpoint's shape so strict load succeeds; the transforms
-            # normalize the shape at apply time (postprocessing.abtt_batch / whiten_batch).
-            for name, tensor in pooling_state.items():
-                if name in self.pooling._buffers:
-                    self.pooling.register_buffer(name, torch.empty_like(tensor))
-            self.pooling.load_state_dict(pooling_state, strict=True)
-        if proj_head_state:
-            self.projection_head.load_state_dict(proj_head_state, strict=True)
+        self._load_encoder_weights(enc_state, model_path)
+        self._load_module_weights(
+            self.pooling, pooling_state, f"pooling[{self.pooling_kind}]", model_path,
+            state_dict, reregister_buffers=True,
+        )
+        self._load_module_weights(
+            self.projection_head, proj_head_state, "projection_head", model_path, state_dict,
+        )
+        if unexpected:
+            logger.warning(
+                "APM checkpoint %s: %d unexpected key(s) ignored (e.g. %s)",
+                model_path, len(unexpected), unexpected[:3],
+            )
+
+    def _load_encoder_weights(self, enc_state: dict, model_path: str) -> None:
+        """Load ``audio_enc.encoder.*`` into ``self.backend.encoder`` so the encoder is exactly
+        the one the checkpoint was trained against (not just whatever the HF name resolves to).
+
+        A shape mismatch (wrong Whisper/M4T size) raises from ``load_state_dict``; a low match
+        fraction (a structurally different encoder) raises here. No encoder weights in the
+        checkpoint → keep today's HF-pretrained encoder."""
+        if not enc_state:
+            logger.info(
+                "APM checkpoint %s: no encoder weights — using HF-pretrained encoder '%s'",
+                model_path, self.audio_encoder_name,
+            )
+            return
+        target = set(self.backend.encoder.state_dict().keys())
+        # strict=False so version-skew keys don't hard-fail; a shape mismatch still raises here.
+        result = self.backend.encoder.load_state_dict(enc_state, strict=False)
+        matched = len(target) - len(result.missing_keys)
+        if not target or matched < 0.9 * len(target):
+            raise ValueError(
+                f"APM checkpoint {model_path}: encoder weights match only {matched}/{len(target)} "
+                f"of the '{self.audio_encoder_name}' encoder parameters — the checkpoint was "
+                f"trained against a different encoder. Set audio_embedding.model_name to the "
+                f"encoder used in training. Missing e.g.: {sorted(result.missing_keys)[:3]}"
+            )
+        if result.missing_keys or result.unexpected_keys:
+            logger.warning(
+                "APM encoder load (%s): %d missing, %d unexpected key(s) — possible transformers "
+                "version skew", model_path, len(result.missing_keys), len(result.unexpected_keys),
+            )
+        logger.info(
+            "APM checkpoint %s: loaded %d encoder param(s) from the checkpoint (matches training)",
+            model_path, matched,
+        )
+
+    def _load_module_weights(self, module, incoming: dict, label: str, model_path: str,
+                             full_state: dict, *, reregister_buffers: bool = False) -> None:
+        """Strict-load ``incoming`` into ``module`` after asserting it covers every expected key.
+
+        A missing expected key would otherwise leave that submodule at random init (the old
+        ``if incoming:`` guard did this silently). Raise a clear error instead, naming the missing
+        keys + the checkpoint's actual top-level prefixes."""
+        expected = set(module.state_dict().keys())
+        if not expected:  # e.g. plain MeanPooling — nothing to load
+            return
+        missing = expected - set(incoming)
+        if missing:
+            prefixes = sorted({k.split('.')[0] for k in full_state})
+            raise ValueError(
+                f"APM checkpoint {model_path}: {label} is missing weights for "
+                f"{sorted(missing)[:6]} ({len(missing)} key(s)) — it would be left at random "
+                f"init. The checkpoint's top-level prefixes are {prefixes}; expected the "
+                f"'{label}' weights under '{self._POOLING_PREFIX}'/'{self._PROJ_PREFIX}'. "
+                f"Check the checkpoint matches pooling='{self.pooling_kind}'."
+            )
+        if reregister_buffers:
+            # Stat buffers (whiten m/W, ABTT mu/pc1) can carry trailing singleton dims from the
+            # training pipeline (mu (1,H), pc1 (H,1)) vs. our flat (H,) placeholders. Re-register
+            # to the checkpoint's shape so the strict load succeeds; the transforms normalize the
+            # shape at apply time.
+            for name, tensor in incoming.items():
+                if name in module._buffers:
+                    module.register_buffer(name, torch.empty_like(tensor))
+        module.load_state_dict(incoming, strict=True)
+        logger.info("APM checkpoint %s: loaded %s (%d key(s))", model_path, label, len(incoming))
 
     def to(self, device: torch.device):
         """Move model to device."""

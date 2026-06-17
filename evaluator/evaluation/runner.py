@@ -19,8 +19,12 @@ def run_evaluation_from_config(
     cache_manager: Optional[CacheManager] = None,
     progress_callback: Optional[Callable[..., None]] = None,
     service_provider: Any = None,
+    query_ids: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Build pipelines, prepare the dataset + corpus, and evaluate. Returns results dict."""
+    """Build pipelines, prepare the dataset + corpus, and evaluate. Returns results dict.
+
+    ``query_ids`` (Roadmap 2d) slices the query side to those ids before evaluating — the
+    item-replay path; the corpus stays whole."""
     from evaluator.services.evaluation_service import _run_core
 
     if cache_manager is None:
@@ -32,5 +36,6 @@ def run_evaluation_from_config(
         cache_manager=cache_manager,
         service_provider=service_provider,
         progress_callback=progress_callback,
+        query_ids=query_ids,
     )
     return metrics

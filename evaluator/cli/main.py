@@ -8,6 +8,7 @@ Subcommands (each delegates to the existing implementation; no logic lives here)
 - ``datasets``      — list registered dataset descriptors
 - ``cache``         — ``status`` / ``clear [--type T]`` for the artifact cache
 - ``leaderboard``   — query the leaderboard SQLite (top runs by metric)
+- ``replay``        — re-run one query id through the full graph + per-node trace (cli/replay.py)
 - ``compare``       — compare result JSON files (cli/compare.py)
 - ``export``        — export results to CSV/Excel/LaTeX (cli/export.py)
 - ``branch-report`` — thesis artifacts from a branched run (analysis/branch_report.py)
@@ -32,6 +33,8 @@ commands:
   datasets       list registered dataset descriptors
   cache          cache status|clear [--cache-dir DIR] [--type TYPE]
   leaderboard    top runs by metric [--metric M] [--limit N] [--output-dir DIR]
+  sweep          expand+run a parameter sweep (evaluator sweep --config sweep.yaml [--run])
+  replay         re-run one query id with a per-node artifact trace (--config --query-id)
   compare        compare result JSON files
   export         export results (csv/excel/latex)
   branch-report  thesis artifacts from a branched run's results JSON
@@ -104,10 +107,12 @@ def _cmd_cache(rest: List[str]) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(prog="evaluator cache")
-    parser.add_argument("action", choices=["status", "clear"])
+    parser.add_argument("action", choices=["status", "clear", "prune"])
     parser.add_argument("--cache-dir", default=".cache")
     parser.add_argument("--type", dest="cache_type", default=None,
                         help="clear only this cache type (e.g. embeddings)")
+    parser.add_argument("--max-size-gb", type=float, default=0,
+                        help="prune: evict least-recently-used entries until under this size")
     args = parser.parse_args(rest)
 
     from evaluator.storage.cache import CacheManager
@@ -119,6 +124,21 @@ def _cmd_cache(rest: List[str]) -> int:
         print(f"total: {stats.get('total_size_human', stats.get('total_size_bytes'))}")
         for category, info in sorted((stats.get("by_category") or {}).items()):
             print(f"  {category}: {info.get('size_human')} ({info.get('file_count')} files)")
+        return 0
+    if args.action == "prune":
+        # L4: bound unbounded cache growth — drop orphaned manifest rows, then (if a budget
+        # is given) LRU-evict until under --max-size-gb. Uses the existing eviction logic.
+        orphaned = manager.compact_manifest()
+        print(f"removed {orphaned} orphaned manifest entries")
+        if args.max_size_gb and args.max_size_gb > 0:
+            before = manager.get_cache_size_bytes()
+            manager.max_size_gb = args.max_size_gb
+            manager._enforce_size_limit()
+            after = manager.get_cache_size_bytes()
+            print(
+                f"size eviction: {manager._human_readable_size(before)} -> "
+                f"{manager._human_readable_size(after)} (limit {args.max_size_gb} GB)"
+            )
         return 0
     if args.cache_type:
         manager.clear_type(args.cache_type)
@@ -165,6 +185,37 @@ def _cmd_leaderboard(rest: List[str]) -> int:
     return 0
 
 
+def _cmd_sweep(rest: List[str]) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="evaluator sweep")
+    parser.add_argument("--config", required=True, help="sweep spec (YAML/JSON)")
+    parser.add_argument(
+        "--run", action="store_true",
+        help="run each expanded config (heavy); default just lists them (dry run)",
+    )
+    args = parser.parse_args(rest)
+
+    from evaluator.analysis.sweep import combo_label, expand_sweep, load_sweep_spec
+
+    spec = load_sweep_spec(args.config)
+    points = expand_sweep(spec)
+    name = spec.get("name", "sweep")
+    print(f"sweep '{name}': {len(points)} configs (experiment_group={name!r})")
+    for combo, cfg in points:
+        print(f"  {combo_label(combo):<44} mode={cfg.model.pipeline_mode}  → {cfg.experiment_name}")
+    if not args.run:
+        print("\n(dry run — pass --run to execute each via the normal evaluation path)")
+        return 0
+
+    from evaluator.services.evaluation_service import run_evaluation
+
+    for i, (_, cfg) in enumerate(points, 1):
+        print(f"\n=== [{i}/{len(points)}] running {cfg.experiment_name} ===")
+        run_evaluation(cfg)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help"):
@@ -184,6 +235,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cmd_cache(rest)
         if command == "leaderboard":
             return _cmd_leaderboard(rest)
+        if command == "sweep":
+            return _cmd_sweep(rest)
+        if command == "replay":
+            from evaluator.cli.replay import main as replay_main
+
+            return replay_main(rest)
         if command == "compare":
             from evaluator.cli.compare import main as compare_main
 

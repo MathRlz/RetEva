@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 from ..errors import ConfigurationError
 from ..logging_config import get_logger
-from ..models.embedding_space import resolve_embedding_space
+from ..models.embedding_space import resolve_embedding_space, spaces_compatible
 
 logger = get_logger(__name__)
 
@@ -34,7 +34,12 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     from ..llm.cost import COST
     from ..pipeline.factory import check_graph_backend_dependencies
     from ..pipeline.stage_graph import build_graph_for_config
+    from ..plugins import discover_all_plugins
     from .provenance import set_global_determinism
+
+    # Load any third-party plugins (models/nodes/handlers/metrics/datasets) before validation
+    # so they are visible to the graph build + registries (§5). Idempotent, best-effort.
+    discover_all_plugins()
 
     run_seed = getattr(getattr(config, "audio_synthesis", None), "seed", None)
     flags = set_global_determinism(run_seed)
@@ -106,7 +111,7 @@ def validate_embedding_spaces(config: Any) -> None:
             getattr(model, "text_emb_model_name", None),
             getattr(model, "text_emb_embedding_space", None),
         )
-        if query_space != corpus_space:
+        if not spaces_compatible(query_space, corpus_space):
             raise ConfigurationError(
                 f"Embedding-space mismatch for dense '{mode}': audio query embedder "
                 f"'{audio_type}' is in space '{query_space}' but the text corpus embedder "
@@ -157,6 +162,44 @@ def _node_space(node: Any, config: Any) -> Optional[str]:
             params.get("embedding_space") or getattr(model, "audio_emb_embedding_space", None),
         )
     return None
+
+
+def resolve_query_space(config: Any, stream_name: Optional[str]) -> Optional[str]:
+    """The embedding space of a bound query-vector stream at runtime, or None when unknowable
+    (fused vectors, missing model info). Used by the retrieval runtime guard (2b) to assert
+    the query is comparable to the index it dots against. Mirrors the pre-flight resolution but
+    keyed by the actually-bound stream name."""
+    from ..models.registry import audio_embedding_registry, text_embedding_registry
+
+    model = getattr(config, "model", None)
+    if model is None:
+        return None
+    name = stream_name or "query_vectors"
+    if name == "fused_query_vectors":
+        return None  # a combined space is not a single model's space
+
+    audio = (
+        audio_embedding_registry,
+        getattr(model, "audio_emb_model_type", None),
+        getattr(model, "audio_emb_model_name", None),
+        getattr(model, "audio_emb_embedding_space", None),
+    )
+    text = (
+        text_embedding_registry,
+        getattr(model, "text_emb_model_type", None),
+        getattr(model, "text_emb_model_name", None),
+        getattr(model, "text_emb_embedding_space", None),
+    )
+    if name == "audio_query_vectors":
+        reg, mtype, mname, override = audio
+    elif name == "text_query_vectors":
+        reg, mtype, mname, override = text
+    else:  # query_vectors / default: the mode's primary query embedder
+        is_audio = str(getattr(model, "pipeline_mode", "")) == "audio_emb_retrieval"
+        reg, mtype, mname, override = audio if is_audio else text
+    if not mtype:
+        return None
+    return _resolve_space(reg, mtype, mname, override)
 
 
 def _producer_space(
@@ -228,7 +271,7 @@ def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
             continue
         q_space = _producer_space(q_producer, q_artifact, by_id, config)
         i_space = _producer_space(index_producers[-1], "vector_index", by_id, config)
-        if q_space and i_space and q_space != i_space:
+        if not spaces_compatible(q_space, i_space):
             raise ConfigurationError(
                 f"Embedding-space mismatch at retrieval node '{node.id}': query "
                 f"vectors from '{q_producer}' are in space '{q_space}' but "

@@ -38,11 +38,14 @@ class JinaV4Model(TextEmbeddingModel):
 
     def encode(self, texts: List[str], show_progress: bool = False, desc: str = "Embedding") -> np.ndarray:
         from tqdm import tqdm
+        from ...utils.progress import progress_disabled
         task = "retrieval"
         prompt_name = "query"
         return_numpy = False
         if show_progress:
-            with tqdm(total=len(texts), desc=desc, unit="text", disable=None) as pbar:
+            with tqdm(
+                total=len(texts), desc=desc, unit="text", disable=progress_disabled()
+            ) as pbar:
                 torch_emb = self.model.encode_text(
                     texts=texts, task=task, prompt_name=prompt_name, return_numpy=return_numpy
                 )

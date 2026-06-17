@@ -45,6 +45,26 @@ def leaderboard_rows(
     ]
 
 
+def pareto_rows(
+    experiment_group: str,
+    objectives: str = "MRR:max",
+    output_dir: str = "evaluation_results",
+) -> Dict[str, Any]:
+    """The cross-run Pareto view for a run group (Roadmap 4a): every comparable run tagged
+    ``on_frontier``, plus the frontier subset. ``objectives`` = ``"MRR:max,latency_ms:min"``."""
+    from evaluator.analysis.pareto import annotate_pareto, parse_objectives, pareto_frontier
+
+    objs = parse_objectives(objectives)
+    store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
+    runs = store.group_runs(experiment_group)
+    return {
+        "experiment_group": experiment_group,
+        "objectives": [{"metric": n, "direction": d} for n, d in objs],
+        "rows": annotate_pareto(runs, objs),
+        "frontier": pareto_frontier(runs, objs),
+    }
+
+
 def delete_run_and_cache(
     run_id: int, *, delete_cache: bool = False, output_dir: str = "evaluation_results"
 ) -> Dict[str, Any]:
@@ -90,6 +110,20 @@ def build_leaderboard_router() -> APIRouter:
                 dataset_name=dataset_name, pipeline_mode=pipeline_mode,
             ),
         }
+
+    @router.get(
+        "/api/leaderboard/pareto",
+        summary="Cross-run Pareto frontier over an experiment group",
+    )
+    def leaderboard_pareto(
+        experiment_group: str,
+        objectives: str = "MRR:max",
+        output_dir: str = "evaluation_results",
+    ) -> Dict[str, Any]:
+        try:
+            return pareto_rows(experiment_group, objectives=objectives, output_dir=output_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @router.get("/api/leaderboard/runs", summary="List leaderboard runs")
     def leaderboard_runs(

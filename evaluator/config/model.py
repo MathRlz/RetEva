@@ -25,6 +25,7 @@ class ModelConfig:
     asr_adapter_path: Optional[str] = None
     asr_device: str = "cuda:0"
     asr_params: Dict[str, object] = field(default_factory=dict)
+    asr_quantization: Optional[str] = None
 
     # --- Text embedding ---
     text_emb_model_type: Optional[str] = "labse"
@@ -36,6 +37,7 @@ class ModelConfig:
     # SAME id on a co-trained audio embedder so cross-modal dense retrieval validates.
     text_emb_embedding_space: Optional[str] = None
     text_emb_params: Dict[str, object] = field(default_factory=dict)
+    text_emb_quantization: Optional[str] = None
 
     # --- Audio embedding ---
     audio_emb_model_type: Optional[str] = None
@@ -50,9 +52,20 @@ class ModelConfig:
     # embedder's space declares that text space here (not derived from the encoder name).
     audio_emb_embedding_space: Optional[str] = None
     audio_emb_params: Dict[str, object] = field(default_factory=dict)
+    audio_emb_quantization: Optional[str] = None
+
+    # Global quantization (e.g. "int8" / "4bit"); a per-family `*_quantization` wins over it.
+    # Opt-in: applied only by models whose constructor accepts a `quantization` kwarg (else a
+    # clear warning + full precision). Default None = today's behaviour.
+    quantization: Optional[str] = None
 
     pipeline_mode: Union[str, PipelineMode] = "asr_text_retrieval"
-    
+
+    def quantization_for(self, family: str) -> Optional[str]:
+        """Resolve the quantization strategy for ``family`` ('asr'/'text_emb'/'audio_emb'):
+        the per-family override if set, else the global default."""
+        return getattr(self, f"{family}_quantization", None) or self.quantization
+
     def __post_init__(self):
         """Normalize pipeline_mode to enum."""
         if isinstance(self.pipeline_mode, str):

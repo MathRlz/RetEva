@@ -58,6 +58,33 @@ def stage_registry() -> Dict[str, StageSpec]:
     return dict(_STAGE_REGISTRY)
 
 
+def validate_node_handler_consistency(*, strict: bool = False):
+    """Cross-check the node-type registry against the handler registry (extensibility §5).
+
+    A node type is declared in two places that must agree: ``register_stage_node`` (the type +
+    I/O contract, in ``pipeline/graph/operators_catalog.py``) and ``@register_stage_handler``
+    (the executable, here). Adding one without the other is a drift bug that today only
+    surfaces at run time. This is the global guard: it returns
+    ``(node_types_without_handler, handlers_without_node_type)`` after triggering both
+    registries' lazy population. The first set is a hard inconsistency — a node that can be
+    wired into a graph but cannot execute; the second is usually benign. ``strict=True`` raises
+    on the first.
+    """
+    import evaluator.evaluation.handlers  # noqa: F401 - registers all stage handlers
+    from ..pipeline.graph.registry import registered_stage_names
+
+    handlers = set(stage_registry().keys())
+    nodes = set(registered_stage_names())
+    missing = nodes - handlers
+    orphan = handlers - nodes
+    if strict and missing:
+        raise ValueError(
+            "node types registered without an executable handler "
+            f"(add @register_stage_handler): {sorted(missing)}"
+        )
+    return missing, orphan
+
+
 def validate_graph_handlers(graph: Any) -> None:
     """Pre-flight (audit M3): every node in ``graph`` must have a registered handler.
 

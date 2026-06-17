@@ -8,7 +8,9 @@ half lives in ``form_builder.py`` (which re-exports these names for back-compat)
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi.responses import HTMLResponse
@@ -28,10 +30,41 @@ def load_config(
     return config
 
 
+#: Dataset path fields a form can set; confined under EVALUATOR_DATA_ROOT when it is set (L1).
+_DATASET_PATH_FIELDS = (
+    "questions_path", "corpus_path", "prepared_dataset_dir",
+    "audio_dir", "data_path", "transcripts_file",
+)
+
+
+def _enforce_data_root(config: EvaluationConfig) -> None:
+    """Confine form-supplied dataset paths under ``EVALUATOR_DATA_ROOT`` when it is set (L1).
+
+    Opt-in: with the env unset (the default single-user / local deployment) there is no
+    restriction, so absolute local paths keep working. When set — for a shared/multi-tenant
+    server — a crafted ``../../etc/...`` that escapes the root is rejected up front.
+    """
+    root = os.environ.get("EVALUATOR_DATA_ROOT")
+    if not root:
+        return
+    root_resolved = Path(root).resolve()
+    data = getattr(config, "data", None)
+    for field in _DATASET_PATH_FIELDS:
+        value = getattr(data, field, None)
+        if not value:
+            continue
+        target = Path(value).resolve()
+        if target != root_resolved and root_resolved not in target.parents:
+            raise ConfigurationError(
+                f"data.{field} ({value}) is outside the allowed data root {root}"
+            )
+
+
 def prepare_run_config(
     payload_config: Dict[str, Any], *, auto_devices: bool
 ) -> EvaluationConfig:
     config = load_config(payload_config, auto_devices=auto_devices)
+    _enforce_data_root(config)
     check_backend_dependencies(config.vector_db)
     validate_dataset_runtime_config(
         config,

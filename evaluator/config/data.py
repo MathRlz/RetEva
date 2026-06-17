@@ -66,6 +66,9 @@ class DataConfig:
     strict_validation: bool = True
     trace_limit: int = 0
     batch_size: int = 32
+    # Estimate the ASR batch from a one-sample GPU warm-up instead of using `batch_size`
+    # statically (§8 Roadmap 1b). Opt-in; no-op on CPU; batch size doesn't change outputs.
+    warmup_batch_sizing: bool = False
     num_workers: int = 0
     test_size: float = 0.0
     split: Optional[str] = None

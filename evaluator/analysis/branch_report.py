@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from ..logging_config import get_logger
+from ._common import _escape_latex
 
 logger = get_logger(__name__)
 
@@ -39,16 +40,6 @@ def _stars(delta: Mapping[str, Any]) -> str:
         if q < threshold:
             return mark
     return ""
-
-
-def _escape_latex(text: str) -> str:
-    for char, repl in (
-        ("\\", r"\textbackslash{}"), ("&", r"\&"), ("%", r"\%"), ("$", r"\$"),
-        ("#", r"\#"), ("_", r"\_"), ("{", r"\{"), ("}", r"\}"),
-        ("~", r"\textasciitilde{}"), ("^", r"\textasciicircum{}"),
-    ):
-        text = text.replace(char, repl)
-    return text
 
 
 def _branch_metric_names(report: Mapping[str, Any]) -> List[str]:
@@ -107,7 +98,10 @@ def latex_branch_table(
 
     deltas: Dict[str, Any] = dict(report.get("deltas") or {})
     if deltas:
-        lines += [r"\midrule", r"\multicolumn{%d}{l}{\emph{Paired deltas}} \\" % (len(branch_names) + 1)]
+        lines += [
+            r"\midrule",
+            r"\multicolumn{%d}{l}{\emph{Paired deltas}} \\" % (len(branch_names) + 1),
+        ]
         for pair, dmetrics in deltas.items():
             for name in metric_names:
                 d = dmetrics.get(name)

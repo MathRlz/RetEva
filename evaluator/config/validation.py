@@ -241,8 +241,12 @@ def _validate_dataset_compat(config, warnings):
                 f"audio_synthesis.enabled=True but dataset '{descriptor.id}' does not "
                 f"support audio generation (supports_generation=False)."
             )
-    except Exception:
-        pass  # Unresolvable dataset; skip check rather than block validation
+    except (ConfigurationError, ImportError, AttributeError, ValueError) as exc:
+        # Unresolvable / unregistered dataset: skip the compat check rather than block
+        # validation, but log it so a silently-skipped check is visible (C1/F20).
+        from ..logging_config import get_logger
+
+        get_logger(__name__).debug("dataset compat check skipped: %s", exc)
 
 
 def preflight_check(config: Any) -> List[str]:

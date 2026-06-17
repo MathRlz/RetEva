@@ -17,6 +17,16 @@ from typing import Optional, Any, Dict
 CACHE_SCHEMA_VERSION = "v1"
 
 
+def _typed_default(obj: Any) -> str:
+    """``json.dumps`` fallback for a non-JSON-native arg: a *typed* representation so two
+    distinct objects that share a ``str()`` (e.g. an enum member and its ``.value`` string)
+    don't collide to the same cache key (M4 — was a bare ``str()`` coercion). JSON-native args
+    (str/int/float/bool/None/list/dict — all current callers) never reach here, so their keys
+    are unchanged; a future caller passing a rich object now gets a distinct, type-qualified
+    key instead of a silent collision."""
+    return f"<{type(obj).__module__}.{type(obj).__qualname__}:{obj!r}>"
+
+
 def _compute_hash(*args: Any) -> str:
     """
     Compute MD5 hash from arguments.
@@ -27,7 +37,7 @@ def _compute_hash(*args: Any) -> str:
     Returns:
         MD5 hash as hexadecimal string
     """
-    content = json.dumps(args, sort_keys=True, default=str)
+    content = json.dumps(args, sort_keys=True, default=_typed_default)
     return hashlib.md5(content.encode()).hexdigest()
 
 

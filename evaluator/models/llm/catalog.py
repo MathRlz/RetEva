@@ -2,7 +2,7 @@
 
 Two endpoint kinds:
 
-* ``local`` — the curated local catalog (:class:`ModelRegistry`) merged with a *live* probe of
+* ``local`` — the curated local catalog (:class:`LLMModelCatalog`) merged with a *live* probe of
   a running Ollama server (``/api/tags``), so models you've actually ``ollama pull``-ed are
   flagged ``pulled`` and float to the top. Any pulled model missing from the catalog is added.
 * ``api`` — a small static set of common OpenAI-compatible chat models (the catalog is
@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from .registry import ModelRegistry
+from .registry import LLMModelCatalog
 
 # Common OpenAI-compatible chat models for the `api` endpoint (the curated catalog is local).
 _API_MODELS: List[Dict[str, str]] = [
@@ -65,7 +65,7 @@ def list_llm_models(
 
     models: List[Dict[str, Any]] = []
     seen: set = set()
-    for m in ModelRegistry.to_dict_list():
+    for m in LLMModelCatalog.to_dict_list():
         mid = m.get("ollama_name") or m.get("name")
         if not mid or mid in seen:
             continue

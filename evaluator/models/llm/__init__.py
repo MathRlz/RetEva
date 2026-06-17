@@ -10,14 +10,15 @@ This package provides:
 
 from .base import BaseLLMServer
 from .ollama import OllamaServer
-from .registry import ModelRegistry
+from .registry import LLMModelCatalog, ModelRegistry  # ModelRegistry = back-compat alias
 from .factory import create_server
 
 __version__ = "0.1.0"
 
 __all__ = [
     "BaseLLMServer",
-    "OllamaServer", 
+    "OllamaServer",
+    "LLMModelCatalog",
     "ModelRegistry",
-    "create_server"
+    "create_server",
 ]

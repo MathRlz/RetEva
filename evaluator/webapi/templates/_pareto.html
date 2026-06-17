@@ -1,0 +1,65 @@
+<form hx-get="/ui/pareto" hx-target="#pareto" hx-swap="innerHTML" class="row">
+  <input type="hidden" name="output_dir" value="{{ output_dir|default('evaluation_results') }}">
+  <label>Group
+    <select name="experiment_group">
+      {% for g in groups %}
+      <option value="{{ g }}" {% if g == experiment_group %}selected{% endif %}>{{ g }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Objectives
+    <input type="text" name="objectives" value="{{ objectives }}" size="32"
+           title="e.g. MRR:max,latency_ms:min">
+  </label>
+  <button type="submit">Update</button>
+</form>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+{% elif rows %}
+<div id="pareto-chart" style="height:380px;"></div>
+<script>
+  (function () {
+    var frontier = {{ frontier_pts|safe }};
+    var dominated = {{ dominated_pts|safe }};
+    {
+      // plotInto (base.html): htmx-settle-safe Plotly mount.
+      plotInto('pareto-chart', [
+        { x: dominated.x, y: dominated.y, text: dominated.text, name: 'dominated',
+          mode: 'markers', type: 'scatter', marker: { color: '#64748b', size: 9 } },
+        { x: frontier.x, y: frontier.y, text: frontier.text, name: 'frontier',
+          mode: 'markers+lines', type: 'scatter',
+          marker: { color: '#1d4ed8', size: 12, symbol: 'star' } }
+      ], {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#e2e8f0' }, margin: { l: 60, r: 16, t: 20, b: 50 },
+        xaxis: { title: '{{ xkey }}', gridcolor: '#1f2937' },
+        yaxis: { title: '{{ ykey }}', gridcolor: '#1f2937' }
+      }, { displaylogo: false, responsive: true });
+    }
+  })();
+</script>
+<table>
+  <thead>
+    <tr>
+      <th>On frontier</th><th>Run</th><th>Experiment</th>
+      {% for o in objs %}<th>{{ o.metric }} ({{ o.direction }})</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="{{ 'frontier' if r.on_frontier else '' }}">
+      <td>{{ '★' if r.on_frontier else '' }}</td>
+      <td>{{ r.run_id }}</td>
+      <td>{{ r.experiment_name }}</td>
+      {% for o in objs %}
+      <td>{{ '%.4f'|format(r.metrics[o.metric]) if r.metrics[o.metric] is number else r.metrics[o.metric] }}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="muted">{{ rows|length }} comparable run(s); ★ = non-dominated (Pareto frontier).</p>
+{% else %}
+<p class="muted">No comparable runs for this group + objectives.</p>
+{% endif %}

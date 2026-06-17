@@ -47,4 +47,13 @@
 </div>
 <div id="lb-confirm"></div>
 <div id="run-detail"></div>
+
+<div class="panel">
+  <h2>Cross-run Pareto</h2>
+  <p class="muted">Trade-off frontier across an experiment group (e.g. recall vs latency).</p>
+  <div id="pareto"
+       hx-get="/ui/pareto?output_dir={{ output_dir }}" hx-trigger="load" hx-swap="innerHTML">
+    Loading…
+  </div>
+</div>
 {% endblock %}

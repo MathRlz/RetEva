@@ -5,7 +5,6 @@ parametric (t-test) and non-parametric (Wilcoxon) tests, as well as bootstrap
 confidence intervals.
 """
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -13,6 +12,7 @@ import numpy as np
 from scipy import stats
 
 from ..logging_config import get_logger
+from ._common import load_results
 
 logger = get_logger(__name__)
 
@@ -85,8 +85,9 @@ def wilcoxon_test(
     
     try:
         stat, p_value = stats.wilcoxon(scores_a, scores_b, zero_method='wilcox')
-    except ValueError:
+    except ValueError as exc:
         # Wilcoxon can fail if all differences are zero after rounding
+        logger.debug("Wilcoxon fell back to (0.0, 1.0): %s", exc)
         return 0.0, 1.0
     
     return float(stat), float(p_value)
@@ -106,30 +107,29 @@ def bootstrap_confidence_interval(
         scores: Sample scores to compute CI for.
         alpha: Significance level (default 0.05 for 95% CI).
         n_bootstrap: Number of bootstrap iterations.
-        random_state: Random seed for reproducibility.
-        
+        random_state: Random seed for reproducibility. Uses a *local* Generator so a
+            call never perturbs the global NumPy RNG state.
+
     Returns:
         Tuple of (lower_bound, upper_bound) for the confidence interval.
-        
+
     Raises:
         ValueError: If scores is empty or alpha not in (0, 1).
     """
     scores = np.asarray(scores)
-    
+
     if len(scores) == 0:
         raise ValueError("Cannot compute CI for empty score array")
     if not 0 < alpha < 1:
         raise ValueError(f"Alpha must be in (0, 1), got {alpha}")
-    
-    if random_state is not None:
-        np.random.seed(random_state)
-    
+
+    rng = np.random.default_rng(random_state)
     n_samples = len(scores)
     bootstrap_means = np.zeros(n_bootstrap)
-    
+
     for i in range(n_bootstrap):
         # Resample with replacement
-        resample_indices = np.random.randint(0, n_samples, size=n_samples)
+        resample_indices = rng.integers(0, n_samples, size=n_samples)
         bootstrap_means[i] = np.mean(scores[resample_indices])
     
     # Compute percentile confidence interval
@@ -139,10 +139,17 @@ def bootstrap_confidence_interval(
     return float(lower), float(upper)
 
 
+#: Below this many paired samples a significance test is under-powered — its p/q value is
+#: reported but flagged so a reader doesn't over-trust a comparison on a tiny sample (R3).
+MIN_POWERED_SAMPLES = 20
+
+
 def compare_experiments(
     results_a: Dict[str, Any],
     results_b: Dict[str, Any],
-    metric_names: Optional[List[str]] = None
+    metric_names: Optional[List[str]] = None,
+    *,
+    min_samples: int = MIN_POWERED_SAMPLES,
 ) -> Dict[str, Dict[str, Any]]:
     """Compare two experiment results across multiple metrics.
     
@@ -192,6 +199,10 @@ def compare_experiments(
             "wilcoxon": None,
             "significant_ttest": False,
             "significant_wilcoxon": False,
+            "significant_ttest_fdr": False,
+            "significant_wilcoxon_fdr": False,
+            "n_samples": None,
+            "underpowered": None,
             "ci_a": None,
             "ci_b": None,
         }
@@ -211,6 +222,10 @@ def compare_experiments(
         
         if scores_a is not None and scores_b is not None:
             if len(scores_a) == len(scores_b) and len(scores_a) >= 2:
+                # R3: record the paired-sample size + flag under-powered comparisons so a
+                # reader doesn't over-trust a "significant" delta computed on a handful of items.
+                metric_result["n_samples"] = len(scores_a)
+                metric_result["underpowered"] = len(scores_a) < min_samples
                 # Perform statistical tests
                 try:
                     t_stat, t_pval = paired_ttest(scores_a, scores_b)
@@ -227,6 +242,8 @@ def compare_experiments(
                     logger.debug("Wilcoxon test failed for %s: %s", metric, exc)
 
             # Compute confidence intervals
+            # Independent seeds for A vs B so the two CIs don't share resample indices
+            # (F21 — identical seeds defeat the point of separate bootstraps).
             if len(scores_a) >= 2:
                 try:
                     metric_result["ci_a"] = bootstrap_confidence_interval(
@@ -238,13 +255,29 @@ def compare_experiments(
             if len(scores_b) >= 2:
                 try:
                     metric_result["ci_b"] = bootstrap_confidence_interval(
-                        scores_b, random_state=42
+                        scores_b, random_state=43
                     )
                 except Exception as exc:
                     logger.debug("bootstrap CI (b) failed for %s: %s", metric, exc)
         
         comparison[metric] = metric_result
-    
+
+    # FDR control across the metric panel (M2): flagging each metric significant at raw α=0.05
+    # independently inflates the family-wise false-positive rate (~40% over 10+ metrics). Apply
+    # Benjamini-Hochberg to the t-test and Wilcoxon p-values, expose the q-value, and add an
+    # FDR-corrected significance flag. The raw p / significant_* flags are kept for reference.
+    for test_name in ("ttest", "wilcoxon"):
+        scored = [
+            m for m, r in comparison.items()
+            if isinstance(r.get(test_name), dict) and r[test_name].get("p_value") is not None
+        ]
+        q_values = benjamini_hochberg(
+            [comparison[m][test_name]["p_value"] for m in scored]
+        )
+        for m, q in zip(scored, q_values):
+            comparison[m][test_name]["q_value"] = q
+            comparison[m][f"significant_{test_name}_fdr"] = q < 0.05
+
     return comparison
 
 
@@ -301,24 +334,6 @@ def _extract_per_sample_scores(
                     per_sample[metric] = scores
     
     return per_sample
-
-
-def load_results(path: Union[str, Path]) -> Dict[str, Any]:
-    """Load evaluation results from JSON file.
-    
-    Args:
-        path: Path to JSON results file.
-        
-    Returns:
-        Results dictionary.
-        
-    Raises:
-        FileNotFoundError: If file doesn't exist.
-        json.JSONDecodeError: If file is not valid JSON.
-    """
-    path = Path(path)
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def compare_result_files(
@@ -418,21 +433,34 @@ def format_comparison_report(comparison: Dict[str, Any]) -> str:
         wilcoxon = metric_data.get("wilcoxon")
         
         if ttest:
-            sig = "✓" if metric_data.get("significant_ttest") else "✗"
+            sig = "✓" if metric_data.get("significant_ttest_fdr") else "✗"
+            q = ttest.get("q_value")
+            q_str = f", q={q:.4f}" if q is not None else ""
             lines.append(
-                f"   t-test: t={ttest['t_stat']:.3f}, p={ttest['p_value']:.4f} [{sig}]"
+                f"   t-test: t={ttest['t_stat']:.3f}, p={ttest['p_value']:.4f}{q_str} [{sig}]"
             )
-        
+
         if wilcoxon:
-            sig = "✓" if metric_data.get("significant_wilcoxon") else "✗"
+            sig = "✓" if metric_data.get("significant_wilcoxon_fdr") else "✗"
+            q = wilcoxon.get("q_value")
+            q_str = f", q={q:.4f}" if q is not None else ""
             lines.append(
-                f"   Wilcoxon: W={wilcoxon['stat']:.3f}, p={wilcoxon['p_value']:.4f} [{sig}]"
+                f"   Wilcoxon: W={wilcoxon['stat']:.3f}, p={wilcoxon['p_value']:.4f}{q_str} [{sig}]"
             )
-        
+
+        if metric_data.get("underpowered"):
+            lines.append(
+                f"   ⚠ under-powered (n={metric_data.get('n_samples')} < "
+                f"{MIN_POWERED_SAMPLES}) — treat significance with caution"
+            )
+
         lines.append("")
-    
+
     lines.append("=" * 70)
-    lines.append("Legend: ✓ = significant at α=0.05, ✗ = not significant")
+    lines.append(
+        "Legend: ✓/✗ = FDR-significant at q<0.05 (BH-corrected across metrics); "
+        "p = raw, q = FDR-adjusted"
+    )
     lines.append("=" * 70)
     
     return "\n".join(lines)

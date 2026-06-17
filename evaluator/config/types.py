@@ -19,9 +19,10 @@ class VectorDBType(str, Enum):
     INMEMORY = "inmemory"
     FAISS = "faiss"
     FAISS_GPU = "faiss_gpu"
+    FAISS_MMAP = "faiss_mmap"  # on-disk mmap index + off-RAM payloads (Roadmap 3b)
     CHROMADB = "chromadb"
     QDRANT = "qdrant"
-    
+
     def __str__(self) -> str:
         return self.value
 

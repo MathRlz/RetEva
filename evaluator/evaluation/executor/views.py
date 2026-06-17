@@ -38,8 +38,17 @@ class _NodeView:
     def __init__(self, base: "RunState", node: Any) -> None:
         object.__setattr__(self, "_base", base)
         # Seed each private attr from the base's *current* value (so the branch inherits the
-        # shared-prefix state, e.g. a transiently-swapped pipeline) but copy mutable
-        # containers so an in-place mutation in one branch can't leak into another.
+        # shared-prefix state, e.g. a transiently-swapped pipeline). Today every scope:node
+        # field is an OBJECT reference (the four pipelines + current_node) — shared by
+        # reference on purpose: a branch isolates *which* pipeline it sees by rebinding its
+        # own `local` slot (via __setattr__), and the pipeline objects must NOT be deep-copied
+        # (that would duplicate loaded models). The list/dict shallow-copy below is defensive
+        # for any FUTURE scope:node field that is a container.
+        #
+        # L5 contract: a scope:node container field must be REPLACED wholesale by handlers
+        # (``view.acc = new``), never mutated nested-in-place (``view.acc[0]['k'] = v``), since
+        # this copy is one level deep. Cross-node/cross-branch data flows through the keyed,
+        # thread-safe ``ctx`` — not these accumulators — so the replace-not-mutate rule holds.
         local: Dict[str, Any] = {}
         for a in _VIEW_LOCAL_ATTRS:
             if not hasattr(base, a):

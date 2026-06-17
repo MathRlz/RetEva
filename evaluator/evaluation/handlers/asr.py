@@ -26,6 +26,7 @@ def _run_asr_phase(
     checkpoint_interval,
     experiment_id,
     resume_from_checkpoint,
+    warmup_batch_sizing=False,
 ):
     """Produce query texts for ASR-based modes.
 
@@ -57,6 +58,7 @@ def _run_asr_phase(
         checkpoint_interval=checkpoint_interval,
         experiment_id=experiment_id,
         resume_from_checkpoint=resume_from_checkpoint,
+        warmup_batch_sizing=warmup_batch_sizing,
     )
     logger.info(f"ASR Phase complete: {len(hypotheses)} transcriptions")
     # Snapshot raw ASR output — WER/CER must compare against this, not any
@@ -124,6 +126,9 @@ def _stage_asr(s: RunState) -> None:
             s.checkpoint_interval,
             s.experiment_id,
             s.resume_from_checkpoint,
+            warmup_batch_sizing=bool(
+                getattr(getattr(s.config, "data", None), "warmup_batch_sizing", False)
+            ),
         )
     # A checkpoint resume can leave a longer, batch-overlapping hypotheses list (the
     # legacy zip-truncation leniency); trim to the dataset's query ids so the keyed

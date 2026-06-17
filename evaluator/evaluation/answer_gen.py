@@ -261,6 +261,7 @@ def generate_answers(
         rouge1, rouge2, rougeL, context_doc_ids.
     """
     from tqdm import tqdm
+    from ..utils.progress import progress_disabled
 
     client = LLMClient(config.to_llm_config(), component="answer_gen")
 
@@ -272,7 +273,7 @@ def generate_answers(
     details: List[Dict[str, Any]] = []
     failed = 0
 
-    for i in tqdm(range(n), desc="Generating answers", disable=None):
+    for i in tqdm(range(n), desc="Generating answers", disable=progress_disabled()):
         query_id = all_query_ids[i] if i < len(all_query_ids) else str(i)
         question = all_query_texts[i] if i < len(all_query_texts) else ""
         retrieved_payloads = (

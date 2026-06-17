@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..errors import ConfigurationError
+from ..logging_config import get_logger
 from .core import (
     QueryDataset,
     load_audio_file as _load_audio_waveform,
 )
+
+logger = get_logger(__name__)
 
 
 class AudioSamplesQueryDataset(QueryDataset):
@@ -71,45 +72,42 @@ class AudioSamplesQueryDataset(QueryDataset):
         # is the transcription text, matching the ``{transcription: 1}`` relevance
         # fallback in ``_build_relevant_from_item`` (mirrors the CLI's transcription
         # corpus in ``cli/commands.py``).
+        #
+        # M5: deduplicating by text is CORRECT here, not under-counting — because the
+        # relevance key is the transcription text (== doc_id), two samples that share a
+        # transcription correctly point at the same single corpus doc (retrievable at rank 1
+        # for both). We only log the collapse so a smaller-than-sample-count corpus is
+        # explainable, not a surprise.
         derived: Dict[str, Dict[str, Any]] = {}
         for sample in self.samples:
             text = str(getattr(sample, "transcription", "") or "").strip()
             if text and text not in derived:
                 derived[text] = {"doc_id": text, "text": text}
+        n_with_text = sum(
+            1 for s in self.samples if str(getattr(s, "transcription", "") or "").strip()
+        )
+        if len(derived) < n_with_text:
+            logger.debug(
+                "self-retrieval corpus: %d samples → %d unique transcription docs "
+                "(%d duplicate transcriptions collapsed; relevance is text-keyed so this "
+                "is exact, not lossy)",
+                n_with_text, len(derived), n_with_text - len(derived),
+            )
         return list(derived.values())
 
 
 def _load_corpus_entries(path: str) -> List[Dict[str, Any]]:
+    """Load a corpus file → row dicts with shared field-name fallbacks (B5/F19: reuses
+    ``core.load_json_or_jsonl`` for the JSON/JSONL + corpus/documents/items unwrap)."""
+    from .core import load_json_or_jsonl, parse_corpus_row
+
     corpus_path = Path(path)
     if not corpus_path.exists():
         raise ConfigurationError(f"Corpus file not found: {path}")
-    rows: List[Dict[str, Any]]
-    if corpus_path.suffix == ".jsonl":
-        rows = []
-        with corpus_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if line:
-                    rows.append(json.loads(line))
-    else:
-        with corpus_path.open("r", encoding="utf-8") as handle:
-            loaded = json.load(handle)
-        if isinstance(loaded, list):
-            rows = loaded
-        elif isinstance(loaded, dict):
-            if "corpus" in loaded and isinstance(loaded["corpus"], list):
-                rows = loaded["corpus"]
-            elif "documents" in loaded and isinstance(loaded["documents"], list):
-                rows = loaded["documents"]
-            elif "items" in loaded and isinstance(loaded["items"], list):
-                rows = loaded["items"]
-            else:
-                raise ConfigurationError(
-                    f"Unsupported corpus JSON structure in {path}; expected list or corpus/documents/items key"
-                )
-        else:
-            raise ConfigurationError(f"Unsupported corpus file format in {path}")
-    from .core import parse_corpus_row
+    try:
+        rows = load_json_or_jsonl(corpus_path)
+    except (ValueError, FileNotFoundError) as exc:
+        raise ConfigurationError(f"Could not load corpus {path}: {exc}") from exc
 
     corpus: List[Dict[str, Any]] = []
     for row in rows:
@@ -244,10 +242,17 @@ def load_runtime_datasets(config: Any) -> "Dict[str, QueryDataset]":
 
 def _corpus_doc_ids(dataset: Any) -> set:
     if not hasattr(dataset, "get_corpus"):
-        return set()
+        return set()  # legitimately corpus-less dataset
     try:
         return {str(d.get("doc_id", "")) for d in dataset.get_corpus()} - {""}
-    except Exception:
+    except Exception as exc:
+        # A raising get_corpus() (broken/malformed corpus) used to be swallowed silently,
+        # which makes validate_dataset_join read an empty corpus and disable all IR metrics
+        # with no trace (H1). Keep the run alive but surface it loudly.
+        logger.warning(
+            "could not read corpus doc ids (%s): %s; IR-metric join check will treat the "
+            "corpus as empty", type(exc).__name__, exc,
+        )
         return set()
 
 
@@ -265,8 +270,8 @@ def validate_dataset_join(
     """Check the cross-dataset join contract (B5): do the questions' relevant `doc_id`s overlap
     the corpus's `doc_id`s? IR metrics are only meaningful when they do — disjoint namespaces mean
     every relevant doc is absent from the corpus, so Recall/NDCG/… would be a misleading 0 rather
-    than "not applicable". Returns ``{overlap, n_relevant, n_corpus, disjoint, warning}``; the caller
-    disables IR metrics (QA/judge still run) when ``disjoint``."""
+    than "not applicable". Returns ``{overlap, n_relevant, n_corpus, disjoint, warning}``; the
+    caller disables IR metrics (QA/judge still run) when ``disjoint``."""
     relevant = _relevant_doc_ids(questions_dataset)
     corpus = _corpus_doc_ids(corpus_dataset)
     overlap = relevant & corpus
@@ -284,3 +289,54 @@ def validate_dataset_join(
         "disjoint": disjoint,
         "warning": warning,
     }
+
+
+class _QueryIdSubset(QueryDataset):
+    """A query-side slice of a dataset (Roadmap 2d, item replay): only the rows at
+    ``indices`` are visible, but ``get_corpus`` passes through whole — the corpus is shared,
+    so retrieval scores match a full run while the query set shrinks to the ids of interest."""
+
+    def __init__(self, base: Any, indices: List[int]) -> None:
+        self._base = base
+        self._indices = list(indices)
+        # Mirror the base's id-bearing list (sliced) so any reader sees the same subset.
+        if hasattr(base, "questions"):
+            self.questions = [base.questions[i] for i in indices]
+        if hasattr(base, "samples"):
+            self.samples = [base.samples[i] for i in indices]
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        return self._base[self._indices[idx]]
+
+    def get_corpus(self) -> List[Dict[str, Any]]:
+        getter = getattr(self._base, "get_corpus", None)
+        return getter() if callable(getter) else []
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate anything not overridden (e.g. corpus_entries) to the base dataset.
+        return getattr(self._base, name)
+
+
+def _row_id(base: Any, idx: int) -> str:
+    """The query id for row ``idx`` via a light source (no audio decode) when available."""
+    questions = getattr(base, "questions", None)
+    if questions is not None:
+        return str(getattr(questions[idx], "question_id", "") or "")
+    samples = getattr(base, "samples", None)
+    if samples is not None:
+        return str(getattr(samples[idx], "sample_id", "") or "")
+    row = base[idx]  # fallback: materialize the row (may decode audio)
+    return str(row.get("question_id") or row.get("sample_id") or row.get("query_id") or "")
+
+
+def slice_by_query_ids(dataset: Any, query_ids: Any) -> "_QueryIdSubset":
+    """Slice ``dataset`` to the rows whose query id is in ``query_ids`` (corpus untouched).
+
+    Used by ``evaluator replay`` to re-run a single item through the full graph. Returns a
+    :class:`_QueryIdSubset` (possibly empty — the caller reports an unknown id)."""
+    wanted = {str(q) for q in query_ids}
+    indices = [i for i in range(len(dataset)) if _row_id(dataset, i) in wanted]
+    return _QueryIdSubset(dataset, indices)

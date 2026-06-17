@@ -36,11 +36,21 @@ class DropSink:
 
     def __init__(self) -> None:
         self.by_node: Dict[str, List[str]] = {}
+        # Per-drop attribution (R7): the failing node, item, and the exception that caused it,
+        # so a shrinking sample becomes "10% failed embedding (RuntimeError: clip too long)"
+        # instead of an opaque count.
+        self.details: List[Dict[str, str]] = []
         self._lock = threading.Lock()
 
     def record(self, node_id: str, item_id: str, exc: BaseException) -> None:
         with self._lock:
             self.by_node.setdefault(node_id, []).append(str(item_id))
+            self.details.append({
+                "node": node_id,
+                "item_id": str(item_id),
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:300],
+            })
         logger.warning(
             "dropped item '%s' at node '%s': %s: %s",
             item_id,
@@ -51,6 +61,24 @@ class DropSink:
 
     def all_dropped_ids(self) -> set:
         return {i for ids in self.by_node.values() for i in ids}
+
+    def failure_summary(self) -> Dict[str, Any]:
+        """Aggregate the drops for a report ``failure_analysis`` section (R7): total dropped,
+        per-node counts, the top error types, and a few examples for debugging. Empty dict
+        when nothing was dropped (so a clean run adds nothing to the report)."""
+        from collections import Counter
+
+        with self._lock:
+            if not self.details:
+                return {}
+            return {
+                "total_dropped": len(self.details),
+                "by_node": {n: len(ids) for n, ids in self.by_node.items()},
+                "top_error_types": Counter(
+                    d["error_type"] for d in self.details
+                ).most_common(10),
+                "examples": [dict(d) for d in self.details[:20]],
+            }
 
 
 def isolate_items(

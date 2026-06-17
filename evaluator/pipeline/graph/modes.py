@@ -75,6 +75,7 @@ def build_stage_graph(
     rerank_enabled: bool = False,
     mmr_enabled: bool = False,
     threshold_enabled: bool = False,
+    refine_ops: tuple = (),
     tts_enabled: bool = False,
     sink_enabled: bool = False,
     correction_enabled: bool = False,
@@ -98,6 +99,7 @@ def build_stage_graph(
         rerank_enabled=rerank_enabled,
         mmr_enabled=mmr_enabled,
         threshold_enabled=threshold_enabled,
+        refine_ops=tuple(refine_ops),
         tts_enabled=tts_enabled,
         sink_enabled=sink_enabled,
         correction_enabled=correction_enabled,
@@ -224,6 +226,7 @@ def _features_from_config(config: Any) -> FeatureSet:
         threshold_enabled=bool(
             _vdb and getattr(_vdb, "min_similarity_threshold", None) is not None
         ),
+        refine_ops=tuple(getattr(_vdb, "refine_ops", None) or ()),
         tts_enabled=bool(
             getattr(config, "audio_synthesis", None) and config.audio_synthesis.enabled
         ),

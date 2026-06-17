@@ -80,7 +80,12 @@ def _stage_dataset_sink(s: RunState) -> None:
 
 
 def _stage_leaderboard_sink(s: RunState) -> None:
-    """Persist the aggregate ``report`` to a JSON sidecar (A6). No-op without a report."""
+    """Persist the aggregate ``report`` to a JSON sidecar (A6). No-op without a report.
+
+    Also writes the *resolved* config (R1) — the EvaluationConfig as it actually ran, with
+    devices/models/effective batch size filled in — to ``<out>/config_resolved_<name>.json``,
+    so a reproduction uses what ran, not the (possibly auto-completed) submitted config.
+    """
     report = s.results.get("report") if s.results else None
     if not report:
         return
@@ -90,6 +95,24 @@ def _stage_leaderboard_sink(s: RunState) -> None:
     name = getattr(s.config, "experiment_name", "run") if s.config else "run"
     path = write_report_json(report, out_dir, name)
     logger.info("leaderboard_sink: report → %s", path)
+    _write_resolved_config(s, out_dir, name)
+
+
+def _write_resolved_config(s: RunState, out_dir: str, name: str) -> None:
+    """Serialize the resolved EvaluationConfig next to the report (R1). Best-effort."""
+    if s.config is None or not hasattr(s.config, "to_dict"):
+        return
+    import json
+    import os
+
+    try:
+        path = os.path.join(out_dir, f"config_resolved_{name}.json")
+        os.makedirs(out_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(s.config.to_dict(), fh, indent=2, default=str)
+        logger.info("leaderboard_sink: resolved config → %s", path)
+    except OSError as exc:
+        logger.warning("could not write resolved config: %s", exc)
 
 
 def _stage_tracking_sink(s: RunState) -> None:

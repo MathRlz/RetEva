@@ -8,7 +8,7 @@ This module implements various query optimization techniques including:
 """
 
 import json
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Callable, List, Dict, Any, Optional, Tuple
 
 from ....logging_config import get_logger
 from ....config import QueryOptimizationConfig
@@ -232,22 +232,70 @@ def generate_hypothetical_document(
         return query
 
 
+def _parse_listed_queries(response: str) -> List[str]:
+    """Parse an LLM list response (one item per line) → cleaned query strings.
+
+    Drops blank lines and ``#`` comments, strips leading numbering/bullets
+    (``1.`` / ``-`` / ``)``), and filters out anything that empties.
+    """
+    items = [
+        line.strip()
+        for line in response.split("\n")
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    items = [line.lstrip("0123456789.-) ").strip() for line in items]
+    return [q for q in items if q]
+
+
+def _fanout(
+    query: str,
+    config: QueryOptimizationConfig,
+    *,
+    method: str,
+    prompt_fn: Callable[[str], Tuple[str, str]],
+    include_original: bool,
+    noun: str,
+) -> List[str]:
+    """Shared LLM query fan-out for decompose / multi_query (B4/F18).
+
+    Guard on ``config.method`` → build prompt → call LLM → parse the listed result,
+    falling back to ``[query]`` on an empty result or any LLM/parse error.
+    ``include_original`` prepends the original query (case-insensitively de-duplicated)
+    to the variations; ``noun`` labels the log lines.
+    """
+    if not config.enabled or config.method != method:
+        return [query]
+
+    logger.info("Generating %s for: %s", noun, query)
+    system_prompt, user_prompt = prompt_fn(query)
+    try:
+        response = _call_llm(system_prompt, user_prompt, config)
+        parsed = _parse_listed_queries(response)
+        if not parsed:
+            logger.warning("No %s generated. Using original query.", noun)
+            return [query]
+        if include_original:
+            results = [query] + [q for q in parsed if q.lower() != query.lower()]
+        else:
+            results = parsed
+        logger.info("Generated %d %s", len(results), noun)
+        for i, q in enumerate(results, 1):
+            logger.debug("  %d. %s", i, q)
+        return results
+    except (RuntimeError, json.JSONDecodeError, KeyError) as e:
+        logger.warning("%s generation failed: %s. Using original query.", noun, e)
+        return [query]
+
+
 def decompose_query(
     query: str,
     config: QueryOptimizationConfig
 ) -> List[str]:
     """Decompose complex query into simpler sub-queries.
-    
-    Breaks down a complex question into multiple focused sub-queries
-    that can be searched independently and combined.
-    
-    Args:
-        query: Complex query text.
-        config: Query optimization configuration.
-        
-    Returns:
-        List of sub-query texts.
-        
+
+    Breaks down a complex question into multiple focused sub-queries that can be
+    searched independently and combined.
+
     Examples:
         >>> config = QueryOptimizationConfig(enabled=True, method="decompose")
         >>> subqueries = decompose_query(
@@ -256,106 +304,35 @@ def decompose_query(
         ... )
         >>> # Returns: ["diabetes symptoms", "diabetes treatment options"]
     """
-    if not config.enabled or config.method != "decompose":
-        return [query]
-    
-    logger.info(f"Decomposing query: {query}")
-    
-    system_prompt, user_prompt = get_decompose_prompt(query)
-    
-    try:
-        response = _call_llm(system_prompt, user_prompt, config)
-        
-        # Parse sub-queries (one per line)
-        subqueries = [
-            line.strip()
-            for line in response.split("\n")
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        
-        # Remove numbering if present (e.g., "1. ", "- ")
-        subqueries = [
-            line.lstrip("0123456789.-) ").strip()
-            for line in subqueries
-        ]
-        
-        # Filter out empty strings
-        subqueries = [q for q in subqueries if q]
-        
-        if not subqueries:
-            logger.warning("No sub-queries generated. Using original query.")
-            return [query]
-        
-        logger.info(f"Generated {len(subqueries)} sub-queries")
-        for i, subq in enumerate(subqueries, 1):
-            logger.debug(f"  {i}. {subq}")
-        
-        return subqueries
-        
-    except (RuntimeError, json.JSONDecodeError, KeyError) as e:
-        logger.warning(f"Query decomposition failed: {e}. Using original query.")
-        return [query]
+    return _fanout(
+        query,
+        config,
+        method="decompose",
+        prompt_fn=get_decompose_prompt,
+        include_original=False,
+        noun="sub-queries",
+    )
 
 
 def generate_multi_queries(
     query: str,
     config: QueryOptimizationConfig
 ) -> List[str]:
-    """Generate multiple query variations.
-    
-    Creates alternative phrasings of the same query to retrieve
-    diverse relevant documents.
-    
-    Args:
-        query: Original query text.
-        config: Query optimization configuration.
-        
-    Returns:
-        List of query variations (including original).
-        
+    """Generate multiple query variations (alternative phrasings of the same query).
+
     Examples:
         >>> config = QueryOptimizationConfig(enabled=True, method="multi_query")
         >>> queries = generate_multi_queries("heart attack symptoms", config)
         >>> # Returns: ["heart attack symptoms", "myocardial infarction signs", ...]
     """
-    if not config.enabled or config.method != "multi_query":
-        return [query]
-    
-    logger.info(f"Generating query variations for: {query}")
-    
-    system_prompt, user_prompt = get_multi_query_prompt(query)
-    
-    try:
-        response = _call_llm(system_prompt, user_prompt, config)
-        
-        # Parse variations (one per line)
-        variations = [
-            line.strip()
-            for line in response.split("\n")
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        
-        # Remove numbering if present
-        variations = [
-            line.lstrip("0123456789.-) ").strip()
-            for line in variations
-        ]
-        
-        # Filter out empty strings
-        variations = [q for q in variations if q]
-        
-        # Include original query
-        all_queries = [query] + [v for v in variations if v.lower() != query.lower()]
-        
-        logger.info(f"Generated {len(all_queries)} query variations (including original)")
-        for i, q in enumerate(all_queries, 1):
-            logger.debug(f"  {i}. {q}")
-        
-        return all_queries
-        
-    except (RuntimeError, json.JSONDecodeError, KeyError) as e:
-        logger.warning(f"Multi-query generation failed: {e}. Using original query.")
-        return [query]
+    return _fanout(
+        query,
+        config,
+        method="multi_query",
+        prompt_fn=get_multi_query_prompt,
+        include_original=True,
+        noun="query variations",
+    )
 
 
 def combine_retrieval_results(

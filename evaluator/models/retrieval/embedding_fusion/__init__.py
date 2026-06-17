@@ -52,8 +52,13 @@ def reduce_dimensions(
         reducer: Pre-fitted reducer instance. If None, a new one is created and fitted.
         
     Returns:
-        Tuple of (reduced_embeddings, fitted_reducer).
-        
+        Tuple of (reduced_embeddings, fitted_reducer). When ``reducer is None`` a new one is
+        fit on ``embeddings`` and returned — **reuse that same fitted reducer** for any other
+        embeddings that must live in the same reduced space (e.g. a corpus side, or a later
+        run); fitting a second reducer projects into a *different* space (M7). The fit is
+        deterministic (``random_state=42``) but data-dependent, so it is not comparable across
+        different inputs. The no-op case (``dim <= target_dim``) returns ``(embeddings, None)``.
+
     Raises:
         ValueError: If method is not supported or target_dim >= current dim.
         

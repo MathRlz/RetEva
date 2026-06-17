@@ -40,9 +40,15 @@ class ModelInfo:
     quantization: Optional[str] = None
 
 
-class ModelRegistry:
-    """Registry of recommended models for local LLM serving."""
-    
+class LLMModelCatalog:
+    """Curated catalog of recommended models for local LLM serving.
+
+    Distinct from the plugin-style ``evaluator.models.registry.ModelRegistry`` (which
+    registers ASR/embedding model *classes*): this is a static ``ModelInfo`` recommendation
+    list queried by domain/size/RAM. Renamed from ``ModelRegistry`` to remove that name
+    clash (F24); ``ModelRegistry`` remains as a back-compat alias below.
+    """
+
     MODELS: List[ModelInfo] = [
         # ===== GENERAL PURPOSE MODELS =====
         
@@ -539,3 +545,8 @@ class ModelRegistry:
             }
             for m in cls.MODELS
         ]
+
+
+# Back-compat alias: this class used to be named ``ModelRegistry``, which collided with the
+# plugin model-class registry. Keep the old name importable (F24).
+ModelRegistry = LLMModelCatalog

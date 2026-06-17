@@ -11,16 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 from tqdm import tqdm
+from ..utils.progress import progress_disabled
 
 from ..storage.cache import CacheManager
 from ..devices.memory import get_memory_manager
 from ..logging_config import get_logger, TimingContext
-from ..models.retrieval.strategy import (
-    CoreRetrievalConfig,
-    PostProcessingConfig,
-    RerankingConfig,
-    RetrievalStrategyConfig,
-)
+from ..models.retrieval.strategy import RetrievalStrategyConfig
 from ..models.retrieval.fusion_registry import fuse_hybrid_results
 from ..models.retrieval.contracts import (
     ScoredRetrievalResult,
@@ -61,46 +57,19 @@ class RetrievalPipeline:
         vector_store: Any,
         cache_manager: Optional[CacheManager] = None,
         strategy_config: Optional[RetrievalStrategyConfig] = None,
-        retrieval_mode: str = "dense",
-        hybrid_dense_weight: float = 0.5,
-        hybrid_fusion_method: str = "weighted",
-        rrf_k: int = 60,
-        bm25_k1: float = 1.5,
-        bm25_b: float = 0.75,
-        reranker_mode: str = "none",
-        reranker_top_k: int = 20,
-        reranker_weight: float = 0.5,
         reranker: Optional["BaseReranker"] = None,
-        use_mmr: bool = False,
-        mmr_lambda: float = 0.5,
-        min_similarity_threshold: Optional[float] = None,
-        distance_metric: str = "cosine",
     ) -> None:
+        """Build the pipeline from a :class:`RetrievalStrategyConfig`.
+
+        ``strategy_config`` is the sole knob source (D2/F7: the old per-knob legacy kwargs
+        were a dead path — every caller passes a config). ``None`` falls back to an
+        all-defaults config (dense, no rerank, cosine), identical to the old kwarg defaults.
+        """
         self.vector_store = vector_store
         self.cache = cache_manager
         self.reranker = reranker
 
-        self.strategy_config = strategy_config or RetrievalStrategyConfig(
-            core=CoreRetrievalConfig(
-                mode=retrieval_mode,
-                hybrid_dense_weight=hybrid_dense_weight,
-                hybrid_fusion_method=hybrid_fusion_method,
-                rrf_k=rrf_k,
-                bm25_k1=bm25_k1,
-                bm25_b=bm25_b,
-            ),
-            reranking=RerankingConfig(
-                mode=reranker_mode,
-                top_k=reranker_top_k,
-                weight=reranker_weight,
-            ),
-            post_processing=PostProcessingConfig(
-                use_mmr=use_mmr,
-                mmr_lambda=mmr_lambda,
-                min_similarity_threshold=min_similarity_threshold,
-                distance_metric=distance_metric,
-            ),
-        )
+        self.strategy_config = strategy_config or RetrievalStrategyConfig()
         self.strategy_config.validate()
 
         self.distance_metric = self._parse_distance_metric(
@@ -110,6 +79,9 @@ class RetrievalPipeline:
         # Store embeddings for MMR (populated during build_index)
         self._index_embeddings: Optional[np.ndarray] = None
         self._index_payloads: Optional[List[Any]] = None
+        # Embedding space the index holds (2b). Tagged at index build from the corpus vectors'
+        # resolved space; None = unknown (the runtime space guard then no-ops).
+        self.index_space_id: Optional[str] = None
 
         self.sparse_index: Optional[SparseBM25Index] = None
         if self.strategy_config.core.mode in {"sparse", "hybrid"}:
@@ -177,6 +149,16 @@ class RetrievalPipeline:
             self._index_embeddings = np.asarray(embeddings, dtype=np.float32)
             self._index_payloads = payloads
 
+    def assert_query_space(self, query_space: Optional[str]) -> None:
+        """Runtime space guard (2b): raise if a query embedded in ``query_space`` would be
+        dotted against an index that holds an incompatible space. No-op when either space is
+        unknown — a defense-in-depth backstop behind the pre-flight validators."""
+        from ..models.embedding_space import assert_spaces_compatible
+
+        assert_spaces_compatible(
+            self.index_space_id, query_space, where="retrieval"
+        )
+
     def search(
         self, query_embedding: np.ndarray, k: int = 10
     ) -> List[Tuple[Any, float]]:
@@ -228,12 +210,18 @@ class RetrievalPipeline:
         results: List[Tuple[Any, float]],
         k: int,
     ) -> List[Tuple[Any, float]]:
-        """Apply MMR and threshold filtering to results.
+        """Apply similarity threshold then MMR diversity to results.
 
-        Order: MMR first (needs more candidates), then threshold filtering.
+        Order: threshold FIRST, then MMR (M6). ``min_similarity_threshold`` means "drop
+        low-confidence *retrievals*"; MMR replaces the score with ``λ·rel − (1−λ)·div``,
+        which isn't comparable to a similarity cutoff — so thresholding must run on the
+        original retrieval scores, before MMR rewrites them. Threshold trims the candidate
+        pool MMR then diversifies over.
         """
         post = self.strategy_config.post_processing
-        # Apply MMR for diversity (before k truncation for better selection)
+        # Confidence filter on the original retrieval scores (no-op when threshold unset).
+        results = apply_threshold(results, post=post)
+        # MMR for diversity over the surviving candidates (before k truncation).
         if post.use_mmr:
             results = apply_mmr(
                 query_emb,
@@ -247,7 +235,7 @@ class RetrievalPipeline:
         else:
             results = results[:k]
 
-        return apply_threshold(results, post=post)
+        return results
 
     def _needs_reranking(self) -> bool:
         return (
@@ -301,7 +289,10 @@ class RetrievalPipeline:
                     candidates.append(br[:k])
                     memory_manager.record_operation()
             else:
-                for query_emb in tqdm(query_embeddings, desc="Retrieval", unit="query", disable=None):
+                for query_emb in tqdm(
+                    query_embeddings, desc="Retrieval", unit="query",
+                    disable=progress_disabled(),
+                ):
                     candidates.append(self.vector_store.search(query_emb, fetch_k))
                     memory_manager.record_operation()
             return candidates
@@ -314,7 +305,10 @@ class RetrievalPipeline:
             )
 
         if mode == "sparse":
-            for query_text in tqdm(query_texts, desc="Retrieval", unit="query", disable=None):
+            for query_text in tqdm(
+                query_texts, desc="Retrieval", unit="query",
+                disable=progress_disabled(),
+            ):
                 candidates.append(self.sparse_index.search(query_text, fetch_k))
                 memory_manager.record_operation()
             return candidates
@@ -325,7 +319,7 @@ class RetrievalPipeline:
             total=len(query_texts),
             desc="Retrieval",
             unit="query",
-            disable=None,
+            disable=progress_disabled(),
         ):
             dense_res = self.vector_store.search(query_emb, fetch_k)
             sparse_res = self.sparse_index.search(query_text, fetch_k)
@@ -361,7 +355,7 @@ class RetrievalPipeline:
             total=len(candidates),
             desc="Rerank",
             unit="query",
-            disable=None,
+            disable=progress_disabled(),
         ):
             if mode == "dense":
                 refined = cand

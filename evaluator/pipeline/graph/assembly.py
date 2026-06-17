@@ -51,6 +51,10 @@ class FeatureSet:
     rerank_enabled: bool = False
     mmr_enabled: bool = False
     threshold_enabled: bool = False
+    # Explicit ordered refine chain (Roadmap 2a). Empty = derive from the three flags above
+    # in canonical rerank→mmr→threshold order. A tuple (frozen-dataclass friendly); repeats
+    # allowed for cascades. See ``_refine_chain``.
+    refine_ops: tuple = ()
     tts_enabled: bool = False
     sink_enabled: bool = False
     correction_enabled: bool = False
@@ -186,13 +190,13 @@ def assemble_specs(mode: str, f: FeatureSet) -> List[Any]:
     for i, spec in enumerate(_retrieve_core(mode, f)):
         items.append((SLOT_RETRIEVE + i * 0.01, spec))
 
-    # refine chain (each consumes+produces retrieved): rerank → mmr → threshold
-    if f.rerank_enabled:
-        items.append((SLOT_REFINE, "rerank"))
-    if f.mmr_enabled:
-        items.append((SLOT_REFINE + 0.1, "mmr"))
-    if f.threshold_enabled:
-        items.append((SLOT_REFINE + 0.2, "threshold"))
+    # refine chain (each consumes+produces retrieved): declared order, or rerank→mmr→threshold
+    # derived from the enabled flags. Repeats get a unique instance id so they cascade.
+    seen: dict = {}
+    for i, op in enumerate(_refine_chain(f)):
+        seen[op] = seen.get(op, 0) + 1
+        spec: Any = op if seen[op] == 1 else {"id": f"{op}@{seen[op]}", "type": op}
+        items.append((SLOT_REFINE + i * 0.1, spec))
     # typed comparison nodes: transcription only when ASR ran; retrieval always (retrieving)
     if mode == "asr_text_retrieval":
         items.append((SLOT_TRANSCRIPTION_METRICS, "transcription_metrics"))
@@ -215,6 +219,23 @@ def assemble_specs(mode: str, f: FeatureSet) -> List[Any]:
     if f.sink_enabled:
         items.append((SLOT_SINK, "dataset_sink"))
     return _sorted(items)
+
+
+def _refine_chain(f: FeatureSet) -> List[str]:
+    """The ordered refine ops to emit. An explicit ``f.refine_ops`` wins verbatim (lets a
+    researcher reorder / cascade); otherwise derive the canonical rerank→mmr→threshold chain
+    from the enabled flags — byte-identical to the historical fixed order."""
+    if f.refine_ops:
+        return list(f.refine_ops)
+    return [
+        op
+        for op, enabled in (
+            ("rerank", f.rerank_enabled),
+            ("mmr", f.mmr_enabled),
+            ("threshold", f.threshold_enabled),
+        )
+        if enabled
+    ]
 
 
 def _sorted(items: List[Tuple[float, Any]]) -> List[Any]:

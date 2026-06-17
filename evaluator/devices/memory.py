@@ -11,6 +11,29 @@ from .monitor import GPUMonitor, get_monitor, MemoryInfo
 logger = logging.getLogger(__name__)
 
 
+def suggest_batch_size(
+    free_gb: float,
+    per_item_gb: float,
+    *,
+    max_batch: int = 256,
+    min_batch: int = 1,
+    safety_factor: float = 1.5,
+) -> int:
+    """Suggest a batch size that fits in ``free_gb`` given a per-item memory estimate (§8).
+
+    Replaces "discover the safe batch by OOM-ing and halving" with an *estimate*: a one-sample
+    warm-up (or a cached prior) measures ``per_item_gb``, and this returns
+    ``free / (per_item · safety_factor)`` clamped to ``[min_batch, max_batch]`` — leaving
+    headroom so activation spikes don't OOM. Falls back to ``max_batch`` when the inputs are
+    non-positive (unknown), preserving today's behaviour. Pure arithmetic, so it is testable
+    without a GPU.
+    """
+    if per_item_gb <= 0 or free_gb <= 0:
+        return max_batch
+    fit = int(free_gb / (per_item_gb * max(safety_factor, 1.0)))
+    return max(min_batch, min(max_batch, fit))
+
+
 @dataclass
 class MemorySnapshot:
     """Snapshot of GPU memory state at a point in time."""
@@ -133,6 +156,64 @@ class MemoryManager:
 
         self._memory_snapshots.append(snapshot)
         return snapshot
+
+    def suggest_batch_size(
+        self,
+        per_item_gb: float,
+        device_idx: int = 0,
+        *,
+        max_batch: int = 256,
+        min_batch: int = 1,
+        safety_factor: float = 1.5,
+    ) -> int:
+        """Suggest a batch size for the current free memory on ``device_idx`` (§8).
+
+        Reads the live free-memory snapshot and defers to :func:`suggest_batch_size`. Returns
+        ``max_batch`` when the device is unavailable (CPU / no CUDA), preserving today's
+        static behaviour.
+        """
+        snap = self.get_memory_snapshot(device_idx)
+        if snap is None:
+            return max_batch
+        return suggest_batch_size(
+            snap.free_mb / 1024.0, per_item_gb,
+            max_batch=max_batch, min_batch=min_batch, safety_factor=safety_factor,
+        )
+
+    def warm_up_batch_size(
+        self,
+        measure_fn: "Callable[[], Any]",
+        device_idx: int = 0,
+        *,
+        max_batch: int = 256,
+        min_batch: int = 1,
+        safety_factor: float = 1.5,
+    ) -> int:
+        """Estimate a safe batch size from a one-sample warm-up (§8 Roadmap 1b).
+
+        Snapshots free memory, runs ``measure_fn`` once (a single-item forward), snapshots
+        again, derives ``per_item_gb`` from the *used* delta, and returns
+        :meth:`suggest_batch_size`. No-op fallback to ``max_batch`` when the device is
+        unavailable (CPU / no CUDA) or the measurement is non-positive — so a non-GPU run keeps
+        today's static behaviour. Batch size does not change embedding/ASR *outputs* (per-item),
+        so this is purely a throughput/fit optimization.
+        """
+        before = self.get_memory_snapshot(device_idx)
+        if before is None:
+            measure_fn()
+            return max_batch
+        measure_fn()
+        after = self.get_memory_snapshot(device_idx)
+        if after is None:
+            return max_batch
+        per_item_gb = max(0.0, (after.used_mb - before.used_mb) / 1024.0)
+        if per_item_gb <= 0:
+            return max_batch
+        # Use the free memory measured AFTER the warm-up (model + one item resident).
+        return suggest_batch_size(
+            after.free_mb / 1024.0, per_item_gb,
+            max_batch=max_batch, min_batch=min_batch, safety_factor=safety_factor,
+        )
 
     def get_peak_memory_usage(self, device_idx: int = 0) -> Optional[float]:
         """Get peak memory usage for a device in MB.

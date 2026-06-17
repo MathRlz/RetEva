@@ -21,7 +21,7 @@ Example::
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 from ..errors import ConfigurationError
 from .evaluation import EvaluationConfig
@@ -40,6 +40,7 @@ _MODEL_NODE_FIELDS = {
         "device": "asr_device",
         "adapter": "asr_adapter_path",
         "params": "asr_params",
+        "quantization": "asr_quantization",
     },
     "text_embedding": {
         "model": "text_emb_model_type",
@@ -49,6 +50,7 @@ _MODEL_NODE_FIELDS = {
         "adapter": "text_emb_adapter_path",
         "embedding_space": "text_emb_embedding_space",
         "params": "text_emb_params",
+        "quantization": "text_emb_quantization",
     },
     "audio_embedding": {
         "model": "audio_emb_model_type",
@@ -60,6 +62,7 @@ _MODEL_NODE_FIELDS = {
         "dropout": "audio_emb_dropout",
         "embedding_space": "audio_emb_embedding_space",
         "params": "audio_emb_params",
+        "quantization": "audio_emb_quantization",
     },
 }
 
@@ -397,6 +400,16 @@ def _synthesize_dataset_entry(
     item["params"] = new_params
 
 
+# Nodes whose behaviour is structural or configured via their own config section — a
+# ``nodes.<name>`` block for them must be empty (listing the node is fine, giving it keys
+# is an error). Kept as a named set so _translate_nodes stays a flat dispatch.
+_NO_CONFIG_NODES = frozenset({
+    "fusion", "corpus_merge", "dataset_union", "augment_audio", "metrics", "finalize",
+    "dataset_source", "tts", "query_optimization", "query_correction", "augmenter",
+    "rerank", "aggregate", "leaderboard_sink", "tracking_sink",
+})
+
+
 def _translate_nodes(
     new: Dict[str, Any], legacy: Dict[str, Any], model: Dict[str, Any]
 ) -> None:
@@ -421,23 +434,7 @@ def _translate_nodes(
             legacy["answer_generation"] = dict(node)
         elif name == "dataset_sink":
             legacy["dataset_sink"] = {"enabled": True, **dict(node)}
-        elif name in (
-            "fusion",
-            "corpus_merge",
-            "dataset_union",
-            "augment_audio",
-            "metrics",
-            "finalize",
-            "dataset_source",
-            "tts",
-            "query_optimization",
-            "query_correction",
-            "augmenter",
-            "rerank",
-            "aggregate",
-            "leaderboard_sink",
-            "tracking_sink",
-        ):
+        elif name in _NO_CONFIG_NODES:
             # structural / config-derived nodes — no per-node config block here
             # (tts via audio_synthesis, rerank via vector_db, query_optimization via
             # query_optimization). Listing them empty is allowed; values are an error.
@@ -483,24 +480,26 @@ def _invert(mapping: Dict[str, str]) -> Dict[str, str]:
     return {v: k for k, v in mapping.items()}
 
 
-# vector_db field → where it lands in nodes.retrieval (inverse of the C1 mapping).
-_VDB_TO_RETRIEVAL = {
-    "k": ("k",),
-    "retrieval_mode": ("mode",),
-    "distance_metric": ("distance",),
-    "gpu_id": ("gpu_id",),
-    "hybrid_fusion_method": ("fusion", "method"),
-    "hybrid_dense_weight": ("fusion", "dense_weight"),
-    "rrf_k": ("fusion", "rrf_k"),
-    "reranker_enabled": ("reranker", "enabled"),
-    "reranker_model": ("reranker", "model"),
-    "reranker_mode": ("reranker", "mode"),
-    "reranker_weight": ("reranker", "weight"),
-    "reranker_top_k": ("reranker", "top_k"),
-    "reranker_device": ("reranker", "device"),
-    "use_mmr": ("mmr", "enabled"),
-    "mmr_lambda": ("mmr", "lambda"),
-}
+def _build_vdb_to_retrieval() -> Dict[str, Tuple[str, ...]]:
+    """Derive the vector_db-field → nodes.retrieval-path inverse from the forward maps so
+    the two directions can't silently drift (F11). A scalar inverts to a 1-tuple
+    ``(node_key,)``; a nested fusion/reranker/mmr key inverts to ``(group, sub_key)``."""
+    inv: Dict[str, Tuple[str, ...]] = {}
+    for node_key, vdb_field in _RETRIEVAL_SCALARS.items():
+        inv[vdb_field] = (node_key,)
+    for group, forward in (
+        ("fusion", _FUSION_KEYS),
+        ("reranker", _RERANKER_KEYS),
+        ("mmr", _MMR_KEYS),
+    ):
+        for sub_key, vdb_field in forward.items():
+            inv[vdb_field] = (group, sub_key)
+    return inv
+
+
+# vector_db field → where it lands in nodes.retrieval (programmatic inverse of the forward
+# retrieval maps above; F11 — was a hand-maintained literal that could drift from them).
+_VDB_TO_RETRIEVAL = _build_vdb_to_retrieval()
 
 
 def legacy_yaml_to_graph_yaml(old: Dict[str, Any]) -> Dict[str, Any]:

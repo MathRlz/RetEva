@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from tqdm import tqdm
+from ...utils.progress import progress_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ def synthesize_missing_query_audio(
         return synthesizers[lang]
 
     done = 0
-    for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=None):
+    for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=progress_disabled()):
         text = getattr(question, "question_text", None)
         if not text:
             log.warning(

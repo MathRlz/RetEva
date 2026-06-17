@@ -11,7 +11,7 @@ immutable since Phase 4) — no separate raw_query_text snapshot.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
@@ -23,7 +23,6 @@ from ...metrics import (
     first_relevant_rank_distribution,
     wer_recall_correlation,
     categorize_failures,
-    embedding_alignment,
     word_error_rate,
     character_error_rate,
 )
@@ -130,19 +129,31 @@ def _branch_scores(s: "RunState", artifacts: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _run_provenance(s: "RunState", dropped_by_branch: Optional[Dict] = None):
-    """The run's provenance block (seed, timing, drops, cache hit/miss, LLM cost)."""
-    from ..provenance import build_provenance
+    """The run's provenance block (seed, dataset fingerprint, timing, drops, cache, LLM cost)."""
+    from ..provenance import build_provenance, dataset_content_fingerprint
 
     seed = getattr(getattr(s.config, "audio_synthesis", None), "seed", None)
     return build_provenance(
         s.config,
         seed=seed,
+        dataset=dataset_content_fingerprint(getattr(s, "dataset", None)),
+        failure_analysis=s.drop_sink.failure_summary() or None,
         timing=dict(s.stage_times),
         dropped_by_branch=dropped_by_branch or None,
         dropped_by_node=dict(s.drop_sink.by_node) or None,
         cache_stats=_collect_cache_stats(s),
         cost=_llm_cost_summary(),
+        offload=_offload_summary(s),
+        models=_build_provenance(s),  # structured per-pipeline identity (F30/C6)
     )
+
+
+def _offload_summary(s: "RunState") -> Optional[Dict[str, int]]:
+    """Soft-CPU offload event counters (2c), or None when nothing was parked warm — so the
+    default full-free policy leaves the provenance block absent (parity-preserving)."""
+    provider = getattr(s, "service_provider", None)
+    stats = provider.offload_stats() if hasattr(provider, "offload_stats") else None
+    return stats if stats and stats.get("soft_offloads") else None
 
 
 def _attach_report(results, report) -> None:
@@ -188,7 +199,6 @@ def _stage_aggregate(s: RunState) -> None:
     and builds the report with paired deltas vs a baseline branch. Owns ``results['report']``
     when present (supersedes the single-branch metrics-node report)."""
     from ..item_set import ItemSet
-    from ..metric_registry import compute_metrics
     from ..aggregate import build_report
 
     relevant = _ctx_first(s, "relevant_docs")
@@ -264,8 +274,7 @@ def _stage_aggregate(s: RunState) -> None:
         with_ci=True,
     )
     # Cross-stage: per-branch Pearson(WER, Recall@5) — does worse ASR cost retrieval? (M2)
-    from ...metrics.diagnostics import wer_recall_correlation
-
+    # (wer_recall_correlation is imported at module top.)
     for branch, scores in per_branch.items():
         wer, rec = scores.get("wer"), scores.get("recall@5")
         if wer is None or rec is None:
@@ -292,14 +301,20 @@ def _stage_aggregate(s: RunState) -> None:
 
 
 def _record_model_info(results: "RunResults", s: RunState) -> None:
-    """Record model names + audio<->text embedding alignment (metadata, not metrics)."""
-    if s.mode in ("asr_text_retrieval", "asr_only"):
+    """Record model names (display) + audio<->text embedding alignment (metadata, not metrics).
+
+    Driven by which pipelines actually ran, so every mode is covered — including
+    ``audio_emb_retrieval`` (audio query + text corpus), which previously recorded nothing."""
+    if s.asr_pipeline is not None:
         results["asr"] = s.asr_pipeline.model.name()
-    if s.mode == "asr_text_retrieval":
-        results["embedder"] = s.text_embedding_pipeline.model.name()
-    elif s.mode == "audio_text_retrieval":
+    if s.audio_embedding_pipeline is not None:
         results["audio_embedder"] = s.audio_embedding_pipeline.model.name()
-        results["text_embedder"] = s.text_embedding_pipeline.model.name()
+    if s.text_embedding_pipeline is not None:
+        # asr_text: the text embedder IS the query embedder → 'embedder'; otherwise it
+        # embeds the corpus → 'text_embedder' (back-compat key names).
+        key = "embedder" if s.mode == "asr_text_retrieval" else "text_embedder"
+        results[key] = s.text_embedding_pipeline.model.name()
+    if s.mode == "audio_text_retrieval":
         # Computed at the source (the fusion node) and published as an artifact (M1d-2).
         alignment = _ctx_first(s, "embedding_alignment")
         if alignment is not None:
@@ -309,6 +324,61 @@ def _record_model_info(results: "RunResults", s: RunState) -> None:
                 alignment["audio_text_cosine_mean"],
                 alignment["audio_text_cosine_std"],
             )
+
+
+def _build_provenance(s: RunState) -> Dict[str, Any]:
+    """Machine-readable model identity for the report (F30/C6): the structured per-pipeline
+    fields that define the experiment — type/size/name/dim/dropout/model_path/adapter/
+    embedding_space/params (pooling) + retrieval knobs — so a saved result is reproducible and
+    the leaderboard can group/filter by them. Driven by the pipelines that ran. The model's
+    ``.name()`` rides along under ``resolved`` for display."""
+    from ...config.types import enum_to_str
+
+    m = getattr(s.config, "model", None) if s.config is not None else None
+    prov: Dict[str, Any] = {}
+    if m is None:
+        return prov
+
+    def _clean(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: v for k, v in d.items() if v not in (None, "", {}, [])}
+
+    if s.asr_pipeline is not None:
+        prov["asr"] = _clean({
+            "type": m.asr_model_type, "size": m.asr_size, "name": m.asr_model_name,
+            "adapter": m.asr_adapter_path, "params": dict(m.asr_params or {}),
+            "resolved": s.asr_pipeline.model.name(),
+        })
+    if s.text_embedding_pipeline is not None:
+        prov["text_emb"] = _clean({
+            "type": m.text_emb_model_type, "size": m.text_emb_size, "name": m.text_emb_model_name,
+            "adapter": m.text_emb_adapter_path, "embedding_space": m.text_emb_embedding_space,
+            "params": dict(m.text_emb_params or {}),
+            "resolved": s.text_embedding_pipeline.model.name(),
+        })
+    if s.audio_embedding_pipeline is not None:
+        prov["audio_emb"] = _clean({
+            "type": m.audio_emb_model_type, "size": m.audio_emb_size, "name": m.audio_emb_model_name,
+            "dim": m.audio_emb_dim, "dropout": m.audio_emb_dropout,
+            "model_path": m.audio_emb_model_path, "adapter": m.audio_emb_adapter_path,
+            "embedding_space": m.audio_emb_embedding_space, "params": dict(m.audio_emb_params or {}),
+            "resolved": s.audio_embedding_pipeline.model.name(),
+        })
+    vdb = getattr(s.config, "vector_db", None)
+    if vdb is not None:
+        reranker = (
+            getattr(vdb, "reranker_model", None)
+            if getattr(vdb, "reranker_enabled", False) else None
+        )
+        prov["retrieval"] = _clean({
+            "store": enum_to_str(vdb.type) if getattr(vdb, "type", None) is not None else None,
+            "k": getattr(vdb, "k", None),
+            "mode": (enum_to_str(vdb.retrieval_mode)
+                     if getattr(vdb, "retrieval_mode", None) is not None else None),
+            "reranker": reranker,
+        })
+    return prov
+
+
 
 
 def _asr_hypothesis(s: RunState) -> list:
@@ -324,16 +394,27 @@ def _reference_transcriptions(s: RunState) -> list:
     return list(s.get_artifact("reference_transcription", default=[]))
 
 
+def _wer_cer_pair(pair):
+    """Pure ``(WER, CER)`` for one ``(reference, hypothesis)`` pair. Top-level (not a closure)
+    so the ``process`` CPU-stage backend can pickle it (Roadmap 4b)."""
+    gt_text, hyp_text = pair
+    return word_error_rate(gt_text, hyp_text), character_error_rate(gt_text, hyp_text)
+
+
 def _asr_item_scores(s: RunState):
-    """Per-item raw-ASR WER/CER lists (consumed by the answer-gen / judge / trace stages)."""
-    wer_scores: List[float] = []
-    cer_scores: List[float] = []
+    """Per-item raw-ASR WER/CER lists (consumed by the answer-gen / judge / trace stages).
+
+    The per-item WER/CER map is a pure, CPU-bound, order-preserving fold, so it runs through the
+    4b ``parallel_map`` (``sync`` by default → byte-identical to the serial loop; ``thread`` /
+    ``process`` parallelize the GIL-bound edit-distance work)."""
     if s.mode not in ("asr_text_retrieval", "asr_only"):
-        return wer_scores, cer_scores
-    for gt_text, hyp_text in zip(_reference_transcriptions(s), _asr_hypothesis(s)):
-        wer_scores.append(word_error_rate(gt_text, hyp_text))
-        cer_scores.append(character_error_rate(gt_text, hyp_text))
-    return wer_scores, cer_scores
+        return [], []
+    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+
+    pairs = list(zip(_reference_transcriptions(s), _asr_hypothesis(s)))
+    backend, workers = resolve_cpu_backend(s.config)
+    scored = parallel_map(_wer_cer_pair, pairs, backend=backend, workers=workers)
+    return [w for w, _ in scored], [c for _, c in scored]
 
 
 # registry metric name -> legacy flat bare key. Exactly the legacy key set (no
@@ -535,7 +616,6 @@ def _attach_registry_report(
     if not ids or len(set(ids)) != len(ids):
         return
     from ..item_set import ItemSet
-    from ..metric_registry import compute_metrics
     from ..aggregate import build_report
 
     n = len(ids)

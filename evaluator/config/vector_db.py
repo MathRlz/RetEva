@@ -1,8 +1,11 @@
 """Vector database configuration."""
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from ..config.types import VectorDBType, to_enum
+
+# The composable post-retrieval refine vocabulary (each is one retrieved→retrieved node).
+REFINE_OPS = ("rerank", "mmr", "threshold")
 
 
 # ── Focused sub-configs ──────────────────────────────────────────────
@@ -142,6 +145,11 @@ class VectorDBConfig:
     max_similarity_threshold: Optional[float] = None  # Filter results above this score (for diversity)
     distance_metric: str = "cosine"  # cosine | euclidean | dot_product
     diversity_penalty: float = 0.0  # Penalty for similar documents (0.0-1.0)
+    # Explicit, ordered post-retrieval refine chain (Roadmap 2a). Each entry is one of
+    # REFINE_OPS; the listed nodes are emitted in this order (repeats allowed → cascades,
+    # e.g. ["rerank", "mmr", "rerank"]). None = derive the chain from the reranker / use_mmr /
+    # threshold flags in the canonical rerank→mmr→threshold order (byte-identical to before).
+    refine_ops: Optional[List[str]] = None
 
     # ChromaDB-specific settings
     chromadb_path: Optional[str] = None
@@ -178,6 +186,13 @@ class VectorDBConfig:
         
         if not 0.0 <= self.diversity_penalty <= 1.0:
             raise ValueError(f"diversity_penalty must be in [0, 1], got {self.diversity_penalty}")
+
+        if self.refine_ops is not None:
+            bad = [op for op in self.refine_ops if op not in REFINE_OPS]
+            if bad:
+                raise ValueError(
+                    f"refine_ops entries must be one of {REFINE_OPS}, got {bad}"
+                )
 
     # ── Sub-config accessors (read-only views over flat fields) ──────
 

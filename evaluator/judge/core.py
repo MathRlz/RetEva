@@ -145,6 +145,7 @@ def run_llm_judging(
     """Run LLM-as-judge on top traces. Raises on any critical configuration/runtime error."""
     import logging as _logging
     from tqdm import tqdm
+    from ..utils.progress import progress_disabled
 
     _mode = judge_mode or getattr(judge_config, "judge_mode", "retrieval")
     max_cases = getattr(judge_config, "max_cases", 0)
@@ -158,14 +159,24 @@ def run_llm_judging(
 
     selected = traces if max_cases == 0 else traces[:max_cases]
     outputs: List[Dict[str, Any]] = []
-    for trace in tqdm(selected, desc="Judging", unit="case", disable=None):
-        verdict = judge_trace_with_openai_compatible(
-            trace,
-            client=client,
-            judge_mode=_mode,
-            system_prompt=_sys_p,
-            user_prompt_template=_user_t,
-        )
+    for trace in tqdm(selected, desc="Judging", unit="case", disable=progress_disabled()):
+        try:
+            verdict = judge_trace_with_openai_compatible(
+                trace,
+                client=client,
+                judge_mode=_mode,
+                system_prompt=_sys_p,
+                user_prompt_template=_user_t,
+            )
+        except Exception as exc:
+            # M3: one trace failing (LLM request timeout, transient error, bad response)
+            # must not abort the whole judge stage and lose every other verdict — drop-and-log
+            # it and keep going. The happy path (no failures) is unchanged.
+            _logging.getLogger("evaluator.judge").warning(
+                "judge failed for query_id=%s (%s: %s); skipping this case",
+                trace.get("query_id"), type(exc).__name__, exc,
+            )
+            continue
         outputs.append({"query_id": trace.get("query_id"), "judge": verdict})
 
     scores: List[float] = []

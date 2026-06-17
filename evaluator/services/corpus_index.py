@@ -280,6 +280,9 @@ def merge_corpus_vectors(cvs: List[CorpusVectors]) -> CorpusVectors:
 def build_index_from_vectors(retrieval_pipeline, cv: CorpusVectors) -> None:
     """Build the retrieval index from pre-embedded corpus vectors (``vector_db`` node)."""
     retrieval_pipeline.build_index(embeddings=cv.vectors, metadata=cv.payloads)
+    # Tag the index with the space it holds (2b) so the retrieval node can assert the query is
+    # comparable before dotting. None (unresolved corpus space) leaves the guard a no-op.
+    retrieval_pipeline.index_space_id = cv.space
 
 
 def build_corpus_index(

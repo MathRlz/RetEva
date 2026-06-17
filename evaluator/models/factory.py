@@ -1,8 +1,36 @@
 """Factory functions for creating model instances."""
 import inspect
+import logging
 from typing import Optional, Callable, Dict, Any
 import torch
 from .registry import asr_registry, text_embedding_registry, audio_embedding_registry, reranker_registry
+
+logger = logging.getLogger(__name__)
+
+
+def _quantization_into_params(
+    model_type: str, model_class, quantization: Optional[str], extra_params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Fold a ``quantization`` strategy into a model's constructor params when the model
+    supports it — its ``__init__`` takes a ``quantization`` arg or ``**kwargs`` (Roadmap §8
+    1a). Opt-in, like model params: a model that doesn't support it gets a clear warning and
+    loads full precision instead of a cryptic constructor error. No-op when unset."""
+    if not quantization:
+        return extra_params
+    try:
+        sig = inspect.signature(model_class.__init__)
+        accepts = "quantization" in sig.parameters or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (TypeError, ValueError):
+        accepts = False
+    if accepts:
+        return {**extra_params, "quantization": quantization}
+    logger.warning(
+        "model '%s' (%s) does not support quantization=%r; loading full precision",
+        model_type, model_class.__name__, quantization,
+    )
+    return extra_params
 
 
 def _check_extra_params(model_type: str, model_class, extra_params: Dict[str, Any]) -> None:
@@ -34,6 +62,7 @@ def _check_extra_params(model_type: str, model_class, extra_params: Dict[str, An
 def create_asr_model(model_type: str, model_name: Optional[str] = None,
                      size: Optional[str] = None,
                      adapter_path: Optional[str] = None, device: str = "cuda:0",
+                     quantization: Optional[str] = None,
                      **extra_params):
     """
     Factory function to create ASR models.
@@ -51,6 +80,7 @@ def create_asr_model(model_type: str, model_name: Optional[str] = None,
     """
     model_class = asr_registry.get(model_type)
     name = asr_registry.resolve_model_name(model_type, size=size, model_name=model_name)
+    extra_params = _quantization_into_params(model_type, model_class, quantization, extra_params)
     _check_extra_params(model_type, model_class, extra_params)
 
     return model_class(name, adapter_path=adapter_path, **extra_params).to(torch.device(device))
@@ -58,7 +88,8 @@ def create_asr_model(model_type: str, model_name: Optional[str] = None,
 
 def create_text_embedding_model(model_type: str, model_name: Optional[str] = None,
                                 size: Optional[str] = None,
-                                device: str = "cuda:0", **extra_params):
+                                device: str = "cuda:0",
+                                quantization: Optional[str] = None, **extra_params):
     """
     Factory function to create text embedding models.
 
@@ -77,6 +108,7 @@ def create_text_embedding_model(model_type: str, model_name: Optional[str] = Non
 
     model_class = text_embedding_registry.get(model_type)
     name = text_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
+    extra_params = _quantization_into_params(model_type, model_class, quantization, extra_params)
     _check_extra_params(model_type, model_class, extra_params)
 
     return model_class(name, **extra_params).to(torch.device(device))
@@ -146,7 +178,8 @@ def create_audio_embedding_model(model_type: str, model_name: Optional[str] = No
                                  size: Optional[str] = None,
                                  model_path: Optional[str] = None,
                                  emb_dim: int = 2048, dropout: float = 0.1,
-                                 device: str = "cuda:0", **extra_params):
+                                 device: str = "cuda:0",
+                                 quantization: Optional[str] = None, **extra_params):
     """
     Factory function to create audio embedding models.
 
@@ -164,6 +197,7 @@ def create_audio_embedding_model(model_type: str, model_name: Optional[str] = No
         AudioEmbeddingModel instance
     """
     model_class = audio_embedding_registry.get(model_type)
+    extra_params = _quantization_into_params(model_type, model_class, quantization, extra_params)
     builder = _AUDIO_EMBEDDING_BUILDERS.get(model_type)
     if builder is None:
         # Generic fallback: resolve name, construct with model_name kwarg

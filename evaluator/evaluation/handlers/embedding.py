@@ -223,8 +223,14 @@ def _stage_fusion(s: RunState) -> None:
         fused_embeddings, fusion_meta = fuse_embeddings(
             audio_arr, text_arr, s.embedding_fusion_config
         )
-    if fusion_meta:
-        logger.debug("Fusion metadata: %s", fusion_meta)
+    # M7: concatenate+PCA fusion fits a dim-reducer on *this* call's query vectors. It is
+    # deterministic within a run (random_state=42) but fit per-run; keep it on the bus rather
+    # than discarding it, so it is auditable and reusable if corpus-side fusion is ever added
+    # (which MUST reuse this reducer — fitting a second one would project the two sides into
+    # different spaces). Cross-run comparability requires pinning it.
+    if fusion_meta is not None:
+        s.put_artifact("fusion_reducer", fusion_meta)
+        logger.debug("Fusion reducer fit per-run (kept on the bus for reuse/audit).")
     logger.info(f"Fused embedding shape: {fused_embeddings.shape}")
     logger.info(
         f"Fused embedding stats - mean: {fused_embeddings.mean():.4f}, std: {fused_embeddings.std():.4f}"

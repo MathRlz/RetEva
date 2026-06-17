@@ -205,6 +205,19 @@ def build_config_router(
             ],
         }
 
+    @router.post("/api/sweep/preview", summary="Expand a sweep spec to its run group")
+    def sweep_preview_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Expand a sweep spec ``{name, base, axes:[{path, values}]}`` to the combination list
+        it would launch (Roadmap 4a) — no runs started. Returns the grid + its size; a malformed
+        spec is a 400 with the validation error."""
+        from ...analysis.sweep import sweep_preview
+        from ...errors import ConfigurationError
+
+        try:
+            return sweep_preview(payload)
+        except ConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.post(
         "/api/config/create",
         summary="Create config from preset + patch",
@@ -231,6 +244,21 @@ def build_config_router(
         return {
             "config": nested_config(config),
             "flat": config.to_dict(),
+        }
+
+    @router.post("/api/report/metrics-table", summary="Tidy branch×metric table for a report")
+    def report_metrics_table_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """CLI/web parity (§6): return the flat metrics table + per-query trace count for a
+        posted report dict, the shapes a dashboard/dataframe wants from the nested report."""
+        from evaluator.analysis.report_export import (
+            report_query_traces,
+            report_to_metrics_table,
+        )
+
+        report = payload.get("report", payload)
+        return {
+            "metrics": report_to_metrics_table(report),
+            "n_traces": len(report_query_traces(report)),
         }
 
     return router

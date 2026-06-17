@@ -64,8 +64,27 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--service_offload_policy",
         type=str,
         default=None,
-        choices=["on_finish", "never"],
-        help="Service offload policy on evaluation shutdown",
+        choices=["on_finish", "never", "on_finish_soft_cpu"],
+        help="Service offload policy: free after last use | keep resident | park warm on CPU",
+    )
+    parser.add_argument(
+        "--streaming_window_size",
+        type=int,
+        default=None,
+        help="Run the query side in windows of this size (corpus-scale streaming; Roadmap 3a)",
+    )
+    parser.add_argument(
+        "--cpu_stage_executor",
+        type=str,
+        default=None,
+        choices=["sync", "thread", "process"],
+        help="Parallelism for CPU-bound per-item stages (Roadmap 4b; default sync)",
+    )
+    parser.add_argument(
+        "--cpu_stage_workers",
+        type=int,
+        default=None,
+        help="Worker count for --cpu_stage_executor (0 = auto)",
     )
     
     # Dataset arguments
@@ -82,7 +101,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     
     # Vector DB arguments
     parser.add_argument("--db_type", type=str, default=None,
-                       choices=["in_memory", "faiss", "faiss_gpu"])
+                       choices=["in_memory", "faiss", "faiss_gpu", "faiss_mmap"])
     parser.add_argument("--k", type=int, default=None)
     parser.add_argument("--retrieval_mode", type=str, default=None,
                        choices=["dense", "sparse", "hybrid"])
@@ -155,6 +174,10 @@ _CLI_ARG_MAP = {
     # Service runtime (service_runtime.*)
     "service_startup_mode": ("service_runtime", "startup_mode"),
     "service_offload_policy": ("service_runtime", "offload_policy"),
+    # Streaming + CPU-stage parallelism
+    "streaming_window_size": ("streaming", "window_size"),
+    "cpu_stage_executor": ("cpu_stage_executor",),
+    "cpu_stage_workers": ("cpu_stage_workers",),
     # Dataset overrides (data.*)
     "dataset_name": ("data", "dataset_name"),
     "batch_size": ("data", "batch_size"),
@@ -243,6 +266,18 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
         value = getattr(args, arg_name, None)
         if value is not None:
             _set_nested_attr(config, config_path, value)
+
+    # L2: existence-check path-like overrides early, so a typo surfaces as a clear
+    # ConfigurationError here instead of a deep PEFT/loader stack trace much later.
+    # (Dataset paths are validated downstream by validate_dataset_runtime_config.)
+    from ..errors import ConfigurationError
+
+    for arg_name in (
+        "asr_adapter_path", "text_emb_adapter_path", "audio_emb_adapter_path",
+    ):
+        path = getattr(args, arg_name, None)
+        if path and not os.path.exists(path):
+            raise ConfigurationError(f"--{arg_name} not found: {path}")
 
     # Model-coherence (same rule as the WebUI form, config.model_fields): a
     # --X_model_type override that *changes* the family's model type makes the inherited

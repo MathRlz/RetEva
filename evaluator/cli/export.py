@@ -32,9 +32,12 @@ def parse_export_args(args: Optional[List[str]] = None) -> argparse.Namespace:
         "--format",
         "-f",
         type=str,
-        choices=["csv", "excel", "latex", "latex-compare", "samples"],
+        choices=["csv", "excel", "latex", "latex-compare", "samples",
+                 "metrics-table", "traces", "traces-parquet", "mlflow", "wandb"],
         default="csv",
-        help="Output format (default: csv)"
+        help="Output format (default: csv). 'metrics-table' = tidy branch×metric CSV; "
+             "'traces' = per-query JSONL; 'traces-parquet' = per-query Parquet; "
+             "'mlflow'/'wandb' = log the report to that tracker ('--output' = run name)."
     )
     parser.add_argument(
         "--output",
@@ -133,7 +136,37 @@ def run_export(args: argparse.Namespace) -> int:
             elif args.format == "samples":
                 export_sample_results(results, args.output)
                 print(f"Per-sample results exported to: {args.output}")
-        
+
+            elif args.format == "metrics-table":
+                from evaluator.analysis.report_export import write_metrics_table_csv
+
+                n = write_metrics_table_csv(results, args.output)
+                print(f"Metrics table ({n} rows) exported to: {args.output}")
+
+            elif args.format == "traces":
+                from evaluator.analysis.report_export import write_traces_jsonl
+
+                n = write_traces_jsonl(results, args.output)
+                print(f"Per-query traces ({n} rows) exported to: {args.output}")
+
+            elif args.format == "traces-parquet":
+                from evaluator.analysis.report_export import write_traces_parquet
+
+                n = write_traces_parquet(results, args.output)
+                print(f"Per-query traces ({n} rows) exported to: {args.output}")
+
+            elif args.format == "mlflow":
+                from evaluator.analysis.tracking_export import to_mlflow
+
+                to_mlflow(results, run_name=args.output)
+                print(f"Logged report to MLflow (run: {args.output})")
+
+            elif args.format == "wandb":
+                from evaluator.analysis.tracking_export import to_wandb
+
+                to_wandb(results, run_name=args.output)
+                print(f"Logged report to W&B (run: {args.output})")
+
         return 0
     
     except json.JSONDecodeError as e:

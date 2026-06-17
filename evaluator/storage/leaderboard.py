@@ -68,6 +68,16 @@ class ExperimentStore:
                 ON runs(dataset_name, pipeline_mode, created_at DESC)
                 """
             )
+            # Run-grouping columns (architecture-improvements §3) — additive, migrated onto
+            # pre-existing DBs (SQLite has no ADD COLUMN IF NOT EXISTS, so probe pragma first).
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+            if "experiment_group" not in existing:
+                conn.execute("ALTER TABLE runs ADD COLUMN experiment_group TEXT")
+            if "tags" not in existing:
+                conn.execute("ALTER TABLE runs ADD COLUMN tags TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runs_group ON runs(experiment_group)"
+            )
             conn.commit()
 
     def upsert_run(
@@ -83,6 +93,7 @@ class ExperimentStore:
         metrics: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        experiment_group: Optional[str] = None,
     ) -> int:
         """Insert a run from raw parameters (useful for tests and external ingestion)."""
         with closing(self._connect()) as conn, conn:
@@ -90,8 +101,9 @@ class ExperimentStore:
                 """
                 INSERT INTO runs(
                     experiment_name, dataset_name, pipeline_mode, start_time, end_time,
-                    duration_seconds, output_dir, metrics_json, config_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    duration_seconds, output_dir, metrics_json, config_json, metadata_json,
+                    experiment_group
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     experiment_name,
@@ -104,6 +116,7 @@ class ExperimentStore:
                     json.dumps(metrics or {}, default=str),
                     json.dumps(config or {}, default=str),
                     json.dumps(metadata or {}, default=str),
+                    experiment_group,
                 ),
             )
             conn.commit()
@@ -112,16 +125,20 @@ class ExperimentStore:
     def ingest_result(self, result: Any) -> int:
         config = result.config
         metadata = result.metadata or {}
+        tags = metadata.get("tags")
         with closing(self._connect()) as conn, conn:
             cursor = conn.execute(
                 """
                 INSERT INTO runs(
-                    experiment_name, dataset_name, pipeline_mode, start_time, end_time,
-                    duration_seconds, output_dir, metrics_json, config_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    experiment_name, experiment_group, tags, dataset_name, pipeline_mode,
+                    start_time, end_time, duration_seconds, output_dir, metrics_json,
+                    config_json, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.experiment_name,
+                    getattr(config, "experiment_group", None),
+                    json.dumps(tags) if tags else None,
                     config.data.dataset_name,
                     str(config.model.pipeline_mode),
                     metadata.get("start_time"),
@@ -144,6 +161,7 @@ class ExperimentStore:
         dataset_name: Optional[str] = None,
         pipeline_mode: Optional[str] = None,
         name: Optional[str] = None,
+        experiment_group: Optional[str] = None,
         model_filters: Optional[Dict[str, str]] = None,
     ) -> List[LeaderboardRow]:
         sql = """
@@ -162,12 +180,16 @@ class ExperimentStore:
         if name:
             clauses.append("LOWER(experiment_name) LIKE ?")
             params.append(f"%{name.lower()}%")
+        if experiment_group:
+            clauses.append("experiment_group = ?")
+            params.append(experiment_group)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         # Fetch a generous pre-limit so Python filtering by metric presence
         # doesn't scan the full archive; actual top-N slice applied after sort.
         pre_limit = max(limit * 10, 500)
-        sql += f" ORDER BY created_at DESC LIMIT {pre_limit}"
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(pre_limit)
 
         active_model_filters = {k: v for k, v in (model_filters or {}).items() if v}
 
@@ -199,6 +221,39 @@ class ExperimentStore:
             )
         rows.sort(key=lambda row: row.metric_value, reverse=True)
         return rows[:limit]
+
+    def group_runs(
+        self, experiment_group: str, *, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        """All runs in ``experiment_group`` with their full numeric metrics — the multi-metric /
+        Pareto cross-run view (Roadmap 4a). Each row: ``{run_id, experiment_name, dataset_name,
+        pipeline_mode, created_at, metrics}``."""
+        sql = (
+            "SELECT id, experiment_name, dataset_name, pipeline_mode, metrics_json, created_at "
+            "FROM runs WHERE experiment_group = ? ORDER BY created_at DESC LIMIT ?"
+        )
+        out: List[Dict[str, Any]] = []
+        with closing(self._connect()) as conn, conn:
+            rows = conn.execute(sql, (experiment_group, limit)).fetchall()
+        for run_id, name, ds_name, mode, metrics_json, created_at in rows:
+            try:
+                raw = json.loads(metrics_json) or {}
+            except (TypeError, ValueError):
+                raw = {}
+            metrics = {
+                k: float(v)
+                for k, v in raw.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+            out.append({
+                "run_id": run_id,
+                "experiment_name": name,
+                "dataset_name": ds_name,
+                "pipeline_mode": mode,
+                "created_at": created_at,
+                "metrics": metrics,
+            })
+        return out
 
     def available_metrics(self) -> List[str]:
         """Return the sorted union of numeric metric names across all runs."""
@@ -246,6 +301,16 @@ class ExperimentStore:
             "text_emb_models": sorted(text_emb),
             "audio_emb_models": sorted(audio_emb),
         }
+
+    def experiment_groups(self) -> List[str]:
+        """Distinct non-empty ``experiment_group`` values (the Pareto view's group picker)."""
+        with closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT DISTINCT experiment_group FROM runs "
+                "WHERE experiment_group IS NOT NULL AND experiment_group != '' "
+                "ORDER BY experiment_group"
+            ).fetchall()
+        return [g for (g,) in rows]
 
     def delete_run(self, run_id: int) -> bool:
         """Delete a run row. Returns True if a row was removed."""

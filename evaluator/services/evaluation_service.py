@@ -154,6 +154,7 @@ def _run_core(
     service_provider=None,
     progress_callback=None,
     load_info: Optional[Dict[str, Any]] = None,
+    query_ids: Optional[Any] = None,
 ):
     """Build pipelines, load the dataset (+corpus/synthesis), and evaluate.
 
@@ -180,6 +181,19 @@ def _run_core(
         retrieval_required=_mode_needs_retrieval(config.model.pipeline_mode),
         cache_manager=cache_manager,
     )
+
+    if query_ids is not None:
+        # Item replay (2d): keep the corpus whole, slice the query side to the wanted ids so
+        # the single item runs the full graph (retrieval scores match a full run).
+        from ..datasets.runtime import slice_by_query_ids
+        from ..errors import ConfigurationError
+
+        dataset = slice_by_query_ids(dataset, query_ids)
+        if len(dataset) == 0:
+            raise ConfigurationError(
+                f"replay: no dataset rows match query id(s) {sorted(set(map(str, query_ids)))}"
+            )
+        logger.info("replay: sliced dataset to %d row(s) by query id", len(dataset))
 
     bundle = create_pipeline_from_config(
         config, cache_manager, service_provider=service_provider

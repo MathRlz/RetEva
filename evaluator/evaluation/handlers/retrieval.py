@@ -150,6 +150,15 @@ def _stage_retrieval(s: RunState) -> None:
     # The vector_index artifact is the indexed retrieval pipeline (published by
     # vector_db); fall back to the shared pipeline for direct callers (R4a).
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
+    # Runtime space guard (2b): loud error if the bound query stream and the index live in
+    # incompatible embedding spaces. No-op when either space is unknown (defense-in-depth
+    # behind the pre-flight validators). Only the vector-dotting arms (dense/hybrid) qualify.
+    cfg_mode = str(getattr(getattr(rp, "strategy_config", None) and rp.strategy_config.core,
+                           "mode", "dense"))
+    if (params.get("mode") or cfg_mode) != "sparse" and hasattr(rp, "assert_query_space"):
+        from ..validation import resolve_query_space
+
+        rp.assert_query_space(resolve_query_space(s.config, vname))
     # Per-node k (R2): a branch may retrieve a different depth.
     k = int(params.get("k", s.k))
     # Per-node retrieval mode (R-hybrid): the hybrid DAG runs its dense + sparse arms as two

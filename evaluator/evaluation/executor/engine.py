@@ -53,6 +53,11 @@ def _run_one_node(
                 stage=node.stage,
                 duration_s=round(dur, 3),
             )
+        # Opt-in mid-run artifact inspection (R7) — no-op unless EVALUATOR_DUMP_ARTIFACTS lists
+        # this node, so the normal run path is untouched.
+        from ..artifact_dump import maybe_dump_node_artifacts
+
+        maybe_dump_node_artifacts(state, node)
 
 
 def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> None:
@@ -124,7 +129,9 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
         for node in level:
             for model in offloads.get(pos, ()):
                 try:
-                    state.service_provider.release_model_instance(model)
+                    state.service_provider.release_model_instance(
+                        model, soft_cpu=getattr(state, "soft_cpu_offload", False)
+                    )
                     node_logger.info("offloaded model after stage '%s'", node.stage)
                 except Exception as exc:  # never let offload break the run
                     logger.warning(

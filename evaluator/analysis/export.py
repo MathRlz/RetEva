@@ -4,9 +4,8 @@ Provides functions for exporting results to CSV, Excel, and LaTeX formats.
 """
 
 import csv
-import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 
 def export_to_csv(results: Dict[str, Any], output_path: str) -> None:
@@ -52,141 +51,109 @@ def export_to_csv(results: Dict[str, Any], output_path: str) -> None:
         writer.writerows(rows)
 
 
-def export_to_excel(results: Dict[str, Any], output_path: str) -> None:
-    """Export results to Excel with multiple sheets.
-    
-    Creates an Excel file with:
-    - Summary sheet: Aggregate metrics
-    - Per-sample sheet: Individual query results (if available)
-    
-    Args:
-        results: Results dictionary with metric names as keys.
-        output_path: Path to output Excel file (.xlsx).
-        
-    Raises:
-        ImportError: If openpyxl is not installed.
-    """
-    try:
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    except ImportError:
-        raise ImportError(
-            "openpyxl is required for Excel export. "
-            "Install it with: pip install openpyxl"
-        )
-    
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    
-    wb = Workbook()
-    
-    # Summary sheet
-    ws_summary = wb.active
-    ws_summary.title = "Summary"
-    
-    # Styles
-    header_font = Font(bold=True)
-    header_fill = PatternFill(start_color="DAEEF3", end_color="DAEEF3", 
-                               fill_type="solid")
-    thin_border = Border(
-        left=Side(style='thin'),
-        right=Side(style='thin'),
-        top=Side(style='thin'),
-        bottom=Side(style='thin')
+def _xlsx_header_style():
+    """The shared bold + light-fill header style for the export sheets."""
+    from openpyxl.styles import Font, PatternFill
+
+    return (
+        Font(bold=True),
+        PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid"),
     )
-    
-    # Headers
-    ws_summary["A1"] = "Metric"
-    ws_summary["B1"] = "Value"
-    ws_summary["A1"].font = header_font
-    ws_summary["B1"].font = header_font
-    ws_summary["A1"].fill = header_fill
-    ws_summary["B1"].fill = header_fill
-    
+
+
+def _write_summary_sheet(ws, results: Dict[str, Any], header_font, header_fill) -> None:
+    """Run metadata + aggregate scalar metrics onto the Summary sheet."""
+    ws.title = "Summary"
+    ws["A1"], ws["B1"] = "Metric", "Value"
+    for cell in ("A1", "B1"):
+        ws[cell].font = header_font
+        ws[cell].fill = header_fill
+
     skip_keys = {"per_sample", "details", "config", "metadata"}
+    metadata_keys = [
+        "asr", "embedder", "audio_embedder", "text_embedder", "pipeline_mode", "phased",
+    ]
     row = 2
-    
-    # Metadata section
-    metadata_keys = ["asr", "embedder", "audio_embedder", "text_embedder", 
-                     "pipeline_mode", "phased"]
     for key in metadata_keys:
         if key in results:
-            ws_summary[f"A{row}"] = key
-            ws_summary[f"B{row}"] = str(results[key])
+            ws[f"A{row}"] = key
+            ws[f"B{row}"] = str(results[key])
             row += 1
-    
-    # Add blank row separator if we had metadata
     if row > 2:
-        row += 1
-    
-    # Metrics section
+        row += 1  # blank separator after metadata
     for key, value in results.items():
         if key in skip_keys or key in metadata_keys:
             continue
         if isinstance(value, (int, float)):
-            ws_summary[f"A{row}"] = key
-            ws_summary[f"B{row}"] = round(value, 6) if isinstance(value, float) else value
+            ws[f"A{row}"] = key
+            ws[f"B{row}"] = round(value, 6) if isinstance(value, float) else value
             row += 1
-    
-    # Auto-adjust column widths
-    ws_summary.column_dimensions["A"].width = 20
-    ws_summary.column_dimensions["B"].width = 25
-    
-    # Per-sample sheet (if available)
+    ws.column_dimensions["A"].width = 20
+    ws.column_dimensions["B"].width = 25
+
+
+def _write_per_sample_sheet(wb, results: Dict[str, Any], header_font, header_fill) -> None:
+    """Per-sample scores onto a second sheet: from ``per_sample`` columns, else ``details``
+    rows. No sheet is created when neither is present."""
     per_sample = results.get("per_sample") or {}
     details = results.get("details") or []
-    
+
     if per_sample:
-        ws_samples = wb.create_sheet("Per-Sample")
-        
-        # Get all metric names
         metrics = list(per_sample.keys())
         if not metrics:
-            pass
-        else:
-            # Headers
-            ws_samples["A1"] = "Sample"
-            ws_samples["A1"].font = header_font
-            ws_samples["A1"].fill = header_fill
-            
+            return
+        ws = wb.create_sheet("Per-Sample")
+        ws["A1"] = "Sample"
+        ws["A1"].font = header_font
+        ws["A1"].fill = header_fill
+        for col_idx, metric in enumerate(metrics, start=2):
+            cell = ws.cell(row=1, column=col_idx, value=metric)
+            cell.font = header_font
+            cell.fill = header_fill
+        n_samples = max(len(v) for v in per_sample.values())
+        for sample_idx in range(n_samples):
+            ws.cell(row=sample_idx + 2, column=1, value=sample_idx + 1)
             for col_idx, metric in enumerate(metrics, start=2):
-                cell = ws_samples.cell(row=1, column=col_idx, value=metric)
-                cell.font = header_font
-                cell.fill = header_fill
-            
-            # Data rows
-            n_samples = max(len(v) for v in per_sample.values())
-            for sample_idx in range(n_samples):
-                ws_samples.cell(row=sample_idx + 2, column=1, value=sample_idx + 1)
-                for col_idx, metric in enumerate(metrics, start=2):
-                    scores = per_sample.get(metric, [])
-                    if sample_idx < len(scores):
-                        value = scores[sample_idx]
-                        if isinstance(value, float):
-                            value = round(value, 6)
-                        ws_samples.cell(row=sample_idx + 2, column=col_idx, value=value)
-    
-    elif details and isinstance(details, list) and details:
-        ws_samples = wb.create_sheet("Per-Sample")
-        
-        # Get columns from first item
+                scores = per_sample.get(metric, [])
+                if sample_idx < len(scores):
+                    value = scores[sample_idx]
+                    if isinstance(value, float):
+                        value = round(value, 6)
+                    ws.cell(row=sample_idx + 2, column=col_idx, value=value)
+
+    elif details and isinstance(details, list):
+        ws = wb.create_sheet("Per-Sample")
         if isinstance(details[0], dict):
             columns = list(details[0].keys())
-            
-            # Headers
             for col_idx, col_name in enumerate(columns, start=1):
-                cell = ws_samples.cell(row=1, column=col_idx, value=col_name)
+                cell = ws.cell(row=1, column=col_idx, value=col_name)
                 cell.font = header_font
                 cell.fill = header_fill
-            
-            # Data rows
             for row_idx, item in enumerate(details, start=2):
                 for col_idx, col_name in enumerate(columns, start=1):
                     value = item.get(col_name)
                     if isinstance(value, float):
                         value = round(value, 6)
-                    ws_samples.cell(row=row_idx, column=col_idx, value=value)
-    
+                    ws.cell(row=row_idx, column=col_idx, value=value)
+
+
+def export_to_excel(results: Dict[str, Any], output_path: str) -> None:
+    """Export results to an .xlsx workbook (Summary + optional Per-Sample sheets)."""
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        raise ImportError(
+            "openpyxl is required for Excel export. "
+            "Install it with: pip install openpyxl"
+        )
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    header_font, header_fill = _xlsx_header_style()
+    wb = Workbook()
+    _write_summary_sheet(wb.active, results, header_font, header_fill)
+    _write_per_sample_sheet(wb, results, header_font, header_fill)
     wb.save(path)
 
 
@@ -414,49 +381,6 @@ def export_sample_results(results: Dict[str, Any], output_path: str) -> None:
         )
 
 
-def load_results(path: Union[str, Path]) -> Dict[str, Any]:
-    """Load evaluation results from JSON file.
-    
-    Args:
-        path: Path to JSON results file.
-        
-    Returns:
-        Results dictionary.
-        
-    Raises:
-        FileNotFoundError: If file doesn't exist.
-        json.JSONDecodeError: If file is not valid JSON.
-    """
-    path = Path(path)
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _escape_latex(text: str) -> str:
-    """Escape special LaTeX characters.
-    
-    Args:
-        text: Input text.
-        
-    Returns:
-        Text with LaTeX special characters escaped.
-    """
-    replacements = [
-        ("\\", "\\textbackslash{}"),
-        ("&", "\\&"),
-        ("%", "\\%"),
-        ("$", "\\$"),
-        ("#", "\\#"),
-        ("_", "\\_"),
-        ("{", "\\{"),
-        ("}", "\\}"),
-        ("~", "\\textasciitilde{}"),
-        ("^", "\\textasciicircum{}"),
-        ("@", "{@}"),
-    ]
-    
-    result = text
-    for old, new in replacements:
-        result = result.replace(old, new)
-    
-    return result
+# load_results + _escape_latex now live in ._common (B1/F14); re-exported here so existing
+# importers (cli/export.py, analysis.__init__) keep working.
+from ._common import _escape_latex, load_results  # noqa: E402,F401

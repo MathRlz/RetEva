@@ -54,115 +54,103 @@ def analyze_asr_errors(results: dict) -> dict:
         >>> print(analysis["error_counts"]["substitutions"])
         3
     """
-    # Extract reference/hypothesis pairs
     pairs = _extract_asr_pairs(results)
-
     if not pairs:
         return _empty_asr_analysis()
+    acc = _accumulate_asr_errors(pairs)  # parse + count
+    return _build_asr_analysis(acc)      # aggregate
 
-    # Track error statistics
-    substitutions: List[Tuple[str, str]] = []
-    insertions: List[str] = []
-    deletions: List[str] = []
-    word_stats: Dict[int, Dict[str, int]] = defaultdict(
-        lambda: {"count": 0, "errors": 0}
-    )
-    word_errors: Counter = Counter()
 
+class _AsrErrorTally:
+    """Accumulators for the ASR alignment pass (F12: separates count from aggregate)."""
+
+    def __init__(self) -> None:
+        self.substitutions: List[Tuple[str, str]] = []
+        self.insertions: List[str] = []
+        self.deletions: List[str] = []
+        self.word_stats: Dict[int, Dict[str, int]] = defaultdict(
+            lambda: {"count": 0, "errors": 0}
+        )
+        self.word_errors: Counter = Counter()
+
+    def _record_error_word(self, word: str) -> None:
+        self.word_errors[word] += 1
+        self.word_stats[len(word)]["errors"] += 1
+
+
+def _tally_alignment(chunks, ref_words: List[str], hyp_words: List[str],
+                     tally: "_AsrErrorTally") -> None:
+    """Fold one pair's jiwer alignment chunks into the tally (the inner, deepest loop)."""
+    for chunk in chunks:
+        if chunk.type == "substitute":
+            for i, j in zip(
+                range(chunk.ref_start_idx, chunk.ref_end_idx),
+                range(chunk.hyp_start_idx, chunk.hyp_end_idx),
+            ):
+                tally.substitutions.append((ref_words[i], hyp_words[j]))
+                tally._record_error_word(ref_words[i])
+        elif chunk.type == "insert":
+            for i in range(chunk.hyp_start_idx, chunk.hyp_end_idx):
+                tally.insertions.append(hyp_words[i])
+        elif chunk.type == "delete":
+            for i in range(chunk.ref_start_idx, chunk.ref_end_idx):
+                tally.deletions.append(ref_words[i])
+                tally._record_error_word(ref_words[i])
+        # chunk.type == "equal": correct match, nothing to record
+
+
+def _accumulate_asr_errors(pairs: List[Tuple[str, str]]) -> "_AsrErrorTally":
+    """Normalize + align each (ref, hyp) pair and tally substitutions/insertions/deletions."""
+    tally = _AsrErrorTally()
     for ref, hyp in pairs:
-        ref_norm = _normalize(ref)
-        hyp_norm = _normalize(hyp)
-
-        # Use jiwer to get alignment
+        ref_norm, hyp_norm = _normalize(ref), _normalize(hyp)
         output = process_words(ref_norm, hyp_norm)
-
-        ref_words = ref_norm.split()
-        hyp_words = hyp_norm.split()
-
-        # Track word lengths
+        ref_words, hyp_words = ref_norm.split(), hyp_norm.split()
         for word in ref_words:
-            word_len = len(word)
-            word_stats[word_len]["count"] += 1
+            tally.word_stats[len(word)]["count"] += 1
+        _tally_alignment(output.alignments[0], ref_words, hyp_words, tally)
+    return tally
 
-        # Process alignments to extract error details
-        for chunk in output.alignments[0]:
-            if chunk.type == "equal":
-                pass  # Correct match
-            elif chunk.type == "substitute":
-                for i, j in zip(
-                    range(chunk.ref_start_idx, chunk.ref_end_idx),
-                    range(chunk.hyp_start_idx, chunk.hyp_end_idx),
-                ):
-                    ref_word = ref_words[i]
-                    hyp_word = hyp_words[j]
-                    substitutions.append((ref_word, hyp_word))
-                    word_errors[ref_word] += 1
-                    word_stats[len(ref_word)]["errors"] += 1
-            elif chunk.type == "insert":
-                for i in range(chunk.hyp_start_idx, chunk.hyp_end_idx):
-                    insertions.append(hyp_words[i])
-            elif chunk.type == "delete":
-                for i in range(chunk.ref_start_idx, chunk.ref_end_idx):
-                    ref_word = ref_words[i]
-                    deletions.append(ref_word)
-                    word_errors[ref_word] += 1
-                    word_stats[len(ref_word)]["errors"] += 1
 
-    # Build analysis results
-    total_errors = len(substitutions) + len(insertions) + len(deletions)
-    total_ref_words = sum(stats["count"] for stats in word_stats.values())
+def _build_asr_analysis(tally: "_AsrErrorTally") -> dict:
+    """Assemble the public analysis dict from the accumulated tally (counts → rates/top-N)."""
+    n_sub, n_ins, n_del = (
+        len(tally.substitutions), len(tally.insertions), len(tally.deletions)
+    )
+    total_errors = n_sub + n_ins + n_del
+    total_ref_words = sum(stats["count"] for stats in tally.word_stats.values())
 
-    # Error counts
-    error_counts = {
-        "substitutions": len(substitutions),
-        "insertions": len(insertions),
-        "deletions": len(deletions),
-        "total_errors": total_errors,
-    }
+    def _rate(n: int) -> float:
+        return n / total_ref_words if total_ref_words else 0.0
 
-    # Error rates (relative to total reference words)
-    error_rates = {
-        "substitution_rate": (
-            len(substitutions) / total_ref_words if total_ref_words else 0.0
-        ),
-        "insertion_rate": len(insertions) / total_ref_words if total_ref_words else 0.0,
-        "deletion_rate": len(deletions) / total_ref_words if total_ref_words else 0.0,
-    }
-
-    # Error rate by word length
-    by_word_length = {}
-    for length, stats in sorted(word_stats.items()):
-        by_word_length[length] = {
+    by_word_length = {
+        length: {
             "count": stats["count"],
             "errors": stats["errors"],
             "error_rate": stats["errors"] / stats["count"] if stats["count"] else 0.0,
         }
-
-    # Common substitutions (ref_word -> hyp_word)
-    sub_counter = Counter(substitutions)
-    common_substitutions = [
-        (ref_w, hyp_w, count) for (ref_w, hyp_w), count in sub_counter.most_common(20)
-    ]
-
-    # Common insertions
-    ins_counter = Counter(insertions)
-    common_insertions = [(word, count) for word, count in ins_counter.most_common(20)]
-
-    # Common deletions
-    del_counter = Counter(deletions)
-    common_deletions = [(word, count) for word, count in del_counter.most_common(20)]
-
-    # Most frequently misrecognized words
-    misrecognized_words = word_errors.most_common(20)
-
+        for length, stats in sorted(tally.word_stats.items())
+    }
     return {
-        "error_counts": error_counts,
-        "error_rates": error_rates,
+        "error_counts": {
+            "substitutions": n_sub,
+            "insertions": n_ins,
+            "deletions": n_del,
+            "total_errors": total_errors,
+        },
+        "error_rates": {
+            "substitution_rate": _rate(n_sub),
+            "insertion_rate": _rate(n_ins),
+            "deletion_rate": _rate(n_del),
+        },
         "by_word_length": by_word_length,
-        "common_substitutions": common_substitutions,
-        "common_insertions": common_insertions,
-        "common_deletions": common_deletions,
-        "misrecognized_words": misrecognized_words,
+        "common_substitutions": [
+            (ref_w, hyp_w, count)
+            for (ref_w, hyp_w), count in Counter(tally.substitutions).most_common(20)
+        ],
+        "common_insertions": Counter(tally.insertions).most_common(20),
+        "common_deletions": Counter(tally.deletions).most_common(20),
+        "misrecognized_words": tally.word_errors.most_common(20),
     }
 
 

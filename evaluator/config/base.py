@@ -175,8 +175,17 @@ def estimate_model_memory_gb(
     """
     if model_type is None:
         return 0.0
-    
+
     category_estimates = MODEL_MEMORY_ESTIMATES_GB.get(model_category, {})
+    if model_type not in category_estimates:
+        # F26: a genuinely-unregistered model silently borrows the category default, which
+        # skews GPU-pool packing. Surface it so the estimate map gets the new entry.
+        logger.warning(
+            "No memory estimate for %s model '%s'; using the category default "
+            "(%.1f GB). Add it to MODEL_MEMORY_ESTIMATES_GB['%s'] for accurate packing.",
+            model_category, model_type,
+            category_estimates.get("default", 1.5), model_category,
+        )
     return category_estimates.get(model_type, category_estimates.get("default", 1.5))
 
 
@@ -191,4 +200,11 @@ def get_text_embedding_dim(model_type: Optional[str]) -> Optional[int]:
     """
     if model_type is None:
         return None
+    if model_type not in MODEL_EMBEDDING_DIMS:
+        # F26: unknown dim — the caller falls back to runtime probing; log so a missing
+        # MODEL_EMBEDDING_DIMS entry for a known model is visible.
+        logger.debug(
+            "No embedding dim registered for text model '%s'; resolving at runtime.",
+            model_type,
+        )
     return MODEL_EMBEDDING_DIMS.get(model_type)

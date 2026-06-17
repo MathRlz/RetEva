@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
+from ...utils.progress import progress_disabled
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
 from ..helpers import _search_results_to_keys
@@ -198,7 +199,7 @@ def _stage_query_optimization(s: "RunState") -> None:
     )
     s.cb("phase_1_5_query_opt", 0, s.total, f"Phase 1.5: Query optimization ({cfg.method})")
     optimized = []
-    for q in tqdm(texts, desc=f"Query optimization ({cfg.method})", disable=None):
+    for q in tqdm(texts, desc=f"Query optimization ({cfg.method})", disable=progress_disabled()):
         try:
             optimized.append(fn(q, cfg))
         except Exception as exc:  # noqa: BLE001 — a bad query falls back to the original
@@ -239,7 +240,7 @@ def _stage_multi_query_retrieval(s: "RunState") -> None:
     )
     k = int(s.node_params.get("k", s.k))
     results_with_scores = []
-    for q in tqdm(texts, desc=f"multi_query_retrieval ({method})", disable=None):
+    for q in tqdm(texts, desc=f"multi_query_retrieval ({method})", disable=progress_disabled()):
         try:
             sub_qs = expand(q, cfg)
         except Exception as exc:  # noqa: BLE001

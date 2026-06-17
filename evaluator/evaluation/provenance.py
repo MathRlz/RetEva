@@ -170,16 +170,57 @@ def resolved_models(config: Any) -> Dict[str, str]:
     return out
 
 
+def dataset_content_fingerprint(dataset: Any) -> Optional[Dict[str, Any]]:
+    """A content fingerprint of the evaluated dataset (R1 reproducibility).
+
+    Records the corpus + question counts and a stable SHA-256 over the corpus doc ids + text,
+    so two runs can tell whether they evaluated *the same data* — turning "the numbers moved"
+    into "the corpus changed" (or not). Deterministic for a fixed dataset; ``None`` when the
+    dataset exposes neither a corpus nor a length. The corpus is re-read once (already loaded
+    for embedding); questions are counted, not hashed (hashing them would reload audio).
+    """
+    if dataset is None:
+        return None
+    info: Dict[str, Any] = {}
+    try:
+        if hasattr(dataset, "get_corpus"):
+            corpus = list(dataset.get_corpus())
+            digest = hashlib.sha256()
+            for doc in corpus:
+                if isinstance(doc, dict):
+                    doc_id = str(doc.get("doc_id", ""))
+                    text = str(doc.get("text", ""))
+                else:
+                    doc_id, text = "", str(doc)
+                digest.update(doc_id.encode("utf-8"))
+                digest.update(b"\x1f")
+                digest.update(text.encode("utf-8"))
+                digest.update(b"\x1e")
+            info["corpus_docs"] = len(corpus)
+            info["corpus_sha256"] = digest.hexdigest()[:16]
+    except Exception as exc:
+        logger.debug("corpus fingerprint skipped: %s", exc)
+    try:
+        info["questions"] = len(dataset)
+    except (TypeError, AttributeError) as exc:
+        logger.debug("question-count fingerprint skipped: %s", exc)
+    return info or None
+
+
 def build_provenance(
     config: Any,
     *,
     seed: Optional[int] = None,
+    dataset: Optional[Dict[str, Any]] = None,
+    failure_analysis: Optional[Dict[str, Any]] = None,
     timing: Optional[Dict[str, float]] = None,
     dropped: Optional[Dict[str, int]] = None,
     dropped_by_branch: Optional[Dict[str, List[str]]] = None,
     dropped_by_node: Optional[Dict[str, List[str]]] = None,
     cache_stats: Optional[Dict[str, Any]] = None,
     cost: Optional[Dict[str, Any]] = None,
+    offload: Optional[Dict[str, Any]] = None,
+    models: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assemble the ``report.provenance`` block for a run.
 
@@ -193,12 +234,22 @@ def build_provenance(
     """
     prov: Dict[str, Any] = {
         "config_hash": config_hash(config) if config is not None else None,
-        "models": resolved_models(config),
+        # Structured per-pipeline identity when the caller supplies it (F30 — type/size/dim/
+        # pooling/embedding_space/model_path/adapter + retrieval knobs, so a result is
+        # reproducible/groupable); else the lightweight "type:name" map from the config.
+        "models": models if models is not None else resolved_models(config),
         "seed": seed,
         "versions": _library_versions(),
         "git_commit": _git_commit(),
         "determinism": _determinism_state(),
     }
+    if dataset:
+        # Content fingerprint (R1) — corpus/question counts + corpus hash so a reader can tell
+        # whether two runs evaluated the same data. Deterministic for a fixed dataset.
+        prov["dataset"] = dict(dataset)
+    if failure_analysis:
+        # Per-item failure attribution (R7) — only present when items were actually dropped.
+        prov["failure_analysis"] = dict(failure_analysis)
     if timing:
         prov["timing"] = dict(timing)
     if dropped:
@@ -213,4 +264,8 @@ def build_provenance(
         prov["cache"] = dict(cache_stats)
     if cost:
         prov["cost"] = dict(cost)
+    if offload:
+        # Soft-CPU offload events (2c) — only present when a model was actually parked warm,
+        # so the default (full-free) policy leaves the block absent. Deterministic per run.
+        prov["offload"] = dict(offload)
     return prov

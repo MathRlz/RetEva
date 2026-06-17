@@ -17,11 +17,39 @@ import json
 import os
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
 from ..logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class ProgressEvent:
+    """The typed, stable progress contract (R7) an external dashboard can consume.
+
+    A node-lifecycle event with the DAG position; ``extra`` carries event-specific fields
+    (e.g. ``duration_s`` on ``node_complete``). ``to_record`` is the JSONL wire form — the
+    same flat dict the file/callback already emitted, so this typing is additive.
+    """
+
+    ts: float
+    event: str  # "node_start" | "node_complete" | …
+    node: str
+    level: int
+    total_levels: int
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_record(self) -> Dict[str, Any]:
+        return {
+            "ts": self.ts,
+            "event": self.event,
+            "node": self.node,
+            "level": self.level,
+            "total_levels": self.total_levels,
+            **self.extra,
+        }
 
 
 class ProgressSink:
@@ -55,14 +83,15 @@ class ProgressSink:
         """Record one event (``node_start`` / ``node_complete`` / …). Best-effort: an I/O or
         callback error is logged, never raised — observability must not break the run.
         """
-        record: Dict[str, Any] = {
-            "ts": round(time.time(), 3),
-            "event": event,
-            "node": node,
-            "level": level,
-            "total_levels": self._total_levels,
-        }
-        record.update(extra)
+        evt = ProgressEvent(
+            ts=round(time.time(), 3),
+            event=event,
+            node=node,
+            level=level,
+            total_levels=self._total_levels,
+            extra=dict(extra),
+        )
+        record = evt.to_record()
         message = f"{event} {node}".strip()
         with self._lock:
             if self._path:

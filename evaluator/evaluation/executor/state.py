@@ -137,6 +137,9 @@ class RunState:
     # uses it (frees the device mid-run). Off unless a provider + on_finish policy apply.
     service_provider: Any = field(default=None, metadata=_SHARED)
     offload_after_stage: bool = field(default=False, metadata=_SHARED)
+    # Soft-CPU offload (2c): release-after-last-use parks the model warm on host RAM instead
+    # of freeing it, so a later stage/run reuses it with a CPU↔device move (no full reload).
+    soft_cpu_offload: bool = field(default=False, metadata=_SHARED)
     # Multi-dataset runtime (B1): {dataset_id → loaded QueryDataset} for graphs with several
     # dataset_source nodes; empty in single-source mode (the dataset_source handler then uses
     # `dataset`). A node selects its source via `current_node.params.dataset`.

@@ -15,12 +15,6 @@ if TYPE_CHECKING:
     from ...pipeline.types import PipelineBundle
 
 from ...datasets import QueryDataset
-from ...pipeline import (
-    ASRPipelineProtocol,
-    TextEmbeddingPipelineProtocol,
-    AudioEmbeddingPipelineProtocol,
-    RetrievalPipelineProtocol,
-)
 from ...storage.cache import CacheManager
 from ...logging_config import get_logger, log_cache_stats, node_logger
 from ...metrics.domain_terms import load_term_weights
@@ -45,27 +39,13 @@ def _node_kind(node) -> str:
 
 def run_graph(
     dataset: QueryDataset,
-    retrieval_pipeline: Optional[RetrievalPipelineProtocol] = None,
-    asr_pipeline: Optional[ASRPipelineProtocol] = None,
-    text_embedding_pipeline: Optional[TextEmbeddingPipelineProtocol] = None,
-    audio_embedding_pipeline: Optional[AudioEmbeddingPipelineProtocol] = None,
-    cache_manager: Optional[CacheManager] = None,
-    k: int = 10,
-    batch_size: int = 32,
-    trace_limit: int = 0,
-    features: Optional["RunFeatures"] = None,
-    num_workers: int = 0,
-    checkpoint_interval: int = 500,
-    experiment_id: Optional[str] = None,
-    resume_from_checkpoint: bool = True,
-    progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
-    oracle_mode: bool = False,
+    context: "EvaluationContext",
+    *,
     service_provider: Any = None,
     offload_policy: str = "never",
     eval_config: Any = None,
     load_info: Any = None,
     graph_override: Any = None,
-    context: Optional["EvaluationContext"] = None,
 ) -> RunResults:
     """Optimized phased evaluation - processes entire dataset in phases.
 
@@ -79,24 +59,15 @@ def run_graph(
 
     Args:
         dataset: QueryDataset instance containing audio samples and ground truth.
-        retrieval_pipeline: RetrievalPipeline instance for vector search.
-        asr_pipeline: Optional ASRPipeline instance for transcription.
-        text_embedding_pipeline: Optional TextEmbeddingPipeline instance.
-        audio_embedding_pipeline: Optional AudioEmbeddingPipeline instance.
-        cache_manager: Optional CacheManager for checkpointing.
-        k: Number of retrieval results to return. Default: 10.
-        batch_size: Batch size for processing. Default: 32.
-        trace_limit: Limit number of samples (0 = no limit). Default: 0.
-        features: Optional RunFeatures bundling the default-off knobs (LLM
-            judge, answer generation, query optimization, embedding fusion, domain
-            term weights, bootstrap CIs). None = all features disabled.
-        num_workers: Number of DataLoader workers. Default: 0.
-        checkpoint_interval: Save checkpoint every N samples. Default: 500.
-        experiment_id: Unique ID for this experiment (for checkpointing).
-        resume_from_checkpoint: Whether to resume from existing checkpoint.
-        context: Optional EvaluationContext bundling all of the pipeline + execution
-            params above. When provided it supersedes the individual keyword args —
-            the low-parameter entry point.
+        context: EvaluationContext bundling the pipelines + execution params (D1/F5 — the
+            sole entry contract: retrieval/asr/text-emb/audio-emb pipelines, cache_manager,
+            k, batch_size, trace_limit, num_workers, checkpoint_interval, experiment_id,
+            resume_from_checkpoint, progress_callback, oracle_mode, and ``features``).
+        service_provider: Optional model service provider (offload coordination).
+        offload_policy: "never" | "on_finish" — free each stage's model after last use.
+        eval_config: The EvaluationConfig (mode detection, multi-dataset sources, provenance).
+        load_info: Optional model load metadata for the report.
+        graph_override: Optional explicit stage-graph spec replacing the default for the mode.
 
     Returns:
         Dictionary of evaluation metrics including:
@@ -116,17 +87,18 @@ def run_graph(
         Basic usage with ASR and text retrieval::
 
             >>> from evaluator.evaluation import run_graph
+            >>> from evaluator.evaluation.executor.state import EvaluationContext
             >>> from evaluator.pipeline import create_pipeline_from_config
             >>>
             >>> bundle = create_pipeline_from_config(config, cache_manager)
-            >>> results = run_graph(
-            ...     dataset=dataset,
+            >>> context = EvaluationContext(
             ...     retrieval_pipeline=bundle.retrieval_pipeline,
             ...     asr_pipeline=bundle.asr_pipeline,
             ...     text_embedding_pipeline=bundle.text_embedding_pipeline,
             ...     k=5,
-            ...     batch_size=32
+            ...     batch_size=32,
             ... )
+            >>> results = run_graph(dataset, context, eval_config=config)
 
         Interpreting results::
 
@@ -141,37 +113,31 @@ def run_graph(
 
         With checkpointing for long evaluations::
 
-            >>> results = run_graph(
-            ...     dataset=large_dataset,
+            >>> context = EvaluationContext(
             ...     retrieval_pipeline=retrieval,
             ...     asr_pipeline=asr,
             ...     text_embedding_pipeline=text_emb,
             ...     cache_manager=cache,
             ...     checkpoint_interval=100,
             ...     experiment_id="long_eval_run",
-            ...     resume_from_checkpoint=True
+            ...     resume_from_checkpoint=True,
             ... )
+            >>> results = run_graph(large_dataset, context, eval_config=config)
     """
-    # An EvaluationContext bundles the pipeline + execution params; when supplied
-    # it supersedes the individual keyword arguments (which keep their defaults for
-    # direct callers). This is the low-parameter entry point.
-    if context is not None:
-        retrieval_pipeline = context.retrieval_pipeline
-        asr_pipeline = context.asr_pipeline
-        text_embedding_pipeline = context.text_embedding_pipeline
-        audio_embedding_pipeline = context.audio_embedding_pipeline
-        cache_manager = context.cache_manager
-        k = context.k
-        batch_size = context.batch_size
-        trace_limit = context.trace_limit
-        num_workers = context.num_workers
-        checkpoint_interval = context.checkpoint_interval
-        experiment_id = context.experiment_id
-        resume_from_checkpoint = context.resume_from_checkpoint
-        progress_callback = context.progress_callback
-        oracle_mode = context.oracle_mode
-        features = context.features
-    features = features or RunFeatures()
+    # The EvaluationContext is the sole source of the pipeline + execution params (D1/F5).
+    # Only the fields used directly in this function are unpacked; the rest are read from
+    # ``context`` in _setup_execution_context (F6).
+    retrieval_pipeline = context.retrieval_pipeline
+    asr_pipeline = context.asr_pipeline
+    text_embedding_pipeline = context.text_embedding_pipeline
+    audio_embedding_pipeline = context.audio_embedding_pipeline
+    cache_manager = context.cache_manager
+    k = context.k
+    batch_size = context.batch_size
+    trace_limit = context.trace_limit
+    experiment_id = context.experiment_id
+    progress_callback = context.progress_callback
+    features = context.features or RunFeatures()
 
     # Determine mode + build the stage graph (the source of truth for what runs). The
     # config's explicit pipeline_mode wins — cross-modal audio_emb builds a text pipeline
@@ -213,25 +179,13 @@ def run_graph(
 
     # Seed the run state (M2: setup extracted out of the DAG flow).
     state = _setup_execution_context(
+        context=context,
+        features=features,
         dataset=dataset,
         mode=mode,
         stage_graph=stage_graph,
-        features=features,
-        retrieval_pipeline=retrieval_pipeline,
-        asr_pipeline=asr_pipeline,
-        text_embedding_pipeline=text_embedding_pipeline,
-        audio_embedding_pipeline=audio_embedding_pipeline,
-        cache_manager=cache_manager,
         eval_config=eval_config,
         load_info=load_info,
-        k=k,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        checkpoint_interval=checkpoint_interval,
-        experiment_id=experiment_id,
-        resume_from_checkpoint=resume_from_checkpoint,
-        oracle_mode=oracle_mode,
-        trace_limit=trace_limit,
         total=_total,
         cb=_cb,
         t_total=time.perf_counter(),
@@ -239,8 +193,16 @@ def run_graph(
         offload_policy=offload_policy,
     )
 
-    # DAG-driven execution: the stage graph drives what runs and in what order.
-    _execute_stage_graph(state, stage_graph, features.query_opt_config)
+    # DAG-driven execution: the stage graph drives what runs and in what order. With
+    # ``streaming.window_size`` set, run the query side window-by-window (3a) — same RunState,
+    # bounded memory; else the whole-dataset pass.
+    _window = getattr(getattr(eval_config, "streaming", None), "window_size", None)
+    if _window:
+        from .streaming import execute_windowed
+
+        execute_windowed(state, stage_graph, int(_window))
+    else:
+        _execute_stage_graph(state, stage_graph, features.query_opt_config)
 
     _finalize_run(cache_manager, experiment_id)
     # G5: traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
@@ -293,25 +255,13 @@ def _load_multi_dataset_sources(eval_config: Any):
 
 def _setup_execution_context(
     *,
+    context: "EvaluationContext",
+    features: "RunFeatures",
     dataset: Any,
     mode: str,
     stage_graph: Any,
-    features: "RunFeatures",
-    retrieval_pipeline: Any,
-    asr_pipeline: Any,
-    text_embedding_pipeline: Any,
-    audio_embedding_pipeline: Any,
-    cache_manager: Any,
     eval_config: Any,
     load_info: Any,
-    k: int,
-    batch_size: int,
-    num_workers: int,
-    checkpoint_interval: int,
-    experiment_id: Any,
-    resume_from_checkpoint: bool,
-    oracle_mode: bool,
-    trace_limit: int,
     total: int,
     cb: Callable,
     t_total: float,
@@ -320,7 +270,11 @@ def _setup_execution_context(
 ) -> RunState:
     """Build the seeded ``RunState`` for a graph run (M2: extracted from ``run_graph``
     so the DAG flow stays readable): multi-dataset sources + join validation, the
-    feature-config unpacking, offload policy, and the zeroed stage-times map."""
+    feature-config unpacking, offload policy, and the zeroed stage-times map.
+
+    The pipelines + execution params come from ``context`` (D1/F6 — no longer re-listed as
+    a dozen individual params); ``features`` is the caller-normalized feature bundle.
+    """
     dataset_sources, disable_ir_metrics, join_warning = _load_multi_dataset_sources(
         eval_config
     )
@@ -330,26 +284,26 @@ def _setup_execution_context(
         dataset_sources=dataset_sources,
         disable_ir_metrics=disable_ir_metrics,
         join_warning=join_warning,
-        retrieval_pipeline=retrieval_pipeline,
-        asr_pipeline=asr_pipeline,
-        text_embedding_pipeline=text_embedding_pipeline,
-        audio_embedding_pipeline=audio_embedding_pipeline,
-        cache_manager=cache_manager,
+        retrieval_pipeline=context.retrieval_pipeline,
+        asr_pipeline=context.asr_pipeline,
+        text_embedding_pipeline=context.text_embedding_pipeline,
+        audio_embedding_pipeline=context.audio_embedding_pipeline,
+        cache_manager=context.cache_manager,
         config=eval_config,
         load_info=load_info,
-        k=k,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        checkpoint_interval=checkpoint_interval,
-        experiment_id=experiment_id,
-        resume_from_checkpoint=resume_from_checkpoint,
-        oracle_mode=oracle_mode,
+        k=context.k,
+        batch_size=context.batch_size,
+        num_workers=context.num_workers,
+        checkpoint_interval=context.checkpoint_interval,
+        experiment_id=context.experiment_id,
+        resume_from_checkpoint=context.resume_from_checkpoint,
+        oracle_mode=context.oracle_mode,
         embedding_fusion_config=features.embedding_fusion_config,
         query_opt_config=features.query_opt_config,
         query_correction_config=features.query_correction_config,
         answer_gen_config=features.answer_gen_config,
         judge_config=features.judge_config,
-        trace_limit=trace_limit,
+        trace_limit=context.trace_limit,
         term_weights=features.term_weights,
         compute_confidence_intervals=features.compute_confidence_intervals,
         total=total,
@@ -357,7 +311,11 @@ def _setup_execution_context(
         t_total=t_total,
         service_provider=service_provider,
         offload_after_stage=(
-            service_provider is not None and offload_policy == "on_finish"
+            service_provider is not None
+            and offload_policy in ("on_finish", "on_finish_soft_cpu")
+        ),
+        soft_cpu_offload=(
+            service_provider is not None and offload_policy == "on_finish_soft_cpu"
         ),
         refine_in_graph=any(
             _node_kind(n) in ("rerank", "mmr", "threshold") for n in stage_graph.nodes
@@ -377,6 +335,13 @@ def _setup_execution_context(
         "embedding_s": 0.0,
         "retrieval_s": 0.0,
     }
+    # Soft-CPU offload (2c): size the provider's warm pool from config before any release.
+    if state.soft_cpu_offload and hasattr(service_provider, "configure_soft_offload"):
+        sr = getattr(eval_config, "service_runtime", None)
+        service_provider.configure_soft_offload(
+            max_warm=getattr(sr, "soft_offload_max_warm", 2),
+            ttl_s=getattr(sr, "soft_offload_ttl_s", None),
+        )
     return state
 
 
@@ -456,7 +421,7 @@ def run_from_bundle(
         getattr(config, "compute_oracle_baseline", False)
         and bundle.mode == "asr_text_retrieval"
     )
-    _shared_kwargs = dict(
+    context = EvaluationContext(
         retrieval_pipeline=bundle.retrieval_pipeline,
         asr_pipeline=bundle.asr_pipeline,
         text_embedding_pipeline=bundle.text_embedding_pipeline,
@@ -472,16 +437,20 @@ def run_from_bundle(
         experiment_id=config.experiment_name,
         resume_from_checkpoint=getattr(config, "resume_from_checkpoint", True),
         progress_callback=progress_callback,
+        features=features,
+    )
+    # Non-context run params (not bundled in EvaluationContext): provider + report inputs.
+    _run_kwargs = dict(
         service_provider=bundle.service_provider,
         eval_config=config,
         load_info=load_info,
         graph_override=getattr(config, "graph_override", None),
     )
     results = run_graph(
-        dataset=dataset,
-        features=features,
+        dataset,
+        context,
         offload_policy="never" if _oracle_will_run else _offload_policy,
-        **_shared_kwargs,
+        **_run_kwargs,
     )
 
     if (
@@ -499,12 +468,14 @@ def run_from_bundle(
             answer_gen_config=None,
             compute_confidence_intervals=False,
         )
+        oracle_context = _replace(
+            context, oracle_mode=True, features=oracle_features, trace_limit=0
+        )
         oracle_results = run_graph(
-            dataset=dataset,
-            oracle_mode=True,
-            features=oracle_features,
+            dataset,
+            oracle_context,
             offload_policy=_offload_policy,  # last use of these pipelines → safe to offload
-            **dict(_shared_kwargs, trace_limit=0),
+            **_run_kwargs,
         )
         actual_mrr = results.get("MRR", 0.0)
         oracle_mrr = oracle_results.get("MRR", 0.0)

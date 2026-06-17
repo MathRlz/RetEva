@@ -49,7 +49,7 @@ class ItemSet:
     be unique. Instances are treated as immutable — every operation returns a new ``ItemSet``.
     """
 
-    __slots__ = ("_ids", "_values")
+    __slots__ = ("_ids", "_values", "_index_cache")
 
     def __init__(self, ids: Sequence[str], values: Any) -> None:
         ids = [str(i) for i in ids]
@@ -59,10 +59,16 @@ class ItemSet:
                 f"ItemSet: {len(ids)} ids but {n_vals} values (must align 1:1)"
             )
         if len(set(ids)) != len(ids):
-            dupes = sorted({i for i in ids if ids.count(i) > 1})
+            # O(n) duplicate report (was O(n²) via list.count per id) — only on this
+            # already-invalid error path, but cheap to keep linear (H2).
+            from collections import Counter
+
+            dupes = sorted(i for i, c in Counter(ids).items() if c > 1)
             raise ValueError(f"ItemSet: duplicate ids {dupes}")
         self._ids: List[str] = ids
         self._values: Any = values
+        # Lazily-built id→row index, cached because ItemSet is immutable (M1).
+        self._index_cache: dict = None
 
     # ── constructors ──────────────────────────────────────────────────
     @classmethod
@@ -78,6 +84,28 @@ class ItemSet:
     @classmethod
     def empty(cls) -> "ItemSet":
         return cls([], [])
+
+    @classmethod
+    def concat(cls, parts: "Iterable[ItemSet]") -> "ItemSet":
+        """Concatenate ItemSets in order into one (the windowed-execution accumulator, 3a).
+
+        Ids stay in part-then-row order and must be globally unique (the ctor enforces it, so
+        overlapping windows are a loud error). All-list parts stay a list; all-ndarray parts
+        with matching width stack into one 2-D array (the vectorized path is preserved). An
+        empty input is the empty set."""
+        parts = [p for p in parts]
+        if not parts:
+            return cls.empty()
+        ids: List[str] = []
+        for p in parts:
+            ids.extend(p._ids)
+        arrays = [p._values for p in parts if len(p) > 0]
+        if arrays and all(isinstance(v, np.ndarray) for v in arrays):
+            return cls(ids, np.concatenate(arrays, axis=0))
+        values: List[Any] = []
+        for p in parts:
+            values.extend(list(p._values))
+        return cls(ids, values)
 
     # ── access ────────────────────────────────────────────────────────
     @property
@@ -172,8 +200,13 @@ class ItemSet:
     # ── internals ─────────────────────────────────────────────────────
     @property
     def _index(self) -> dict:
-        # built lazily per call set; ids are small enough that this is fine
-        return {item_id: i for i, item_id in enumerate(self._ids)}
+        # Built once and cached (M1: was rebuilt on every has/value_for/select/align call,
+        # i.e. O(n) per lookup → O(n²) over an align loop). Safe because ItemSet is immutable.
+        idx = self._index_cache
+        if idx is None:
+            idx = {item_id: i for i, item_id in enumerate(self._ids)}
+            self._index_cache = idx
+        return idx
 
     def _row(self, i: int) -> Any:
         return self._values[i]

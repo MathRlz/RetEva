@@ -8,6 +8,9 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 import numpy as np
 
 from .base import AudioSample
+from ...logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # Supported audio formats
@@ -251,8 +254,9 @@ class LocalAudioDatasetLoader:
             # Load audio
             try:
                 audio_array, sr = self._load_audio(audio_path)
-            except (ImportError, OSError, RuntimeError, ValueError):
-                # Skip files that can't be loaded
+            except (ImportError, OSError, RuntimeError, ValueError) as exc:
+                # Skip files that can't be loaded — but log so a shrinking dataset is visible
+                logger.warning("skipping unreadable audio file %s: %s", audio_path, exc)
                 continue
             
             # Collect metadata
@@ -297,9 +301,10 @@ class LocalAudioDatasetLoader:
             # Load audio
             try:
                 audio_array, sr = self._load_audio(audio_path)
-            except (ImportError, OSError, RuntimeError, ValueError):
+            except (ImportError, OSError, RuntimeError, ValueError) as exc:
+                logger.warning("skipping unreadable audio file %s: %s", audio_path, exc)
                 continue
-            
+
             samples.append(AudioSample(
                 audio_array=audio_array,
                 sampling_rate=sr,

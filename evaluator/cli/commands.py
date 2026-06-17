@@ -102,6 +102,17 @@ def _save_results(results, output_path, config, logger) -> None:
     with open(output_path, "w") as f:
         json.dump(results, f, indent=4)
 
+    # R1: persist the *resolved* config (devices/models/effective batch size filled in) next
+    # to the report, so a reproduction uses what actually ran, not the submitted config.
+    try:
+        _base = output_path[:-5] if output_path.endswith(".json") else output_path
+        resolved_path = f"{_base}.config_resolved.json"
+        with open(resolved_path, "w") as cf:
+            json.dump(config.to_dict(), cf, indent=2, default=str)
+        logger.info(f"Resolved config saved to: {resolved_path}")
+    except (OSError, AttributeError, TypeError) as exc:
+        logger.warning("could not write resolved config: %s", exc)
+
     logger.info("=" * 60)
     logger.info("Evaluation Complete!")
     logger.info("=" * 60)

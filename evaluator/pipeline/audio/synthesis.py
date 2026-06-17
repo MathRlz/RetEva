@@ -8,6 +8,7 @@ from pathlib import Path
 import logging
 
 from tqdm import tqdm
+from ...utils.progress import progress_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,7 @@ class AudioSynthesizer:
 
         for i, text in tqdm(
             enumerate(texts), total=total, desc="TTS synthesis", unit="clip",
-            disable=None,
+            disable=progress_disabled(),
         ):
             output_path = None
             if output_dir:

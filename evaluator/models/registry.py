@@ -43,7 +43,8 @@ class ModelRegistry:
         self._aliases: Dict[str, str] = {}  # alias -> canonical model_type
 
     def _ensure_populated(self) -> None:
-        """Import the family module once so its decorators register models."""
+        """Import the family module once so its decorators register models, then discover any
+        third-party model plugins (entry-point group ``evaluator.models``, §5)."""
         if self._populated:
             return
         self._populated = True  # set first: registration during import re-enters
@@ -51,6 +52,12 @@ class ModelRegistry:
 
         assert self._module is not None
         importlib.import_module(self._module)
+        try:
+            from ..plugins import load_plugins
+
+            load_plugins("evaluator.models")
+        except Exception as exc:  # discovery is best-effort, never fatal
+            logger.debug("model plugin discovery skipped: %s", exc)
 
     def register(
         self,

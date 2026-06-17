@@ -33,6 +33,7 @@ from .vector_db import VectorDBConfig
 from .device_pool import DevicePoolConfig
 from .tracking import TrackingConfig
 from .service_runtime import ServiceRuntimeConfig
+from .streaming import StreamingConfig
 from .dataset_sink import DatasetSinkConfig
 from .base import estimate_model_memory_gb
 from .base import get_text_embedding_dim  # noqa: F401 — re-exported for importers
@@ -149,6 +150,9 @@ class EvaluationConfig:
     """
 
     experiment_name: str = "evaluation"
+    # Optional group id tying several runs into one logical experiment (e.g. a sweep); the
+    # leaderboard can pivot/compare a group (architecture-improvements §3).
+    experiment_group: Optional[str] = None
     output_dir: str = "evaluation_results"
 
     cache: CacheConfig = field(default_factory=CacheConfig)
@@ -163,6 +167,7 @@ class EvaluationConfig:
     device_pool: Optional[DevicePoolConfig] = None
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     service_runtime: ServiceRuntimeConfig = field(default_factory=ServiceRuntimeConfig)
+    streaming: StreamingConfig = field(default_factory=StreamingConfig)
     dataset_sink: DatasetSinkConfig = field(default_factory=DatasetSinkConfig)
 
     checkpoint_enabled: bool = True
@@ -185,6 +190,11 @@ class EvaluationConfig:
 
     # `parallel_enabled` drives the DAG executor's intra-level branch concurrency.
     parallel_enabled: bool = False
+    # CPU-bound per-item stage parallelism (Roadmap 4b): "sync" (default — today's in-line map),
+    # "thread", or "process" (a ProcessPool for GIL-bound stages). The map is order-preserving and
+    # determinism-neutral (per-item seeding makes each item independent of the worker).
+    cpu_stage_executor: str = "sync"
+    cpu_stage_workers: int = 0  # 0 = auto (os.cpu_count)
 
     # Backward-compatible shortcuts: config.judge <-> config.features.judge, etc.
     # Keeps existing call sites working after the features grouping (#7).
@@ -351,6 +361,7 @@ class EvaluationConfig:
             "vector_db",
             "device_pool",
             "dataset_sink",
+            "streaming",
         }
     )
     _RUNTIME_SCALARS = frozenset(
@@ -359,6 +370,8 @@ class EvaluationConfig:
             "checkpoint_interval",
             "resume_from_checkpoint",
             "parallel_enabled",
+            "cpu_stage_executor",
+            "cpu_stage_workers",
             "compute_oracle_baseline",
             "compute_confidence_intervals",
             "domain_term_weights_file",
@@ -387,6 +400,7 @@ class EvaluationConfig:
         "vector_db": VectorDBConfig,
         "tracking": TrackingConfig,
         "service_runtime": ServiceRuntimeConfig,
+        "streaming": StreamingConfig,
         "dataset_sink": DatasetSinkConfig,
     }
 

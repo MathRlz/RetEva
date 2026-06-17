@@ -119,7 +119,12 @@ def check_backend_dependencies(vector_db_config) -> None:
 
 
 def create_vector_store_from_config(vector_db_config, embedding_dim: Optional[int] = None):
-    from ..storage.vector_store import InMemoryVectorStore, FaissVectorStore, FaissGpuVectorStore
+    from ..storage.vector_store import (
+        InMemoryVectorStore,
+        FaissVectorStore,
+        FaissGpuVectorStore,
+        FaissMmapVectorStore,
+    )
 
     store_type = vector_db_config.type
 
@@ -158,7 +163,7 @@ def create_vector_store_from_config(vector_db_config, embedding_dim: Optional[in
     if store_type == "inmemory":
         return InMemoryVectorStore()
 
-    if store_type in ("faiss", "faiss_gpu"):
+    if store_type in ("faiss", "faiss_gpu", "faiss_mmap"):
         if embedding_dim is None:
             raise ValueError(
                 f"vector_db.type='{store_type}' requires embedding_dim. "
@@ -166,10 +171,13 @@ def create_vector_store_from_config(vector_db_config, embedding_dim: Optional[in
             )
         if store_type == "faiss":
             return FaissVectorStore(embedding_dim)
+        if store_type == "faiss_mmap":
+            # Off-RAM corpus/index (3b): mmap index + Parquet payloads.
+            return FaissMmapVectorStore(embedding_dim)
         res = getattr(vector_db_config, "gpu_id", 0)
         return FaissGpuVectorStore(embedding_dim, gpu_id=res if isinstance(res, int) else 0)
 
-    available = "inmemory, faiss, faiss_gpu, chromadb, qdrant"
+    available = "inmemory, faiss, faiss_gpu, faiss_mmap, chromadb, qdrant"
     raise ValueError(f"Unknown vector store type: '{store_type}'.\nAvailable types: {available}")
 
 
@@ -234,6 +242,93 @@ def _create_retrieval_pipeline(config, cache_manager, reranker):
     )
 
 
+class _ModelBuilders:
+    """Builds each model family for a run, hoisted out of ``create_pipeline_from_config``
+    (F10/D4) so that function is a flat per-mode dispatch rather than a nest of closures.
+
+    One place holds the device resolution (GPU pool vs config device) and the
+    provider-vs-standalone-factory fallback; the per-model argument lists stay explicit.
+    """
+
+    def __init__(self, config, service_provider, device_pool):
+        self.mcfg = config.model
+        self.service_provider = service_provider
+        self.device_pool = device_pool
+
+    def _get_device(self, model_category: str, model_type: str, config_device: str) -> str:
+        if self.device_pool is not None and model_type is not None:
+            from ..config import estimate_model_memory_gb
+
+            memory_gb = estimate_model_memory_gb(model_category, model_type)
+            return self.device_pool.allocate(model_category, memory_gb)
+        return config_device
+
+    def _build(self, model_category, model_type, config_device, from_provider, from_factory):
+        """Resolve device then build via the shared service provider when present, else the
+        standalone factory."""
+        dev = self._get_device(model_category, model_type, config_device)
+        if self.service_provider is not None:
+            return from_provider(dev)
+        return from_factory(dev)
+
+    def asr(self):
+        mcfg = self.mcfg
+        return self._build(
+            "asr", mcfg.asr_model_type, mcfg.asr_device,
+            lambda dev: self.service_provider.get_asr_model(
+                mcfg.asr_model_type, mcfg.asr_model_name, mcfg.asr_adapter_path, dev,
+            ),
+            lambda dev: create_asr_model(
+                mcfg.asr_model_type,
+                model_name=mcfg.asr_model_name,
+                adapter_path=mcfg.asr_adapter_path,
+                device=dev,
+                size=mcfg.asr_size,
+                quantization=mcfg.quantization_for("asr"),
+                **mcfg.asr_params,
+            ),
+        )
+
+    def text_emb(self):
+        mcfg = self.mcfg
+        return self._build(
+            "text_embedding", mcfg.text_emb_model_type, mcfg.text_emb_device,
+            lambda dev: self.service_provider.get_text_embedding_model(
+                mcfg.text_emb_model_type, mcfg.text_emb_model_name, dev,
+            ),
+            lambda dev: create_text_embedding_model(
+                mcfg.text_emb_model_type,
+                model_name=mcfg.text_emb_model_name,
+                device=dev,
+                size=mcfg.text_emb_size,
+                quantization=mcfg.quantization_for("text_emb"),
+                **mcfg.text_emb_params,
+            ),
+        )
+
+    def audio_emb(self):
+        mcfg = self.mcfg
+        return self._build(
+            "audio_embedding", mcfg.audio_emb_model_type, mcfg.audio_emb_device,
+            lambda dev: self.service_provider.get_audio_embedding_model(
+                mcfg.audio_emb_model_type, mcfg.audio_emb_model_name,
+                mcfg.audio_emb_model_path, mcfg.audio_emb_dim,
+                mcfg.audio_emb_dropout, dev,
+            ),
+            lambda dev: create_audio_embedding_model(
+                mcfg.audio_emb_model_type,
+                model_name=mcfg.audio_emb_model_name,
+                model_path=mcfg.audio_emb_model_path,
+                emb_dim=mcfg.audio_emb_dim,
+                dropout=mcfg.audio_emb_dropout,
+                device=dev,
+                size=mcfg.audio_emb_size,
+                quantization=mcfg.quantization_for("audio_emb"),
+                **mcfg.audio_emb_params,
+            ),
+        )
+
+
 def create_pipeline_from_config(
     config,
     cache_manager: CacheManager,
@@ -270,89 +365,21 @@ def create_pipeline_from_config(
     
     # Create GPU pool if configured
     device_pool = create_gpu_pool_from_config(config)
-    
-    # Helper to get device (from pool or config)
-    def get_device(model_category: str, model_type: str, config_device: str) -> str:
-        if device_pool is not None and model_type is not None:
-            from ..config import estimate_model_memory_gb
-            memory_gb = estimate_model_memory_gb(model_category, model_type)
-            return device_pool.allocate(model_category, memory_gb)
-        return config_device
-    
+
     # Create reranker if enabled
     reranker = create_reranker_from_config(config.vector_db, service_provider=service_provider)
-    
-    # Shorthand helpers
+
     mcfg = config.model
-
-    def _build(model_category, model_type, config_device, from_provider, from_factory):
-        """Resolve device (pool or config) then build via the shared service provider
-        when present, else the standalone factory. Single place the provider-vs-factory
-        fallback + device allocation live; the per-model arg lists stay explicit below."""
-        dev = get_device(model_category, model_type, config_device)
-        if service_provider is not None:
-            return from_provider(dev)
-        return from_factory(dev)
-
-    def _make_asr():
-        return _build(
-            "asr", mcfg.asr_model_type, mcfg.asr_device,
-            lambda dev: service_provider.get_asr_model(
-                mcfg.asr_model_type, mcfg.asr_model_name, mcfg.asr_adapter_path, dev,
-            ),
-            lambda dev: create_asr_model(
-                mcfg.asr_model_type,
-                model_name=mcfg.asr_model_name,
-                adapter_path=mcfg.asr_adapter_path,
-                device=dev,
-                size=mcfg.asr_size,
-                **mcfg.asr_params,
-            ),
-        )
-
-    def _make_text_emb():
-        return _build(
-            "text_embedding", mcfg.text_emb_model_type, mcfg.text_emb_device,
-            lambda dev: service_provider.get_text_embedding_model(
-                mcfg.text_emb_model_type, mcfg.text_emb_model_name, dev,
-            ),
-            lambda dev: create_text_embedding_model(
-                mcfg.text_emb_model_type,
-                model_name=mcfg.text_emb_model_name,
-                device=dev,
-                size=mcfg.text_emb_size,
-                **mcfg.text_emb_params,
-            ),
-        )
-
-    def _make_audio_emb():
-        return _build(
-            "audio_embedding", mcfg.audio_emb_model_type, mcfg.audio_emb_device,
-            lambda dev: service_provider.get_audio_embedding_model(
-                mcfg.audio_emb_model_type, mcfg.audio_emb_model_name,
-                mcfg.audio_emb_model_path, mcfg.audio_emb_dim,
-                mcfg.audio_emb_dropout, dev,
-            ),
-            lambda dev: create_audio_embedding_model(
-                mcfg.audio_emb_model_type,
-                model_name=mcfg.audio_emb_model_name,
-                model_path=mcfg.audio_emb_model_path,
-                emb_dim=mcfg.audio_emb_dim,
-                dropout=mcfg.audio_emb_dropout,
-                device=dev,
-                size=mcfg.audio_emb_size,
-                **mcfg.audio_emb_params,
-            ),
-        )
+    builders = _ModelBuilders(config, service_provider, device_pool)
 
     # Create models based on mode
     if mode == "audio_emb_retrieval":
-        audio_emb_pipeline = AudioEmbeddingPipeline(_make_audio_emb(), cache_manager)
+        audio_emb_pipeline = AudioEmbeddingPipeline(builders.audio_emb(), cache_manager)
         # Cross-modal corpus: with a text embedder configured, the corpus is text-embedded
         # into the shared space (audio query vs text corpus — the APM self-retrieval setup).
         # Without one, corpus_embedding falls back to the audio-corpus path (TTS + audio-embed).
         if mcfg.text_emb_model_type:
-            text_emb_pipeline = TextEmbeddingPipeline(_make_text_emb(), cache_manager)
+            text_emb_pipeline = TextEmbeddingPipeline(builders.text_emb(), cache_manager)
         retrieval_pipeline = _create_retrieval_pipeline(config, cache_manager, reranker)
 
     elif mode == "audio_text_retrieval":
@@ -360,25 +387,25 @@ def create_pipeline_from_config(
         # for every other pipeline mode.
         from ..models.a2e import MultimodalClapStyleModel
 
-        audio_emb_model = _make_audio_emb()
+        audio_emb_model = builders.audio_emb()
 
         is_multimodal = (
             mcfg.text_emb_model_type == "clap_text" and
             isinstance(audio_emb_model, MultimodalClapStyleModel)
         )
-        text_emb_model = audio_emb_model if is_multimodal else _make_text_emb()
+        text_emb_model = audio_emb_model if is_multimodal else builders.text_emb()
 
         audio_emb_pipeline = AudioEmbeddingPipeline(audio_emb_model, cache_manager)
         text_emb_pipeline = TextEmbeddingPipeline(text_emb_model, cache_manager)
         retrieval_pipeline = _create_retrieval_pipeline(config, cache_manager, reranker)
 
     elif mode == "asr_text_retrieval":
-        asr_pipeline = ASRPipeline(_make_asr(), cache_manager)
-        text_emb_pipeline = TextEmbeddingPipeline(_make_text_emb(), cache_manager)
+        asr_pipeline = ASRPipeline(builders.asr(), cache_manager)
+        text_emb_pipeline = TextEmbeddingPipeline(builders.text_emb(), cache_manager)
         retrieval_pipeline = _create_retrieval_pipeline(config, cache_manager, reranker)
 
     elif mode == "asr_only":
-        asr_pipeline = ASRPipeline(_make_asr(), cache_manager)
+        asr_pipeline = ASRPipeline(builders.asr(), cache_manager)
         
     else:
         available_modes = [spec.mode for spec in list_pipeline_mode_specs()]

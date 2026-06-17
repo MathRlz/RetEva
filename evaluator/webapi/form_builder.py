@@ -113,7 +113,7 @@ def create_config_options(
         "reranker_modes": ["none", "token_overlap", "cross_encoder"],
         "service_runtime": {
             "startup_mode": ["lazy", "eager"],
-            "offload_policy": ["on_finish", "never"],
+            "offload_policy": ["on_finish", "never", "on_finish_soft_cpu"],
         },
         "tts_providers": sorted(
             {entry["type"] for entry in normalized_models.get("tts", [])}

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
@@ -10,6 +11,20 @@ from ..models import ASRModel
 from ..utils.cache_helpers import CacheMixin, compute_audio_hash
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class _AsrLoopParams:
+    """Per-run scalar inputs to ``ASRPipeline._run_checkpoint_loop`` (F9/D4): bundles the
+    six plumbing params the batch loop reads so the loop signature stays focused on the
+    moving parts (the DataLoader, the accumulators, the memory manager)."""
+
+    start_idx: int
+    batch_size: int
+    checkpoint_interval: int
+    experiment_id: Optional[str]
+    model_name: str
+    model_version: Optional[str]
 
 
 class ASRPipeline(CacheMixin):
@@ -195,6 +210,7 @@ class ASRPipeline(CacheMixin):
         checkpoint_interval: int = 500,
         experiment_id: Optional[str] = None,
         resume_from_checkpoint: bool = True,
+        warmup_batch_sizing: bool = False,
     ) -> Tuple[List[str], List[str]]:
         """
         Process entire dataset through ASR with caching and checkpointing.
@@ -232,6 +248,12 @@ class ASRPipeline(CacheMixin):
                 all_ground_truth = checkpoint.get("ground_truth", [])
                 logger.info(f"Resuming ASR from checkpoint at sample {start_idx}")
 
+        # Warm-up batch sizing (1b): estimate a GPU-fitting batch from a one-sample forward,
+        # instead of the static `batch_size`. Opt-in, GPU-only, and fully guarded — any failure
+        # (or CPU) falls back to the configured `batch_size`. Batch size is output-invariant.
+        if warmup_batch_sizing and torch.cuda.is_available() and len(dataset) > 0:
+            batch_size = self._warmup_batch_size(dataset, language, memory_manager, batch_size)
+
         # Create collate function that checks cache and preprocesses
         preprocessing_collate_fn = self._make_preprocessing_collate_fn(
             model_name, model_version, language
@@ -253,13 +275,15 @@ class ASRPipeline(CacheMixin):
             data_loader,
             all_hypotheses,
             all_ground_truth,
-            start_idx,
-            batch_size,
-            checkpoint_interval,
-            experiment_id,
-            model_name,
-            model_version,
             memory_manager,
+            _AsrLoopParams(
+                start_idx=start_idx,
+                batch_size=batch_size,
+                checkpoint_interval=checkpoint_interval,
+                experiment_id=experiment_id,
+                model_name=model_name,
+                model_version=model_version,
+            ),
         )
 
         logger.info(f"ASR processing complete: {len(all_hypotheses)} transcriptions")
@@ -344,20 +368,40 @@ class ASRPipeline(CacheMixin):
 
         return preprocessing_collate_fn
 
+    def _warmup_batch_size(self, dataset, language, memory_manager, fallback: int) -> int:
+        """One-sample warm-up → estimated batch (1b). Fully guarded: any error → ``fallback``."""
+        try:
+            sample = dataset[0]
+            audio = torch.as_tensor(sample["audio_array"])
+            sr = int(sample.get("sampling_rate", 16000))
+            lang = sample.get("language", language)
+            est = memory_manager.warm_up_batch_size(
+                lambda: self.model.transcribe([audio], [sr], lang), max_batch=fallback,
+            )
+            if est != fallback:
+                logger.info("ASR warm-up batch sizing: %d → %d", fallback, est)
+            return est
+        except Exception as exc:  # noqa: BLE001 - never let warm-up break the run
+            logger.warning(
+                "ASR warm-up batch sizing failed (%s); using batch_size=%d", exc, fallback
+            )
+            return fallback
+
     def _run_checkpoint_loop(
         self,
         data_loader: Any,
         all_hypotheses: List[str],
         all_ground_truth: List[str],
-        start_idx: int,
-        batch_size: int,
-        checkpoint_interval: int,
-        experiment_id: Optional[str],
-        model_name: str,
-        model_version: Optional[str],
         memory_manager: Any,
+        params: "_AsrLoopParams",
     ) -> Tuple[List[str], List[str]]:
         """Run the batch/checkpoint processing loop over the DataLoader."""
+        start_idx = params.start_idx
+        batch_size = params.batch_size
+        checkpoint_interval = params.checkpoint_interval
+        experiment_id = params.experiment_id
+        model_name = params.model_name
+        model_version = params.model_version
         sample_idx = 0
 
         # Use batch processing context manager for optimized memory management

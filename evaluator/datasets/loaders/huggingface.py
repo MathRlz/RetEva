@@ -156,19 +156,29 @@ class HuggingFaceDatasetLoader:
                 "Install it with: pip install datasets"
             ) from e
         
+        # Reproducibility (R1): support ``repo@revision`` to pin an exact HF dataset
+        # snapshot (commit / tag / branch), so a rerun can't silently pick up an upstream
+        # change. Plain ``repo`` keeps the default (latest) behaviour.
+        path = self.dataset_name
+        revision: Optional[str] = None
+        if "@" in path:
+            path, revision = path.split("@", 1)
+
         load_kwargs: Dict[str, Any] = {
-            "path": self.dataset_name,
+            "path": path,
             "split": self.split,
             "streaming": self.streaming,
             "trust_remote_code": self.trust_remote_code,
         }
-        
+        if revision:
+            load_kwargs["revision"] = revision
+
         if self.subset is not None:
             load_kwargs["name"] = self.subset
-        
+
         if self.cache_dir is not None:
             load_kwargs["cache_dir"] = self.cache_dir
-        
+
         self._dataset = load_dataset(**load_kwargs)
         return self._dataset
     
