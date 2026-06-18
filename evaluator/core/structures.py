@@ -1,12 +1,13 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Literal
+from typing import List, Dict, Optional, Any
 import numpy as np
+
 
 @dataclass
 class QuerySample:
     """
     Single query sample with audio and ground truth transcription.
-    
+
     Attributes:
         audio_array: Float32 waveform numpy array
         sampling_rate: Audio sampling rate (e.g., 16000)
@@ -22,7 +23,7 @@ class QuerySample:
     medical_terms: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     language: str = field(default="en")
-    
+
     def __post_init__(self):
         """Validate and convert audio array to float32."""
         if not isinstance(self.audio_array, np.ndarray):
@@ -30,11 +31,12 @@ class QuerySample:
         elif self.audio_array.dtype != np.float32:
             self.audio_array = self.audio_array.astype(np.float32)
 
+
 @dataclass
 class Document:
     """
     Single document in the retrieval corpus.
-    
+
     Attributes:
         doc_id: Unique identifier for this document
         text: Document text content
@@ -46,11 +48,12 @@ class Document:
     title: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass
 class TranscriptionResult:
     """
     Output from a Speech-to-Text model.
-    
+
     Attributes:
         text: Transcribed text
         confidence: Optional overall confidence score
@@ -64,11 +67,12 @@ class TranscriptionResult:
     processing_time: Optional[float] = None
     raw_output: Optional[Any] = None
 
+
 @dataclass
 class RetrievalResult:
     """
     Single retrieval result for a query.
-    
+
     Attributes:
         doc_id: Document identifier
         score: Retrieval score (higher = more relevant)
@@ -112,4 +116,3 @@ class DatasetManifest:
     corpus_snapshot_id: str = ""
     language: str = "en"
     metadata: Dict[str, Any] = field(default_factory=dict)
-    

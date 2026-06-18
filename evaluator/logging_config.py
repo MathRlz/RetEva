@@ -169,7 +169,7 @@ def log_timing(logger: Optional[logging.Logger] = None):
         @wraps(func)
         def wrapper(*args, **kwargs):
             start_time = time.time()
-            timing_logger.debug("Starting %s", func.__name__)
+            timing_logger.info("Starting %s", func.__name__)
             try:
                 result = func(*args, **kwargs)
                 elapsed = time.time() - start_time
@@ -194,7 +194,7 @@ class TimingContext:
 
     def __enter__(self):
         self.start_time = time.time()
-        timing_logger.debug("Starting: %s", self.name)
+        timing_logger.info("Starting: %s", self.name)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

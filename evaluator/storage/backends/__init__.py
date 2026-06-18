@@ -7,14 +7,14 @@ from ..vector_store import VectorStore, InMemoryVectorStore, FaissVectorStore, F
 
 __all__ = [
     "VectorStore",
-    "InMemoryVectorStore", 
+    "InMemoryVectorStore",
     "FaissVectorStore",
     "FaissGpuVectorStore",
 ]
 
 # Try to import ChromaDB store (optional dependency)
 try:
-    from .chromadb_store import ChromaDBVectorStore
+    from .chromadb_store import ChromaDBVectorStore  # noqa: F401
     __all__.append("ChromaDBVectorStore")
 except ImportError:
     # ChromaDB not installed, skip
@@ -22,7 +22,7 @@ except ImportError:
 
 # Try to import Qdrant store (optional dependency)
 try:
-    from .qdrant_store import QdrantVectorStore
+    from .qdrant_store import QdrantVectorStore  # noqa: F401
     __all__.append("QdrantVectorStore")
 except ImportError:
     # Qdrant client not installed, skip

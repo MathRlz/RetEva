@@ -99,19 +99,28 @@ def _stage_leaderboard_sink(s: RunState) -> None:
 
 
 def _write_resolved_config(s: RunState, out_dir: str, name: str) -> None:
-    """Serialize the resolved EvaluationConfig next to the report (R1). Best-effort."""
-    if s.config is None or not hasattr(s.config, "to_dict"):
+    """Serialize the resolved config — the *executed DAG* — next to the report (R1).
+
+    Node-centric YAML (graph-first Phase 5): the graph that actually ran + its non-graph
+    config, no ``pipeline_mode``. Best-effort."""
+    if s.config is None:
         return
-    import json
     import os
 
+    import yaml
+
+    from ...config.graph_config import resolved_node_config
+
     try:
-        path = os.path.join(out_dir, f"config_resolved_{name}.json")
+        path = os.path.join(out_dir, f"config_resolved_{name}.yaml")
         os.makedirs(out_dir, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump(s.config.to_dict(), fh, indent=2, default=str)
+            yaml.safe_dump(
+                resolved_node_config(s.config), fh,
+                sort_keys=False, default_flow_style=False,
+            )
         logger.info("leaderboard_sink: resolved config → %s", path)
-    except OSError as exc:
+    except Exception as exc:  # noqa: BLE001 - resolved config is a best-effort sidecar
         logger.warning("could not write resolved config: %s", exc)
 
 

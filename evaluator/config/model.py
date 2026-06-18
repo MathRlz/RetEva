@@ -1,8 +1,6 @@
 """Model configuration."""
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Union
-
-from ..config.types import PipelineMode, to_enum
+from typing import Dict, Optional
 
 
 @dataclass
@@ -59,18 +57,15 @@ class ModelConfig:
     # clear warning + full precision). Default None = today's behaviour.
     quantization: Optional[str] = None
 
-    pipeline_mode: Union[str, PipelineMode] = "asr_text_retrieval"
+    # NB: there is no ``pipeline_mode`` — the graph is the spec. A config selects a *template*
+    # (``graph: {mode: …}`` → ``graph_override['template']``) or carries an explicit
+    # ``graph: {nodes}``; ``pipeline/graph/modes._config_template`` resolves it.
 
     def quantization_for(self, family: str) -> Optional[str]:
         """Resolve the quantization strategy for ``family`` ('asr'/'text_emb'/'audio_emb'):
         the per-family override if set, else the global default."""
         return getattr(self, f"{family}_quantization", None) or self.quantization
 
-    def __post_init__(self):
-        """Normalize pipeline_mode to enum."""
-        if isinstance(self.pipeline_mode, str):
-            self.pipeline_mode = to_enum(self.pipeline_mode, PipelineMode)
-    
     def auto_configure_devices(self) -> None:
         """Auto-configure device assignments based on hardware availability.
 

@@ -17,14 +17,14 @@ logger = get_logger(__name__)
 
 def normalize_embeddings(embeddings: np.ndarray, axis: int = -1) -> np.ndarray:
     """L2-normalize embeddings along specified axis.
-    
+
     Args:
         embeddings: Array of embeddings to normalize, shape (n_samples, dim) or (dim,).
         axis: Axis along which to normalize. Default: -1 (last axis).
-        
+
     Returns:
         Normalized embeddings with the same shape as input.
-        
+
     Examples:
         >>> emb = np.array([[1.0, 2.0, 2.0], [3.0, 4.0, 0.0]])
         >>> normed = normalize_embeddings(emb)
@@ -44,13 +44,13 @@ def reduce_dimensions(
     reducer: Optional[Any] = None
 ) -> Tuple[np.ndarray, Any]:
     """Reduce embedding dimensionality using specified method.
-    
+
     Args:
         embeddings: Array of embeddings to reduce, shape (n_samples, dim).
         target_dim: Target dimensionality after reduction.
         method: Reduction method - "pca" or "random_projection".
         reducer: Pre-fitted reducer instance. If None, a new one is created and fitted.
-        
+
     Returns:
         Tuple of (reduced_embeddings, fitted_reducer). When ``reducer is None`` a new one is
         fit on ``embeddings`` and returned — **reuse that same fitted reducer** for any other
@@ -61,7 +61,7 @@ def reduce_dimensions(
 
     Raises:
         ValueError: If method is not supported or target_dim >= current dim.
-        
+
     Examples:
         >>> emb = np.random.randn(100, 2048)
         >>> reduced, reducer = reduce_dimensions(emb, target_dim=1024, method="pca")
@@ -74,7 +74,7 @@ def reduce_dimensions(
             f"No reduction performed."
         )
         return embeddings, None
-    
+
     if method == "pca":
         if reducer is None:
             reducer = PCA(n_components=target_dim, random_state=42)
@@ -102,7 +102,7 @@ def reduce_dimensions(
             f"Unsupported dimension reduction method: {method}. "
             f"Use 'pca' or 'random_projection'."
         )
-    
+
     return reduced, reducer
 
 
@@ -205,26 +205,26 @@ def fuse_embeddings(
     reducer: Optional[Any] = None
 ) -> Tuple[np.ndarray, Optional[Any]]:
     """Fuse audio and text embeddings using configured fusion method.
-    
+
     Supports multiple fusion strategies:
     - Weighted: Weighted combination of normalized embeddings
     - Concatenate: Concatenate embeddings (optionally with dimension reduction)
     - Max Pool: Element-wise maximum across embeddings
     - Average: Simple average of embeddings
-    
+
     Args:
         audio_embeddings: Audio embedding vectors, shape (n_samples, audio_dim) or (audio_dim,).
         text_embeddings: Text embedding vectors, shape (n_samples, text_dim) or (text_dim,).
         config: EmbeddingFusionConfig specifying fusion parameters.
         reducer: Optional pre-fitted dimension reducer (for concatenate mode).
-        
+
     Returns:
         Tuple of (fused_embeddings, reducer). Reducer is None unless concatenate mode
         with dimension reduction is used.
-        
+
     Raises:
         ValueError: If embeddings have mismatched batch sizes or incompatible dimensions.
-        
+
     Examples:
         >>> audio_emb = np.random.randn(10, 768)
         >>> text_emb = np.random.randn(10, 1024)
@@ -242,33 +242,33 @@ def fuse_embeddings(
         audio_embeddings,
         text_embeddings,
     )
-    
+
     # Validate batch sizes
     if audio_embeddings.shape[0] != text_embeddings.shape[0]:
         raise ValueError(
             f"Batch size mismatch: audio has {audio_embeddings.shape[0]} samples, "
             f"text has {text_embeddings.shape[0]} samples"
         )
-    
+
     audio_dim = audio_embeddings.shape[1]
     text_dim = text_embeddings.shape[1]
-    
+
     logger.debug(
         f"Fusing embeddings: audio {audio_embeddings.shape}, "
         f"text {text_embeddings.shape}, method={config.fusion_method}"
     )
-    
+
     # Check dimension requirements
     if config.require_same_dimensions and audio_dim != text_dim:
         raise ValueError(
             f"require_same_dimensions=True but audio_dim={audio_dim} != text_dim={text_dim}"
         )
-    
+
     # Normalize if requested
     if config.normalize_before_fusion:
         audio_embeddings = normalize_embeddings(audio_embeddings)
         text_embeddings = normalize_embeddings(text_embeddings)
-    
+
     fusion_method = config.fusion_method
     if fusion_method == "weighted":
         return _fuse_weighted(audio_embeddings, text_embeddings, config), None
@@ -287,18 +287,18 @@ def validate_fusion_config(
     text_dim: int
 ) -> None:
     """Validate fusion configuration against embedding dimensions.
-    
+
     Checks that the configuration is compatible with the given embedding dimensions
     and raises descriptive errors if issues are found.
-    
+
     Args:
         config: EmbeddingFusionConfig to validate.
         audio_dim: Dimensionality of audio embeddings.
         text_dim: Dimensionality of text embeddings.
-        
+
     Raises:
         ValueError: If configuration is invalid for the given dimensions.
-        
+
     Examples:
         >>> config = EmbeddingFusionConfig(
         ...     enabled=True,
@@ -312,7 +312,7 @@ def validate_fusion_config(
     """
     if not config.enabled:
         return
-    
+
     # Check dimension compatibility for different fusion methods
     if config.fusion_method in {"weighted", "average", "max_pool"}:
         if audio_dim != text_dim:
@@ -324,7 +324,7 @@ def validate_fusion_config(
                 f"  2. Padding/projecting embeddings to same dimension\n"
                 f"  3. Using different embedding models with matching dimensions"
             )
-    
+
     # Check dimension reduction configuration
     if config.dimension_reduction is not None:
         if config.fusion_method != "concatenate":
@@ -332,19 +332,19 @@ def validate_fusion_config(
                 f"dimension_reduction is only applicable with fusion_method='concatenate', "
                 f"but got fusion_method='{config.fusion_method}'"
             )
-        
+
         if config.target_dim is None:
             raise ValueError(
                 "target_dim must be specified when dimension_reduction is enabled"
             )
-        
+
         concat_dim = audio_dim + text_dim
         if config.target_dim >= concat_dim:
             logger.warning(
                 f"target_dim ({config.target_dim}) >= concatenated dimension ({concat_dim}). "
                 f"Dimension reduction will have no effect."
             )
-    
+
     # Check weight configuration
     if config.fusion_method == "weighted":
         total_weight = config.audio_weight + config.text_weight
@@ -353,7 +353,7 @@ def validate_fusion_config(
                 f"Audio and text weights sum to {total_weight}, not 1.0. "
                 f"This may lead to unexpected results."
             )
-    
+
     logger.info(
         f"Fusion config validated: method={config.fusion_method}, "
         f"audio_dim={audio_dim}, text_dim={text_dim}"

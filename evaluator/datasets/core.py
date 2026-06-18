@@ -9,12 +9,10 @@ Environment Variables:
                       neither is set, uses EVALUATOR_DATA_DIR/admed_voice.
 """
 
-from ..core.structures import QuerySample, Document, TranscriptionResult, BenchmarkQuestion, CorpusDocument
+from ..core.structures import BenchmarkQuestion, CorpusDocument
 from ..datasets.utils import DatasetLoader
 from typing import List, Dict, Any, Optional, Union
 import os
-import numpy as np
-from torch.utils.data import Dataset
 from abc import ABC, abstractmethod
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -61,7 +59,7 @@ def load_audio_file(path: str):
 
 def get_data_dir() -> Path:
     """Get base directory for datasets.
-    
+
     Returns EVALUATOR_DATA_DIR env var if set, otherwise current directory.
     """
     env_path = os.environ.get("EVALUATOR_DATA_DIR")
@@ -148,6 +146,7 @@ class QueryDataset(ABC):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         pass
 
+
 def get_admed_voice_path(base_path: Optional[Union[str, Path]] = None) -> Path:
     """Get path to admed_voice dataset.
 
@@ -198,7 +197,7 @@ def load_admed_voice_corpus(
             f"  - Set ADMED_VOICE_PATH to the dataset location\n"
             f"  - Set EVALUATOR_DATA_DIR to the parent directory containing 'admed_voice/'"
         )
-    
+
     corpus = pd.read_csv(corpus_csv_path, sep=";")
 
     # filer out non human
@@ -219,6 +218,6 @@ def load_admed_voice_corpus(
     )
 
     train_corpus = corpus[corpus["speaker_id"].isin(train_speakers)]
-    test_corpus = corpus[corpus["speaker_id"].isin(test_speakers)]   
+    test_corpus = corpus[corpus["speaker_id"].isin(test_speakers)]
 
     return train_corpus, test_corpus

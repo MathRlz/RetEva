@@ -226,32 +226,30 @@ def create_reranker(
 ):
     """
     Factory function to create reranker models.
-    
+
     Args:
         model_type: Type of reranker model (e.g., 'cross_encoder')
         model_name: Optional model name/path (uses registry default if None)
         device: Device to load model on (auto-detect if None)
         batch_size: Batch size for scoring
         max_length: Maximum sequence length for tokenization
-        
+
     Returns:
         BaseReranker instance
     """
     model_class = reranker_registry.get(model_type)
     name = model_name or reranker_registry.get_default_name(model_type)
-    
+
     if name is None:
         available = reranker_registry.list_types()
         raise ValueError(
             f"No default name for reranker type '{model_type}'. Please provide model_name.\n"
             f"Registered rerankers: {', '.join(available)}"
         )
-    
+
     return model_class(
         model_name=name,
         device=device,
         batch_size=batch_size,
         max_length=max_length,
     )
-
-

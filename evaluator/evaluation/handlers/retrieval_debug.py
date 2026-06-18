@@ -105,7 +105,7 @@ def log_retrieval_debug(
                 logger.info(f"  Ground truth question: '{ref[:120]}'")
         logger.info(f"  Expected doc:  [{gt_doc_id}] '{gt_doc_text[:100]}'")
         logger.info(f"  Query emb norm: {np.linalg.norm(emb_array[i]):.4f}")
-        logger.info(f"  Top 5 retrieved:")
+        logger.info("  Top 5 retrieved:")
 
         for j, (payload, score) in enumerate(results_with_scores[:5], 1):
             doc_id = (
@@ -139,4 +139,4 @@ def log_retrieval_debug(
             if gt_doc_id in payload_keys:
                 logger.info(f"  (Doc exists in DB but outside top-{k})")
             else:
-                logger.info(f"  (Doc NOT in DB at all!)")
+                logger.info("  (Doc NOT in DB at all!)")

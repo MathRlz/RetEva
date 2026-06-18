@@ -31,7 +31,7 @@ class PiperTTS(BaseTTSModel):
         self._check_installation()
         self.voice_path = self._get_voice_path()
         logger.info(f"Piper TTS initialized with voice: {config.voice}")
-    
+
     def _check_installation(self):
         """Check if piper is installed and accessible."""
         try:
@@ -52,7 +52,7 @@ class PiperTTS(BaseTTSModel):
             logger.warning("Piper version check timed out")
         except Exception as e:
             logger.warning(f"Could not check Piper version: {e}")
-    
+
     def _get_voice_path(self) -> str:
         """Get path to voice model file."""
         # Try common installation locations
@@ -63,47 +63,47 @@ class PiperTTS(BaseTTSModel):
             Path("./voices"),
             Path("./piper_voices"),
         ]
-        
+
         # Try with and without .onnx extension
         voice_name = self.config.voice
         if not voice_name.endswith('.onnx'):
             voice_name += '.onnx'
-        
+
         for voice_dir in voice_dirs:
             if not voice_dir.exists():
                 continue
-            
+
             voice_path = voice_dir / voice_name
             if voice_path.exists():
                 logger.debug(f"Found voice at: {voice_path}")
                 return str(voice_path)
-        
+
         # Voice not found - provide helpful error message
         searched_paths = [str(d / voice_name) for d in voice_dirs if d.exists()]
         raise FileNotFoundError(
             f"Voice model not found: {self.config.voice}\n"
-            f"Searched in:\n" + "\n".join(f"  - {p}" for p in searched_paths) + "\n"
-            f"\nDownload voices from: https://github.com/rhasspy/piper/releases\n"
-            f"Example voices:\n"
-            f"  - en_US-lessac-medium (English, general purpose)\n"
-            f"  - en_US-amy-medium (English, female)\n"
-            f"  - en_GB-alba-medium (British English)\n"
+            "Searched in:\n" + "\n".join(f"  - {p}" for p in searched_paths) + "\n"
+            "\nDownload voices from: https://github.com/rhasspy/piper/releases\n"
+            "Example voices:\n"
+            "  - en_US-lessac-medium (English, general purpose)\n"
+            "  - en_US-amy-medium (English, female)\n"
+            "  - en_GB-alba-medium (British English)\n"
         )
-    
+
     def synthesize(self, text: str) -> np.ndarray:
         """
         Synthesize audio using piper command-line tool.
-        
+
         Args:
             text: Text to synthesize.
-            
+
         Returns:
             audio: Float32 numpy array with audio waveform.
         """
         # Create temporary output file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             output_path = f.name
-        
+
         try:
             # Build piper command
             cmd = [
@@ -111,13 +111,13 @@ class PiperTTS(BaseTTSModel):
                 "--model", self.voice_path,
                 "--output_file", output_path,
             ]
-            
+
             # Add optional parameters
             if self.config.speed != 1.0:
                 # Piper uses length_scale (inverse of speed)
                 length_scale = 1.0 / self.config.speed
                 cmd.extend(["--length_scale", str(length_scale)])
-            
+
             # Run synthesis
             logger.debug(f"Running Piper: {' '.join(cmd)}")
             result = subprocess.run(
@@ -127,15 +127,15 @@ class PiperTTS(BaseTTSModel):
                 timeout=30,
                 check=True
             )
-            
+
             if result.stderr:
                 logger.debug(f"Piper stderr: {result.stderr.decode('utf-8', errors='ignore')}")
-            
+
             # Load synthesized audio
             audio = self._load_audio(output_path)
-            
+
             return audio
-        
+
         except subprocess.CalledProcessError as e:
             stderr = e.stderr.decode('utf-8', errors='ignore') if e.stderr else 'N/A'
             raise RuntimeError(
@@ -150,7 +150,7 @@ class PiperTTS(BaseTTSModel):
                     os.unlink(output_path)
                 except Exception as e:
                     logger.warning(f"Failed to delete temp file {output_path}: {e}")
-    
+
     def _load_audio(self, path: str) -> np.ndarray:
         """Load audio file and resample if needed."""
         try:
@@ -159,14 +159,14 @@ class PiperTTS(BaseTTSModel):
             raise ImportError(
                 "soundfile is required for Piper TTS. Install with: pip install soundfile"
             )
-        
+
         # Load audio
         audio, sr = sf.read(path)
-        
+
         # Convert stereo to mono if needed
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
-        
+
         # Resample if needed
         if sr != self.config.sample_rate:
             try:
@@ -182,5 +182,5 @@ class PiperTTS(BaseTTSModel):
                     f"librosa not installed, cannot resample from {sr}Hz to "
                     f"{self.config.sample_rate}Hz. Using original sample rate."
                 )
-        
+
         return audio.astype(np.float32)

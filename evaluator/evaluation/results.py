@@ -19,10 +19,10 @@ So: ``RunResults`` = the metrics payload; ``EvaluationResults`` = that payload +
 """
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Union
 
 from ..config import EvaluationConfig
 
@@ -142,7 +142,7 @@ class EvaluationResults:
             # Minimal config info
             result["_config"] = {
                 "experiment_name": self.config.experiment_name,
-                "pipeline_mode": self.config.model.pipeline_mode,
+                "pipeline_mode": self.config.graph_template,
             }
 
         return result
@@ -269,7 +269,7 @@ class EvaluationResults:
         lines.append("=" * 80)
 
         # Pipeline info
-        pipeline_mode = self.config.model.pipeline_mode
+        pipeline_mode = self.config.graph_template
         lines.append(f"Pipeline Mode: {pipeline_mode}")
         lines.append("")
 

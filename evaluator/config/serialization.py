@@ -73,6 +73,55 @@ def to_yaml(config: Any, yaml_path: str) -> None:
         yaml.dump(config_dict, f, default_flow_style=False, indent=2)
 
 
+def _config_template_label(config: Any) -> Any:
+    """The config's graph template name (``graph_override['template']``) — the report's
+    ``pipeline_mode`` echo. ``None`` for an explicit-graph config (the run derives the real label
+    from the built pipelines). There is no ``pipeline_mode`` field anymore."""
+    override = getattr(config, "graph_override", None) or {}
+    return override.get("template")
+
+
+def _model_summary(model: Any, family: str) -> str:
+    """``type:name_or_size_or_default`` summary string for a model family (telemetry)."""
+    mtype = getattr(model, f"{family}_model_type")
+    name = getattr(model, f"{family}_model_name", None)
+    size = getattr(model, f"{family}_size", None)
+    return f"{mtype}:{name or size or 'default'}"
+
+
+_MODEL_SUMMARY_KEYS = {  # flat-dict key -> (family, the node's model_field)
+    "asr_model": ("asr", "model.asr_model_type"),
+    "text_emb_model": ("text_emb", "model.text_emb_model_type"),
+    "audio_emb_model": ("audio_emb", "model.audio_emb_model_type"),
+}
+
+
+def _active_model_summaries(config: Any) -> Dict[str, str]:
+    """Model summary strings for ONLY the families the executed graph actually uses, so a default
+    (e.g. ``asr_model: wav2vec2:default``) never leaks for a node the run never had — the last
+    hiding spot of the original bug. Best-effort: if the graph can't be built, emit all three."""
+    active = None
+    try:
+        from ..pipeline.graph.modes import build_graph_for_config
+        from ..pipeline.graph.registry import node_model_field
+
+        present = {
+            node_model_field(n.stage, n.params) for n in build_graph_for_config(config).nodes
+        }
+        active = {field for _fam, field in _MODEL_SUMMARY_KEYS.values() if field in present}
+    except Exception as exc:  # noqa: BLE001 - telemetry must not crash
+        # Fall back to all families, but don't hide *why* the graph wouldn't build.
+        from ..logging_config import get_logger
+
+        get_logger(__name__).debug("active-model summary fell back (graph build failed): %s", exc)
+        active = None
+    out: Dict[str, str] = {}
+    for key, (family, field) in _MODEL_SUMMARY_KEYS.items():
+        if active is None or field in active:
+            out[key] = _model_summary(config.model, family)
+    return out
+
+
 def to_dict(config: Any, *, include_config: bool = False) -> Dict[str, Any]:
     """Convert to dictionary.
 
@@ -91,10 +140,9 @@ def to_dict(config: Any, *, include_config: bool = False) -> Dict[str, Any]:
         "checkpoint_interval": config.checkpoint_interval,
         "parallel_enabled": config.parallel_enabled,
         "cache_enabled": config.cache.enabled,
-        "pipeline_mode": enum_to_str(config.model.pipeline_mode),
-        "asr_model": f"{config.model.asr_model_type}:{config.model.asr_model_name or config.model.asr_size or 'default'}",
-        "text_emb_model": f"{config.model.text_emb_model_type}:{config.model.text_emb_model_name or config.model.text_emb_size or 'default'}",
-        "audio_emb_model": f"{config.model.audio_emb_model_type}:{config.model.audio_emb_model_name or config.model.audio_emb_size or 'default'}",
+        "pipeline_mode": _config_template_label(config),
+        # Only families the executed graph uses — no default leak for an absent node.
+        **_active_model_summaries(config),
         "dataset": config.data.dataset_name,
         "questions_path": config.data.questions_path,
         "corpus_path": config.data.corpus_path,
@@ -129,4 +177,8 @@ def to_nested_dict(config: Any) -> Dict[str, Any]:
     result["features"] = _serialize_dataclass(config.features)
     if config.device_pool is not None:
         result["device_pool"] = _serialize_dataclass(config.device_pool)
+    # The graph spec (explicit nodes/edges or a template reference) — so an explicit-graph
+    # config round-trips through from_dict (it's a plain JSON-able dict).
+    if getattr(config, "graph_override", None):
+        result["graph_override"] = config.graph_override
     return result

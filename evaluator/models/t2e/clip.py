@@ -25,6 +25,7 @@ class ClipModel(TextEmbeddingModel):
         self.model_name = model_name
         self.tokenizer = CLIPTokenizer.from_pretrained(model_name)
         self.model = CLIPModel.from_pretrained(model_name)
+        self.model.eval()  # inference-only: pin eval (no dropout) — hardening
         self.device = torch.device("cpu")
 
     def to(self, device: torch.device):

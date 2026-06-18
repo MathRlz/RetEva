@@ -51,15 +51,16 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
 
     @router.get("/api/pipeline/{mode}/required_models")
     def pipeline_required_models(mode: str) -> Dict[str, Any]:
-        """Return required model fields for a pipeline mode (used by wizard step 3)."""
-        from evaluator.pipeline.stage_graph import resolve_pipeline_mode_spec
-        try:
-            spec = resolve_pipeline_mode_spec(mode)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        """Return the model fields a graph template requires (used by wizard step 3) —
+        graph-derived from the template's nodes."""
+        from evaluator.webapi.form_builder import required_model_fields_for
+
+        fields = required_model_fields_for(mode)
+        if not fields:
+            raise HTTPException(status_code=404, detail=f"unknown template '{mode}'")
         return {
-            "mode": spec.mode,
-            "required_model_fields": list(spec.required_model_fields),
+            "mode": mode,
+            "required_model_fields": fields,
         }
 
     return router

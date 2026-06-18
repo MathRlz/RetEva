@@ -7,10 +7,10 @@ from typing import Optional
 class AudioSynthesisConfig:
     """
     Configuration for offline audio synthesis from text.
-    
+
     Used for text-only benchmark questions where audio needs to be synthesized.
     Supports various TTS providers for generating synthetic speech.
-    
+
     Attributes:
         enabled: Whether audio synthesis is enabled. Default: False.
         provider: TTS provider to use. Default: "piper".
@@ -26,7 +26,7 @@ class AudioSynthesisConfig:
         cache_dir: Directory for caching synthesized audio. Default: None (auto-derived from output_dir).
         skip_cache: Skip all caches and force re-synthesis on every call. Default: False.
         api_key: API key for cloud TTS providers. Default: None.
-    
+
     Examples:
         >>> config = AudioSynthesisConfig(
         ...     enabled=True,

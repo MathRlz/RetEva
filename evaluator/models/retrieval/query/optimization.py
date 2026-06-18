@@ -138,18 +138,18 @@ def rewrite_query(
     context: Optional[List[str]] = None
 ) -> str:
     """Rewrite query using LLM for improved retrieval.
-    
+
     Implements iterative query refinement, optionally using retrieval
     context from initial results to guide refinement.
-    
+
     Args:
         query: Original query text.
         config: Query optimization configuration.
         context: Optional list of retrieved texts for context-aware refinement.
-        
+
     Returns:
         Refined query text.
-        
+
     Examples:
         >>> config = QueryOptimizationConfig(enabled=True, method="rewrite")
         >>> refined = rewrite_query("htn treatment", config)
@@ -157,11 +157,11 @@ def rewrite_query(
     """
     if not config.enabled or config.method != "rewrite":
         return query
-    
+
     logger.info(f"Rewriting query: {query}")
-    
+
     current_query = query
-    
+
     for iteration in range(config.max_iterations):
         # Prepare context if available and configured
         context_str = None
@@ -169,26 +169,26 @@ def rewrite_query(
             # Use top-k results as context for refinement
             top_contexts = context[:config.context_top_k]
             context_str = "\n".join([f"- {ctx}" for ctx in top_contexts])
-        
+
         # Get prompts
         system_prompt, user_prompt = get_rewrite_prompt(current_query, context_str)
-        
+
         # Call LLM
         try:
             refined_query = _call_llm(system_prompt, user_prompt, config)
-            
+
             # Check if query changed significantly
             if refined_query.lower() == current_query.lower():
                 logger.debug(f"Query converged after {iteration + 1} iterations")
                 break
-            
+
             current_query = refined_query
             logger.debug(f"Iteration {iteration + 1}: {current_query}")
-            
+
         except (RuntimeError, json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Query rewriting failed: {e}. Using original query.")
             return query
-    
+
     logger.info(f"Final refined query: {current_query}")
     return current_query
 
@@ -198,18 +198,18 @@ def generate_hypothetical_document(
     config: QueryOptimizationConfig
 ) -> str:
     """Generate hypothetical document using HyDE technique.
-    
+
     Creates a hypothetical answer to the query, which is then embedded
     for retrieval. This can improve retrieval by matching the style and
     content of actual documents.
-    
+
     Args:
         query: Query text.
         config: Query optimization configuration.
-        
+
     Returns:
         Hypothetical document text to embed.
-        
+
     Examples:
         >>> config = QueryOptimizationConfig(enabled=True, method="hyde")
         >>> doc = generate_hypothetical_document("What causes diabetes?", config)
@@ -217,16 +217,16 @@ def generate_hypothetical_document(
     """
     if not config.enabled or config.method != "hyde":
         return query
-    
+
     logger.info(f"Generating hypothetical document for: {query}")
-    
+
     system_prompt, user_prompt = get_hyde_prompt(query)
-    
+
     try:
         hypothetical_doc = _call_llm(system_prompt, user_prompt, config)
         logger.debug(f"Generated document: {hypothetical_doc}")
         return hypothetical_doc
-        
+
     except (RuntimeError, json.JSONDecodeError, KeyError) as e:
         logger.warning(f"HyDE generation failed: {e}. Using original query.")
         return query
@@ -343,19 +343,19 @@ def combine_retrieval_results(
     weights: Optional[List[float]] = None
 ) -> List[Tuple[Any, float]]:
     """Combine results from multiple queries.
-    
+
     Merges retrieval results from multiple queries using various strategies.
-    
+
     Args:
         results_list: List of result lists, each containing (payload, score) tuples.
         strategy: Combination strategy. Options: "rrf", "weighted", "union", "intersection".
         k: Number of final results to return.
         rrf_k: RRF k parameter (for "rrf" strategy).
         weights: Optional weights for each query (for "weighted" strategy).
-        
+
     Returns:
         Combined list of (payload, score) tuples.
-        
+
     Examples:
         >>> results1 = [(doc1, 0.9), (doc2, 0.7)]
         >>> results2 = [(doc2, 0.8), (doc3, 0.6)]
@@ -363,18 +363,18 @@ def combine_retrieval_results(
     """
     if not results_list:
         return []
-    
+
     if len(results_list) == 1:
         return results_list[0][:k]
-    
+
     if strategy == "rrf":
         # Reciprocal Rank Fusion
         from ..rag.hybrid import reciprocal_rank_fusion
-        
+
         # RRF expects List[List[Tuple[Any, float]]]
         combined = reciprocal_rank_fusion(results_list, k=rrf_k, top_n=k)
         return combined
-    
+
     elif strategy == "weighted":
         # Weighted combination
         if weights is None:
@@ -397,21 +397,21 @@ def combine_retrieval_results(
             reverse=True,
         )
         return combined[:k]
-    
+
     elif strategy == "union":
         # Union: include all unique documents, sorted by best score
         combined_scores: Dict[str, Tuple[Any, float]] = {}
-        
+
         for results in results_list:
             for payload, score in results:
                 key = str(payload)
                 if key not in combined_scores or score > combined_scores[key][1]:
                     combined_scores[key] = (payload, score)
-        
+
         # Sort by score
         combined = sorted(combined_scores.values(), key=lambda x: x[1], reverse=True)
         return combined[:k]
-    
+
     elif strategy == "intersection":
         # Intersection: only documents appearing in all queries
         # Track payloads and their scores across queries
@@ -435,7 +435,7 @@ def combine_retrieval_results(
         # Sort by average score
         combined = sorted(intersection, key=lambda x: x[1], reverse=True)
         return combined[:k]
-    
+
     else:
         raise ValueError(f"Unknown combination strategy: {strategy}")
 

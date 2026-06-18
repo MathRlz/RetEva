@@ -10,7 +10,7 @@ Main Components:
 
 Usage:
     from evaluator.models.retrieval.query import rewrite_query, generate_hypothetical_document
-    
+
     optimized = rewrite_query(query, config)
 """
 
@@ -26,7 +26,7 @@ from .optimization import (
 
 # Import prompts if they exist
 try:
-    from .prompts import (
+    from .prompts import (  # noqa: F401
         QUERY_REWRITE_PROMPT,
         HYDE_PROMPT,
         QUERY_DECOMPOSE_PROMPT,

@@ -5,12 +5,11 @@ import numpy as np
 import hashlib
 import os
 from pathlib import Path
-import logging
-
 from tqdm import tqdm
 from ...utils.progress import progress_disabled
+from ...logging_config import TimingContext, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AudioSynthesizer:
@@ -35,15 +34,15 @@ class AudioSynthesizer:
             logger.info("TTS cache disabled (skip_cache=True)")
         elif self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"TTS cache enabled at: {self.cache_dir}")
+            logger.info("TTS cache enabled at: %s", self.cache_dir)
         elif config.output_dir:
             # Auto-derive cache dir from output_dir when not explicitly configured
             self.cache_dir = Path(config.output_dir) / ".tts_cache"
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"TTS cache auto-enabled at: {self.cache_dir}")
+            logger.info("TTS cache auto-enabled at: %s", self.cache_dir)
 
         self.provider = self._create_provider()
-        logger.info(f"Initialized TTS model: {config.provider}")
+        logger.info("Initialized TTS model: %s", config.provider)
 
     def _create_provider(self):
         """Factory method to create TTS model backend based on config.
@@ -118,12 +117,12 @@ class AudioSynthesizer:
         # Cache
         if self.cache_dir:
             self._save_to_cache(cache_key, audio)
-            logger.debug(f"Cached audio (key: {cache_key[:16]}...)")
+            logger.debug("Cached audio (key: %s...)", cache_key[:16])
 
         # Save to file if requested (skip if already written by caller or prior run)
         if output_path and not os.path.exists(output_path):
             self._save_audio(output_path, audio)
-            logger.debug(f"Saved audio to: {output_path}")
+            logger.debug("Saved audio to: %s", output_path)
 
         return audio
 
@@ -136,16 +135,17 @@ class AudioSynthesizer:
             import librosa
         except ImportError:
             logger.warning(
-                f"Provider output sample rate is {source_sr}Hz but target is {target_sr}Hz; "
-                "librosa not installed, audio will not be resampled."
+                "Provider output sample rate is %dHz but target is %dHz; "
+                "librosa not installed, audio will not be resampled.",
+                source_sr, target_sr,
             )
             return audio
         try:
             resampled = librosa.resample(audio, orig_sr=source_sr, target_sr=target_sr)
-            logger.debug(f"Resampled audio from {source_sr}Hz to {target_sr}Hz")
+            logger.debug("Resampled audio from %dHz to %dHz", source_sr, target_sr)
             return np.asarray(resampled, dtype=np.float32)
         except (ValueError, RuntimeError) as e:
-            logger.warning(f"Audio resampling failed ({source_sr}->{target_sr}): {e}")
+            logger.warning("Audio resampling failed (%d->%d): %s", source_sr, target_sr, e)
             return audio
 
     def synthesize_batch(
@@ -164,21 +164,22 @@ class AudioSynthesizer:
         results = []
         total = len(texts)
 
-        logger.info(f"Synthesizing {total} texts...")
+        logger.info("Synthesizing %d texts...", total)
 
-        for i, text in tqdm(
-            enumerate(texts), total=total, desc="TTS synthesis", unit="clip",
-            disable=progress_disabled(),
-        ):
-            output_path = None
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
-                output_path = os.path.join(output_dir, f"synth_{i:05d}.wav")
+        with TimingContext(f"TTS batch synthesis ({total} texts)"):
+            for i, text in tqdm(
+                enumerate(texts), total=total, desc="TTS synthesis", unit="clip",
+                disable=progress_disabled(),
+            ):
+                output_path = None
+                if output_dir:
+                    os.makedirs(output_dir, exist_ok=True)
+                    output_path = os.path.join(output_dir, f"synth_{i:05d}.wav")
 
-            audio = self.synthesize(text, output_path)
-            results.append(audio)
+                audio = self.synthesize(text, output_path)
+                results.append(audio)
 
-        logger.info(f"Batch synthesis complete: {total} texts")
+        logger.info("Batch synthesis complete: %d texts", total)
         self.log_cache_stats()
         return results
 
@@ -215,7 +216,7 @@ class AudioSynthesizer:
             try:
                 return np.load(cache_path)
             except (OSError, ValueError) as e:
-                logger.warning(f"Failed to load from cache: {e}")
+                logger.warning("Failed to load from cache: %s", e)
                 return None
         return None
 
@@ -225,7 +226,7 @@ class AudioSynthesizer:
             cache_path = self.cache_dir / f"{cache_key}.npy"
             np.save(cache_path, audio)
         except OSError as e:
-            logger.warning(f"Failed to save to cache: {e}")
+            logger.warning("Failed to save to cache: %s", e)
 
     def _load_audio(self, path: str) -> Optional[np.ndarray]:
         """Load audio from WAV file, return None on failure."""
@@ -235,7 +236,7 @@ class AudioSynthesizer:
             audio, _ = sf.read(path, dtype="float32")
             return audio
         except Exception as e:
-            logger.debug(f"Could not load audio from {path}: {e}")
+            logger.debug("Could not load audio from %s: %s", path, e)
             return None
 
     def _save_audio(self, path: str, audio: np.ndarray):

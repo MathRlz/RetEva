@@ -203,7 +203,7 @@ def _cmd_sweep(rest: List[str]) -> int:
     name = spec.get("name", "sweep")
     print(f"sweep '{name}': {len(points)} configs (experiment_group={name!r})")
     for combo, cfg in points:
-        print(f"  {combo_label(combo):<44} mode={cfg.model.pipeline_mode}  → {cfg.experiment_name}")
+        print(f"  {combo_label(combo):<44} mode={cfg.graph_template}  → {cfg.experiment_name}")
     if not args.run:
         print("\n(dry run — pass --run to execute each via the normal evaluation path)")
         return 0

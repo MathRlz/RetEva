@@ -87,25 +87,25 @@ def get_judge_prompt(
     few_shot_examples: Optional[List[Dict]] = None
 ) -> tuple[str, str]:
     """Get system and user prompts for judging.
-    
+
     Args:
         query: User query text.
         retrieved_text: Retrieved document text.
         aspect: Evaluation aspect.
         chain_of_thought: Include chain-of-thought prompting.
         few_shot_examples: Optional few-shot examples.
-        
+
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
     if aspect not in ASPECT_PROMPTS:
         raise ValueError(f"Unknown aspect: {aspect}. Valid: {list(ASPECT_PROMPTS.keys())}")
-    
+
     aspect_info = ASPECT_PROMPTS[aspect]
-    
+
     # Build system prompt
     system_prompt = JUDGE_SYSTEM_PROMPT
-    
+
     if few_shot_examples:
         system_prompt += "\n\nHere are some examples of evaluations:\n"
         for i, example in enumerate(few_shot_examples, 1):
@@ -115,7 +115,7 @@ def get_judge_prompt(
             system_prompt += f"\nScore: {example['score']}"
             if 'reasoning' in example:
                 system_prompt += f"\nReasoning: {example['reasoning']}"
-    
+
     # Build user prompt
     user_prompt = f"""Evaluate the following retrieved document for {aspect_info['name'].lower()}:
 
@@ -128,7 +128,7 @@ Evaluation Criteria:
 {aspect_info['criteria']}
 
 """
-    
+
     if chain_of_thought:
         user_prompt += """Please think through your evaluation step by step:
 1. What is the query asking for?
@@ -139,7 +139,7 @@ Evaluation Criteria:
 Provide your reasoning and then assign a score from 1-5."""
     else:
         user_prompt += "Provide only the numeric score (1-5) without explanation."
-    
+
     return system_prompt, user_prompt
 
 
@@ -150,27 +150,27 @@ def get_multi_aspect_prompt(
     chain_of_thought: bool = False
 ) -> tuple[str, str]:
     """Get prompt for evaluating multiple aspects at once.
-    
+
     Args:
         query: User query text.
         retrieved_text: Retrieved document text.
         aspects: List of aspects to evaluate.
         chain_of_thought: Include chain-of-thought prompting.
-        
+
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
     system_prompt = JUDGE_SYSTEM_PROMPT
-    
+
     # Build criteria section
     criteria_text = "Evaluation Criteria:\n\n"
     for aspect in aspects:
         if aspect not in ASPECT_PROMPTS:
             raise ValueError(f"Unknown aspect: {aspect}")
-        
+
         aspect_info = ASPECT_PROMPTS[aspect]
         criteria_text += f"{aspect_info['name']}:\n{aspect_info['criteria']}\n"
-    
+
     user_prompt = f"""Evaluate the following retrieved document across multiple aspects:
 
 Query: {query}
@@ -181,7 +181,7 @@ Retrieved Document:
 {criteria_text}
 
 """
-    
+
     if chain_of_thought:
         user_prompt += "For each aspect, provide your reasoning and score (1-5).\n\n"
         user_prompt += "Format your response as:\n"
@@ -193,7 +193,7 @@ Retrieved Document:
         for aspect in aspects:
             aspect_name = ASPECT_PROMPTS[aspect]['name']
             user_prompt += f"{aspect_name}: [score]\n"
-    
+
     return system_prompt, user_prompt
 
 
@@ -203,12 +203,12 @@ def get_structured_judge_prompt(
     reference_answer: Optional[str] = None
 ) -> tuple[str, str]:
     """Get prompt for structured evaluation with detailed output.
-    
+
     Args:
         query: User query text.
         retrieved_text: Retrieved document text.
         reference_answer: Optional reference/ground truth answer.
-        
+
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
@@ -223,7 +223,7 @@ You will provide a structured evaluation in JSON format with the following field
 - weaknesses: list of key weaknesses
 - reasoning: brief explanation of scores
 """
-    
+
     user_prompt = f"""Evaluate this retrieval result:
 
 Query: {query}
@@ -231,10 +231,10 @@ Query: {query}
 Retrieved Document:
 {retrieved_text}
 """
-    
+
     if reference_answer:
         user_prompt += f"\nReference Answer:\n{reference_answer}\n"
-    
+
     user_prompt += """
 Provide a structured evaluation in JSON format with:
 - relevance_score (1-5)
@@ -245,7 +245,7 @@ Provide a structured evaluation in JSON format with:
 - weaknesses (list)
 - reasoning (string)
 """
-    
+
     return system_prompt, user_prompt
 
 
@@ -274,10 +274,10 @@ MEDICAL_FEW_SHOT_EXAMPLES = [
 
 def get_few_shot_examples(n: int = 3) -> List[Dict]:
     """Get n few-shot examples for medical domain.
-    
+
     Args:
         n: Number of examples to return.
-        
+
     Returns:
         List of example dictionaries.
     """

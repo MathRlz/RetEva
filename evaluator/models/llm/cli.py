@@ -3,11 +3,9 @@
 import sys
 import argparse
 import logging
-from typing import Optional
 
 from llm_server.factory import create_llm_server
 from llm_server.model_registry import ModelRegistry
-from llm_server.base import ServerStatus
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +13,7 @@ logger = logging.getLogger(__name__)
 def start_server(args):
     """Start the local LLM server."""
     print(f"Starting {args.backend} server with model {args.model}...")
-    
+
     server = create_llm_server(
         backend=args.backend,
         model=args.model,
@@ -23,96 +21,96 @@ def start_server(args):
         port=args.port,
         gpu_layers=args.gpu_layers
     )
-    
+
     if server is None:
         print(f"Error: Failed to create {args.backend} server")
         print(f"Make sure {args.backend} is installed")
         return 1
-    
+
     if server.start():
-        print(f"✓ Server started successfully")
+        print("✓ Server started successfully")
         print(f"  API URL: {server.get_api_url()}")
         print(f"  Model: {server.model}")
         print(f"  Status: {server.status.value}")
-        
+
         # Run health check
         health = server.health_check()
         if health.is_healthy:
             print(f"  Health: ✓ Healthy (response time: {health.response_time_ms:.0f}ms)")
         else:
             print(f"  Health: ⚠ {health.message}")
-        
+
         return 0
     else:
-        print(f"✗ Failed to start server")
+        print("✗ Failed to start server")
         return 1
 
 
 def stop_server(args):
     """Stop the local LLM server."""
     print(f"Stopping {args.backend} server...")
-    
+
     server = create_llm_server(
         backend=args.backend,
         model="",  # Not needed for stopping
         host=args.host,
         port=args.port
     )
-    
+
     if server is None:
         print(f"Error: Failed to create {args.backend} server instance")
         return 1
-    
+
     if server.stop():
-        print(f"✓ Server stopped")
+        print("✓ Server stopped")
         return 0
     else:
-        print(f"Note: Server may already be stopped or running as system service")
+        print("Note: Server may already be stopped or running as system service")
         return 0
 
 
 def status_server(args):
     """Check server status and health."""
     print(f"Checking {args.backend} server status...")
-    
+
     server = create_llm_server(
         backend=args.backend,
         model=args.model or "unknown",
         host=args.host,
         port=args.port
     )
-    
+
     if server is None:
         print(f"Error: Failed to create {args.backend} server instance")
         return 1
-    
+
     # Get status
     status_info = server.get_status()
-    
-    print(f"\nServer Status:")
+
+    print("\nServer Status:")
     print(f"  Backend: {server.get_backend_name()}")
     print(f"  Host: {status_info['host']}")
     print(f"  Port: {status_info['port']}")
     print(f"  Model: {status_info['model']}")
     print(f"  API URL: {status_info['api_url']}")
     print(f"  Status: {status_info['status']}")
-    
+
     if status_info['is_healthy']:
-        print(f"  Health: ✓ Healthy")
+        print("  Health: ✓ Healthy")
         if status_info['response_time_ms']:
             print(f"  Response Time: {status_info['response_time_ms']:.0f}ms")
         return 0
     else:
-        print(f"  Health: ✗ Not responding")
+        print("  Health: ✗ Not responding")
         return 1
 
 
 def list_models(args):
     """List available models."""
     print("Available Models:\n")
-    
+
     models = ModelRegistry.get_all_models()
-    
+
     # Filter by domain if specified
     if args.domain:
         from llm_server.model_registry import ModelDomain
@@ -122,11 +120,11 @@ def list_models(args):
         except ValueError:
             print(f"Invalid domain: {args.domain}")
             return 1
-    
+
     # Filter by RAM if specified
     if args.max_ram:
         models = [m for m in models if m.min_ram_gb <= args.max_ram]
-    
+
     for model in models:
         print(f"• {model.display_name}")
         print(f"  Name: {model.name}")
@@ -140,33 +138,33 @@ def list_models(args):
         if model.quantization:
             print(f"  Quantization: {model.quantization}")
         print()
-    
+
     return 0
 
 
 def download_model(args):
     """Download a model."""
     print(f"Downloading model: {args.model}")
-    
+
     # Get model info
     model_info = ModelRegistry.get_model(args.model)
     if model_info:
         print(f"Model: {model_info.display_name}")
         print(f"Size: {model_info.parameters}")
         print(f"Min RAM: {model_info.min_ram_gb}GB\n")
-    
+
     # For Ollama, use the pull command via server
     if args.backend == "ollama":
         from llm_server.ollama import OllamaServer
-        
+
         # Use Ollama name if available
         model_name = args.model
         if model_info and model_info.ollama_name:
             model_name = model_info.ollama_name
             print(f"Using Ollama model name: {model_name}")
-        
+
         server = OllamaServer(model=model_name)
-        
+
         # This will pull the model if not present
         if server._check_ollama_installed():
             print("Pulling model (this may take a while)...")
@@ -190,9 +188,9 @@ def main():
         description="Manage local LLM server for evaluation",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    
+
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
-    
+
     # Start command
     start_parser = subparsers.add_parser("start", help="Start LLM server")
     start_parser.add_argument(
@@ -214,7 +212,7 @@ def main():
         default=-1,
         help="GPU layers (-1=all, 0=CPU only)"
     )
-    
+
     # Stop command
     stop_parser = subparsers.add_parser("stop", help="Stop LLM server")
     stop_parser.add_argument(
@@ -225,7 +223,7 @@ def main():
     )
     stop_parser.add_argument("--host", default="localhost", help="Server host")
     stop_parser.add_argument("--port", type=int, default=11434, help="Server port")
-    
+
     # Status command
     status_parser = subparsers.add_parser("status", help="Check server status")
     status_parser.add_argument(
@@ -237,7 +235,7 @@ def main():
     status_parser.add_argument("--model", help="Model name")
     status_parser.add_argument("--host", default="localhost", help="Server host")
     status_parser.add_argument("--port", type=int, default=11434, help="Server port")
-    
+
     # List models command
     list_parser = subparsers.add_parser("list-models", help="List available models")
     list_parser.add_argument(
@@ -250,7 +248,7 @@ def main():
         type=int,
         help="Filter by max RAM (GB)"
     )
-    
+
     # Download command
     download_parser = subparsers.add_parser("download", help="Download a model")
     download_parser.add_argument("--model", required=True, help="Model name")
@@ -260,19 +258,19 @@ def main():
         choices=["ollama", "vllm", "llamacpp"],
         help="Server backend"
     )
-    
+
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
         return 1
-    
+
     # Setup logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    
+
     # Execute command
     if args.command == "start":
         return start_server(args)

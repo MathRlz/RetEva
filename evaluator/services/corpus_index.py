@@ -119,7 +119,7 @@ def _vector_db_cache_key(
     )
     preprocess_fp = preprocessing_fingerprint(
         {
-            "pipeline_mode": config.model.pipeline_mode,
+            "pipeline_mode": config.graph_template,
             "query_optimization_enabled": config.query_optimization.enabled,
         }
     )
@@ -233,6 +233,11 @@ def embed_corpus(
         corpus_texts, show_progress=True, desc="Embedding corpus docs"
     )
     vectors = np.array(embeddings)
+    logger.info(
+        "corpus_embedding: %d docs -> dim=%d",
+        len(corpus_texts),
+        vectors.shape[1] if vectors.ndim == 2 else -1,
+    )
     if can_cache and cache_key:
         cache_manager.set_vector_db(cache_key, vectors, corpus)
         logger.info("Cached corpus embeddings for reuse (store-agnostic key)")

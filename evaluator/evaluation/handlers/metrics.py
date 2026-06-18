@@ -6,6 +6,10 @@ flat ``WER``/``MRR``/``Recall@k``/... keys are report-derived aliases (`_derive_
 Diagnostics the report does not carry + the per-item intermediates the rag/judge stages consume
 are computed from the aligned per-item state. WER/CER score the ASR hypothesis (`query_text`,
 immutable since Phase 4) — no separate raw_query_text snapshot.
+
+Two concerns are extracted to siblings: the provenance assembly (``metrics_provenance``) and the
+IR diagnostics (``metrics_diagnostics``); this core owns the report assembly + the typed metric
+nodes (transcription / retrieval / metrics / aggregate).
 """
 
 from __future__ import annotations
@@ -19,16 +23,21 @@ from ..helpers import _search_results_to_keys
 from ..executor.state import RunState
 from ..result_schema import RunResults
 from .retrieval import _retrieved_from_bus
+from ._common import (
+    asr_ran,
+    retrieval_ran,
+    is_asr_text_retrieval,
+    _ctx_first,
+    _reference_transcriptions,
+)
+from .metrics_provenance import _run_provenance, _record_model_info
+from .metrics_diagnostics import _ir_diagnostics
 from ...metrics import (
-    first_relevant_rank_distribution,
     wer_recall_correlation,
-    categorize_failures,
     word_error_rate,
     character_error_rate,
 )
-from ...metrics.ir import recall_at_k, reciprocal_rank, ndcg_at_k
-from ...analysis.errors import analyze_retrieval_failures
-from ...analysis.significance import bootstrap_confidence_interval
+from ...metrics.ir import recall_at_k
 
 logger = get_logger(__name__)
 
@@ -56,50 +65,10 @@ def _stage_measure(s: RunState) -> None:
         "answer_judge": _stage_answer_judge,
     }, s)
 
-# Bootstrap confidence-interval settings.
-BOOTSTRAP_ALPHA = 0.05
-BOOTSTRAP_ITERATIONS = 1000
-MIN_SAMPLES_FOR_CI = 20
-
 
 def _branch_of(producer_id: str) -> str:
     """Branch label encoded in a node id (``retrieval@corr`` → ``corr``; else ``main``)."""
     return producer_id.split("@", 1)[1] if "@" in producer_id else "main"
-
-
-def _ctx_first(s: RunState, name: str) -> Any:
-    """The first ``ItemSet`` published anywhere for artifact ``name`` (shared GT)."""
-    for pid, art in s.ctx.slots():
-        if art == name:
-            return s.ctx.get(pid, name)
-    return None
-
-
-def _collect_cache_stats(s: RunState) -> Optional[Dict[str, Any]]:
-    """Per-stage cache hit/miss counts for the provenance block (T3): which artifacts were
-    reused vs recomputed. Best-effort — a pipeline without stats is just omitted."""
-    out: Dict[str, Any] = {}
-    for attr, label in (
-        ("asr_pipeline", "asr"),
-        ("text_embedding_pipeline", "text_embedding"),
-        ("audio_embedding_pipeline", "audio_embedding"),
-    ):
-        pipe = getattr(s, attr, None)
-        if pipe is not None and hasattr(pipe, "get_cache_stats"):
-            try:
-                stats = pipe.get_cache_stats()
-                if stats:
-                    out[label] = stats
-            except Exception:
-                pass
-    return out or None
-
-
-def _llm_cost_summary() -> Optional[Dict[str, Any]]:
-    """The run's accumulated LLM token/latency cost for the provenance block (T8)."""
-    from ...llm.cost import COST
-
-    return COST.summary()
 
 
 def _is_ir_metric(name: str) -> bool:
@@ -126,34 +95,6 @@ def _branch_scores(s: "RunState", artifacts: Dict[str, Any]) -> Dict[str, Any]:
     from ..metric_registry import compute_metrics
 
     return _drop_ir_if_disabled(s, compute_metrics(artifacts, collect_all=True))
-
-
-def _run_provenance(s: "RunState", dropped_by_branch: Optional[Dict] = None):
-    """The run's provenance block (seed, dataset fingerprint, timing, drops, cache, LLM cost)."""
-    from ..provenance import build_provenance, dataset_content_fingerprint
-
-    seed = getattr(getattr(s.config, "audio_synthesis", None), "seed", None)
-    return build_provenance(
-        s.config,
-        seed=seed,
-        dataset=dataset_content_fingerprint(getattr(s, "dataset", None)),
-        failure_analysis=s.drop_sink.failure_summary() or None,
-        timing=dict(s.stage_times),
-        dropped_by_branch=dropped_by_branch or None,
-        dropped_by_node=dict(s.drop_sink.by_node) or None,
-        cache_stats=_collect_cache_stats(s),
-        cost=_llm_cost_summary(),
-        offload=_offload_summary(s),
-        models=_build_provenance(s),  # structured per-pipeline identity (F30/C6)
-    )
-
-
-def _offload_summary(s: "RunState") -> Optional[Dict[str, int]]:
-    """Soft-CPU offload event counters (2c), or None when nothing was parked warm — so the
-    default full-free policy leaves the provenance block absent (parity-preserving)."""
-    provider = getattr(s, "service_provider", None)
-    stats = provider.offload_stats() if hasattr(provider, "offload_stats") else None
-    return stats if stats and stats.get("soft_offloads") else None
 
 
 def _attach_report(results, report) -> None:
@@ -300,98 +241,11 @@ def _stage_aggregate(s: RunState) -> None:
     )
 
 
-def _record_model_info(results: "RunResults", s: RunState) -> None:
-    """Record model names (display) + audio<->text embedding alignment (metadata, not metrics).
-
-    Driven by which pipelines actually ran, so every mode is covered — including
-    ``audio_emb_retrieval`` (audio query + text corpus), which previously recorded nothing."""
-    if s.asr_pipeline is not None:
-        results["asr"] = s.asr_pipeline.model.name()
-    if s.audio_embedding_pipeline is not None:
-        results["audio_embedder"] = s.audio_embedding_pipeline.model.name()
-    if s.text_embedding_pipeline is not None:
-        # asr_text: the text embedder IS the query embedder → 'embedder'; otherwise it
-        # embeds the corpus → 'text_embedder' (back-compat key names).
-        key = "embedder" if s.mode == "asr_text_retrieval" else "text_embedder"
-        results[key] = s.text_embedding_pipeline.model.name()
-    if s.mode == "audio_text_retrieval":
-        # Computed at the source (the fusion node) and published as an artifact (M1d-2).
-        alignment = _ctx_first(s, "embedding_alignment")
-        if alignment is not None:
-            results["embedding_alignment"] = alignment
-            logger.info(
-                "Embedding alignment - cosine mean=%.4f std=%.4f",
-                alignment["audio_text_cosine_mean"],
-                alignment["audio_text_cosine_std"],
-            )
-
-
-def _build_provenance(s: RunState) -> Dict[str, Any]:
-    """Machine-readable model identity for the report (F30/C6): the structured per-pipeline
-    fields that define the experiment — type/size/name/dim/dropout/model_path/adapter/
-    embedding_space/params (pooling) + retrieval knobs — so a saved result is reproducible and
-    the leaderboard can group/filter by them. Driven by the pipelines that ran. The model's
-    ``.name()`` rides along under ``resolved`` for display."""
-    from ...config.types import enum_to_str
-
-    m = getattr(s.config, "model", None) if s.config is not None else None
-    prov: Dict[str, Any] = {}
-    if m is None:
-        return prov
-
-    def _clean(d: Dict[str, Any]) -> Dict[str, Any]:
-        return {k: v for k, v in d.items() if v not in (None, "", {}, [])}
-
-    if s.asr_pipeline is not None:
-        prov["asr"] = _clean({
-            "type": m.asr_model_type, "size": m.asr_size, "name": m.asr_model_name,
-            "adapter": m.asr_adapter_path, "params": dict(m.asr_params or {}),
-            "resolved": s.asr_pipeline.model.name(),
-        })
-    if s.text_embedding_pipeline is not None:
-        prov["text_emb"] = _clean({
-            "type": m.text_emb_model_type, "size": m.text_emb_size, "name": m.text_emb_model_name,
-            "adapter": m.text_emb_adapter_path, "embedding_space": m.text_emb_embedding_space,
-            "params": dict(m.text_emb_params or {}),
-            "resolved": s.text_embedding_pipeline.model.name(),
-        })
-    if s.audio_embedding_pipeline is not None:
-        prov["audio_emb"] = _clean({
-            "type": m.audio_emb_model_type, "size": m.audio_emb_size, "name": m.audio_emb_model_name,
-            "dim": m.audio_emb_dim, "dropout": m.audio_emb_dropout,
-            "model_path": m.audio_emb_model_path, "adapter": m.audio_emb_adapter_path,
-            "embedding_space": m.audio_emb_embedding_space, "params": dict(m.audio_emb_params or {}),
-            "resolved": s.audio_embedding_pipeline.model.name(),
-        })
-    vdb = getattr(s.config, "vector_db", None)
-    if vdb is not None:
-        reranker = (
-            getattr(vdb, "reranker_model", None)
-            if getattr(vdb, "reranker_enabled", False) else None
-        )
-        prov["retrieval"] = _clean({
-            "store": enum_to_str(vdb.type) if getattr(vdb, "type", None) is not None else None,
-            "k": getattr(vdb, "k", None),
-            "mode": (enum_to_str(vdb.retrieval_mode)
-                     if getattr(vdb, "retrieval_mode", None) is not None else None),
-            "reranker": reranker,
-        })
-    return prov
-
-
-
-
 def _asr_hypothesis(s: RunState) -> list:
     """The ASR hypothesis from the bus (``query_text``). It is immutable — correction /
     optimization publish distinct names — so this is always the un-rewritten ASR output
     WER/CER score against (no raw_query_text snapshot needed since Phase 4)."""
     return list(s.get_artifact("query_text", default=[]))
-
-
-def _reference_transcriptions(s: RunState) -> list:
-    """The spoken-transcription GT from the bus (`reference_transcription`, published by
-    the asr / audio_embedding node, M1c-3; bus-only since M1d-2)."""
-    return list(s.get_artifact("reference_transcription", default=[]))
 
 
 def _wer_cer_pair(pair):
@@ -407,7 +261,7 @@ def _asr_item_scores(s: RunState):
     The per-item WER/CER map is a pure, CPU-bound, order-preserving fold, so it runs through the
     4b ``parallel_map`` (``sync`` by default → byte-identical to the serial loop; ``thread`` /
     ``process`` parallelize the GIL-bound edit-distance work)."""
-    if s.mode not in ("asr_text_retrieval", "asr_only"):
+    if not asr_ran(s):  # only ASR modes carry WER/CER
         return [], []
     from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
 
@@ -433,12 +287,11 @@ _BARE_KEY_FOR = {
 }
 
 
-def _derive_bare_keys(results: "RunResults", scores: Dict[str, Any], mode: str) -> None:
+def _derive_bare_keys(results: "RunResults", scores: Dict[str, Any], asr_mode: bool) -> None:
     """Surface the registry per-item scores as the legacy flat bare keys (report-derived
-    aliases, L3) — the registry is the single scalar source. WER/CER are gated to ASR modes
-    (legacy parity: audio_emb/audio_text carry no WER). Means are identical to the deleted
-    legacy scalars (smoke-confirmed: single-branch WER 0.6541 == registry wer)."""
-    asr_mode = mode in ("asr_text_retrieval", "asr_only")
+    aliases, L3) — the registry is the single scalar source. WER/CER are gated to ASR runs
+    (``asr_mode``; legacy parity: audio_emb/audio_text carry no WER). Means are identical to the
+    deleted legacy scalars (smoke-confirmed: single-branch WER 0.6541 == registry wer)."""
     for name, items in scores.items():
         key = _BARE_KEY_FOR.get(name)
         if key is None:
@@ -447,82 +300,6 @@ def _derive_bare_keys(results: "RunResults", scores: Dict[str, Any], mode: str) 
             continue
         vals = [float(v) for _, v in items]
         results[key] = (sum(vals) / len(vals)) if vals else 0.0
-
-
-def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores, retrieved_keys) -> None:
-    """Retrieval diagnostics not carried by the registry report (correlation, rank
-    distribution, failure rate/analysis, flat CIs). Same functions/values as the old path.
-    """
-    corr = wer_recall_correlation(wer_scores, recall5)
-    if corr is not None:
-        results["wer_recall5_correlation"] = corr
-
-    rank_dist, failure_rate = first_relevant_rank_distribution(
-        retrieved_keys, all_relevant
-    )
-    results["first_relevant_rank_distribution"] = rank_dist
-    results["retrieval_failure_rate"] = failure_rate
-
-    if s.trace_limit > 0:
-        _attach_failure_analysis(
-            results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
-        )
-
-    if s.compute_confidence_intervals and len(retrieved_keys) >= MIN_SAMPLES_FOR_CI:
-        ci_inputs = {
-            "MRR": [
-                reciprocal_rank(r, rel) for r, rel in zip(retrieved_keys, all_relevant)
-            ],
-            "Recall@5": recall5,
-            "NDCG@5": [
-                ndcg_at_k(r, rel, 5) for r, rel in zip(retrieved_keys, all_relevant)
-            ],
-        }
-        for name, ci_scores in ci_inputs.items():
-            try:
-                results[f"{name}_ci"] = bootstrap_confidence_interval(
-                    ci_scores, alpha=BOOTSTRAP_ALPHA, n_bootstrap=BOOTSTRAP_ITERATIONS
-                )
-            except Exception as exc:
-                logger.warning("CI computation failed for %s: %s", name, exc)
-
-
-def _attach_failure_analysis(
-    results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
-) -> None:
-    """Retrieval failure-mode decomposition (only when traces are enabled)."""
-    query_texts = (
-        s.get_artifact("query_text", default=[])
-        if s.mode == "asr_text_retrieval"
-        else _reference_transcriptions(s)
-    )
-    details = [
-        {
-            "query": query_texts[i],
-            "retrieved": retrieved_keys[i],
-            "relevant": all_relevant[i],
-        }
-        for i in range(len(retrieved_keys))
-    ]
-    analysis = analyze_retrieval_failures({"details": details}, top_k=s.k)
-    if wer_scores and len(wer_scores) == len(recall5):
-        corpus_doc_ids = None
-        if hasattr(s.dataset, "get_corpus"):
-            try:
-                corpus_doc_ids = {
-                    str(doc.get("doc_id", "")) for doc in s.dataset.get_corpus()
-                }
-                corpus_doc_ids.discard("")
-            except Exception:
-                corpus_doc_ids = None
-        analysis["failure_categories"] = categorize_failures(
-            wer_scores,
-            recall5,
-            rank_dist,
-            all_relevant=all_relevant,
-            corpus_doc_ids=corpus_doc_ids,
-        )
-    results["retrieval_failure_analysis"] = analysis
 
 
 def _stage_transcription_metrics(s: RunState) -> None:
@@ -582,7 +359,7 @@ def _stage_metrics(s: RunState) -> None:
 
     # Diagnostics the registry report does not carry (from the per-item state the typed
     # metric nodes set upstream).
-    if s.mode != "asr_only" and retrieved_keys:
+    if retrieval_ran(s) and retrieved_keys:
         _ir_diagnostics(
             results,
             s,
@@ -634,7 +411,7 @@ def _attach_registry_report(
     reference = _reference_transcriptions(s)
     query_text = (
         s.get_artifact("query_text")
-        if s.mode == "asr_text_retrieval"
+        if is_asr_text_retrieval(s)
         else reference
     )
     _keyed(query_text, "query_text")
@@ -658,7 +435,10 @@ def _attach_registry_report(
         }
     scores = _branch_scores(s, artifacts)
     if scores:
-        _derive_bare_keys(results, scores, s.mode)
+        _derive_bare_keys(results, scores, asr_ran(s))
+        # The report branch key + ``pipeline_mode`` echo carry the run's mode *label* — the
+        # executed graph's identity (``s.mode``), which the node set alone can't reconstruct
+        # (audio_emb vs audio_text share a graph). Behavior is graph-derived; only the label is.
         report = build_report(
             {s.mode: scores}, provenance=_run_provenance(s), with_ci=True
         )

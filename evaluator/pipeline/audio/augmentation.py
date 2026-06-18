@@ -8,7 +8,6 @@ speed perturbation, pitch shifting, and codec simulation.
 import numpy as np
 import logging
 from typing import List, Tuple, Optional
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -41,22 +40,28 @@ class AudioAugmenter:
         Returns:
             Augmented audio waveform (same shape as input).
         """
-        if seed is not None:
-            np.random.seed(int(seed) % (2**32))
+        # A per-call local RNG (not the global np.random): identical Mersenne-Twister sequence to
+        # the former ``np.random.seed(seed)`` path, but local — so the same shared augmenter is
+        # thread/process-safe (no global-state race) and draws stay order-deterministic.
+        rng = (
+            np.random.RandomState(int(seed) % (2**32))
+            if seed is not None
+            else np.random.RandomState()
+        )
         augmented = audio.copy()
 
-        # Apply each augmentation if enabled
+        # Apply each augmentation if enabled (draws consumed in this fixed order from ``rng``)
         if self.config.add_noise:
-            augmented = self._add_noise(augmented, sr)
+            augmented = self._add_noise(augmented, sr, rng)
 
         if self.config.speed_perturbation:
-            augmented = self._speed_perturbation(augmented, sr)
+            augmented = self._speed_perturbation(augmented, sr, rng)
 
         if self.config.pitch_shift:
-            augmented = self._pitch_shift(augmented, sr)
+            augmented = self._pitch_shift(augmented, sr, rng)
 
         if self.config.volume_change:
-            augmented = self._volume_change(augmented)
+            augmented = self._volume_change(augmented, rng)
 
         # Ensure output is still float32 and in valid range
         augmented = augmented.astype(np.float32)
@@ -104,20 +109,22 @@ class AudioAugmenter:
 
         return variants
 
-    def _add_noise(self, audio: np.ndarray, sr: int) -> np.ndarray:
+    def _add_noise(
+        self, audio: np.ndarray, sr: int, rng: np.random.RandomState
+    ) -> np.ndarray:
         """Add noise to audio signal."""
         noise_type = self.config.noise_type.lower()
 
         # Generate noise
         if noise_type == "white":
-            noise = self._generate_white_noise(len(audio))
+            noise = self._generate_white_noise(len(audio), rng)
         elif noise_type == "pink":
-            noise = self._generate_pink_noise(len(audio))
+            noise = self._generate_pink_noise(len(audio), rng)
         elif noise_type == "brown":
-            noise = self._generate_brown_noise(len(audio))
+            noise = self._generate_brown_noise(len(audio), rng)
         else:
             logger.warning(f"Unknown noise type: {noise_type}, using white noise")
-            noise = self._generate_white_noise(len(audio))
+            noise = self._generate_white_noise(len(audio), rng)
 
         # Calculate signal and noise power
         signal_power = np.mean(audio**2)
@@ -133,11 +140,15 @@ class AudioAugmenter:
         logger.debug(f"Added {noise_type} noise at {self.config.snr_db} dB SNR")
         return noisy_audio
 
-    def _generate_white_noise(self, length: int) -> np.ndarray:
+    def _generate_white_noise(
+        self, length: int, rng: np.random.RandomState
+    ) -> np.ndarray:
         """Generate white (Gaussian) noise."""
-        return np.random.randn(length).astype(np.float32)
+        return rng.randn(length).astype(np.float32)
 
-    def _generate_pink_noise(self, length: int) -> np.ndarray:
+    def _generate_pink_noise(
+        self, length: int, rng: np.random.RandomState
+    ) -> np.ndarray:
         """Generate pink (1/f) noise using Voss-McCartney algorithm."""
         # Number of random sources
         num_sources = 16
@@ -152,7 +163,7 @@ class AudioAugmenter:
             num_updates = length // update_rate
 
             # Generate random values
-            values = np.random.randn(num_updates + 1)
+            values = rng.randn(num_updates + 1)
 
             # Upsample to full length
             for j in range(num_updates):
@@ -168,9 +179,11 @@ class AudioAugmenter:
 
         return pink_noise.astype(np.float32)
 
-    def _generate_brown_noise(self, length: int) -> np.ndarray:
+    def _generate_brown_noise(
+        self, length: int, rng: np.random.RandomState
+    ) -> np.ndarray:
         """Generate brown (1/f^2) noise via cumulative sum of white noise."""
-        white_noise = np.random.randn(length)
+        white_noise = rng.randn(length)
         brown_noise = np.cumsum(white_noise)
 
         # Normalize
@@ -178,11 +191,13 @@ class AudioAugmenter:
 
         return brown_noise.astype(np.float32)
 
-    def _speed_perturbation(self, audio: np.ndarray, sr: int) -> np.ndarray:
+    def _speed_perturbation(
+        self, audio: np.ndarray, sr: int, rng: np.random.RandomState
+    ) -> np.ndarray:
         """Apply speed perturbation (time stretching)."""
         # Random speed factor within range
         speed_min, speed_max = self.config.speed_range
-        speed_factor = np.random.uniform(speed_min, speed_max)
+        speed_factor = rng.uniform(speed_min, speed_max)
 
         try:
             import librosa
@@ -195,11 +210,13 @@ class AudioAugmenter:
             logger.warning("librosa not installed, speed perturbation skipped")
             return audio
 
-    def _pitch_shift(self, audio: np.ndarray, sr: int) -> np.ndarray:
+    def _pitch_shift(
+        self, audio: np.ndarray, sr: int, rng: np.random.RandomState
+    ) -> np.ndarray:
         """Apply pitch shifting."""
         # Random pitch shift within range
         pitch_min, pitch_max = self.config.pitch_semitones_range
-        n_steps = np.random.uniform(pitch_min, pitch_max)
+        n_steps = rng.uniform(pitch_min, pitch_max)
 
         try:
             import librosa
@@ -212,10 +229,12 @@ class AudioAugmenter:
             logger.warning("librosa not installed, pitch shift skipped")
             return audio
 
-    def _volume_change(self, audio: np.ndarray) -> np.ndarray:
+    def _volume_change(
+        self, audio: np.ndarray, rng: np.random.RandomState
+    ) -> np.ndarray:
         """Apply random volume change."""
         vol_min, vol_max = self.config.volume_range
-        volume_factor = np.random.uniform(vol_min, vol_max)
+        volume_factor = rng.uniform(vol_min, vol_max)
 
         logger.debug(f"Applied volume change: {volume_factor:.2f}x")
         return audio * volume_factor

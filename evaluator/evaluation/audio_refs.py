@@ -100,14 +100,14 @@ def publish_audio_refs(s: Any, dataset: Any) -> None:
     logger.debug("dataset_source: published %d audio refs", len(ids))
 
 
-
 def resolve_audio_dataset(s: Any, dataset: Any) -> Any:
     """The dataset an audio consumer should iterate: ref-view when the bus refs
     diverged from the dataset's own audio paths, else the dataset itself (parity)."""
     refs = None
     try:
         refs = s.keyed_items("query_audio")
-    except Exception:
+    except Exception as exc:
+        logger.debug("audio_refs: keyed_items('query_audio') failed: %s", exc)
         refs = None
     if not isinstance(refs, ItemSet) or not refs.ids:
         return dataset

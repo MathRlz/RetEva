@@ -7,10 +7,10 @@ from typing import Optional
 class CacheConfig:
     """
     Configuration for caching expensive computations.
-    
+
     The cache stores intermediate results to disk to avoid redundant computation
     across evaluation runs. Different cache types can be individually enabled/disabled.
-    
+
     Attributes:
         enabled: Whether caching is enabled globally. Default: True.
         cache_dir: Directory path for cache storage. Default: ".cache".
@@ -19,7 +19,7 @@ class CacheConfig:
         cache_transcriptions: Cache ASR transcription results. Default: True.
         cache_embeddings: Cache text embedding vectors. Default: True.
         cache_vector_db: Cache built vector databases. Default: True.
-    
+
     Examples:
         >>> config = CacheConfig(enabled=True, cache_dir=".cache")
         >>> config.cache_asr_features = False  # Disable ASR feature caching
@@ -28,7 +28,7 @@ class CacheConfig:
     enabled: bool = True
     cache_dir: str = ".cache"
     max_size_gb: Optional[float] = None
-    
+
     cache_asr_features: bool = True
     cache_transcriptions: bool = True
     cache_embeddings: bool = True

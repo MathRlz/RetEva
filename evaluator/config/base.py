@@ -26,10 +26,10 @@ def _warn_if_unusable(device_idx: int, device: str) -> None:
 
 def validate_device_string(device: str) -> None:
     """Validate device string format.
-    
+
     Args:
         device: Device string to validate (e.g., "cpu", "cuda:0", "mps").
-        
+
     Raises:
         ValueError: If device string format is invalid.
     """
@@ -75,23 +75,23 @@ MODEL_EMBEDDING_DIMS: Dict[str, int] = {
 
 def detect_device(preferred: Optional[str] = None) -> str:
     """Detect the best available device for model execution.
-    
+
     Args:
         preferred: Preferred device string (e.g., "cuda:0", "cpu"). If valid, use it.
-        
+
     Returns:
         Device string: the preferred device if valid, otherwise auto-detected device.
-        
+
     Raises:
         ValueError: If preferred device has invalid format.
     """
     import torch
-    
+
     # If preferred is specified, validate and return it
     if preferred is not None:
         # Validate format first
         validate_device_string(preferred)
-        
+
         if preferred == "cpu":
             return "cpu"
         if preferred.startswith("cuda"):
@@ -105,7 +105,7 @@ def detect_device(preferred: Optional[str] = None) -> str:
                 except (ValueError, IndexError):
                     pass
             # Preferred CUDA device not available, fall through to auto-detect
-    
+
     # Auto-detect
     if torch.cuda.is_available():
         return "cuda:0"
@@ -114,7 +114,7 @@ def detect_device(preferred: Optional[str] = None) -> str:
 
 def get_available_gpu_count() -> int:
     """Return the number of available CUDA GPUs.
-    
+
     Returns:
         Number of CUDA devices available, 0 if CUDA is not available.
     """
@@ -124,10 +124,10 @@ def get_available_gpu_count() -> int:
 
 def get_gpu_memory_gb(device_idx: int = 0) -> Optional[float]:
     """Get total GPU memory in GB for a specific device.
-    
+
     Args:
         device_idx: CUDA device index.
-        
+
     Returns:
         Total memory in GB, or None if unavailable.
     """
@@ -143,10 +143,10 @@ def get_gpu_memory_gb(device_idx: int = 0) -> Optional[float]:
 
 def get_gpu_free_memory_gb(device_idx: int = 0) -> Optional[float]:
     """Get free GPU memory in GB for a specific device.
-    
+
     Args:
         device_idx: CUDA device index.
-        
+
     Returns:
         Free memory in GB, or None if unavailable.
     """
@@ -161,15 +161,15 @@ def get_gpu_free_memory_gb(device_idx: int = 0) -> Optional[float]:
 
 
 def estimate_model_memory_gb(
-    model_category: str, 
+    model_category: str,
     model_type: Optional[str]
 ) -> float:
     """Estimate VRAM requirements for a model.
-    
+
     Args:
         model_category: One of 'asr', 'text_embedding', 'audio_embedding'.
         model_type: The specific model type (e.g., 'whisper', 'labse').
-        
+
     Returns:
         Estimated memory in GB.
     """
@@ -191,10 +191,10 @@ def estimate_model_memory_gb(
 
 def get_text_embedding_dim(model_type: Optional[str]) -> Optional[int]:
     """Get the embedding dimension for a text embedding model type.
-    
+
     Args:
         model_type: The text embedding model type.
-        
+
     Returns:
         Embedding dimension, or None if unknown.
     """

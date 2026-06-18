@@ -108,22 +108,22 @@ def create_dataset_loader(
     **kwargs: Any,
 ) -> DatasetLoaderProtocol:
     """Create a dataset loader based on the specified source type.
-    
+
     This factory function creates the appropriate loader based on the
     source parameter and provided options.
-    
+
     Args:
         source: Data source type. One of:
             - "local": Load from local audio directory
             - "huggingface": Load from HuggingFace Hub
             - "custom": Use GenericDatasetLoader with provided data
-        
+
         # Local loader options:
         audio_dir: Path to directory containing audio files.
         transcripts_file: Optional path to transcripts file.
         recursive: Whether to search subdirectories.
         file_pattern: Optional glob pattern to filter files.
-        
+
         # HuggingFace loader options:
         huggingface_dataset: HuggingFace dataset identifier.
         huggingface_subset: Dataset subset/configuration name.
@@ -133,18 +133,18 @@ def create_dataset_loader(
         streaming: Whether to use streaming mode.
         trust_remote_code: Whether to trust remote code.
         cache_dir: Cache directory for HuggingFace datasets.
-        
+
         # Common options:
         default_language: Default language code.
         sample_rate: Target sample rate for resampling.
         **kwargs: Additional keyword arguments.
-        
+
     Returns:
         A dataset loader implementing DatasetLoaderProtocol.
-        
+
     Raises:
         ValueError: If required options are missing for the source type.
-        
+
     Example:
         >>> # Load from local directory
         >>> loader = create_dataset_loader(
@@ -152,7 +152,7 @@ def create_dataset_loader(
         ...     audio_dir="./data/audio",
         ...     default_language="en"
         ... )
-        
+
         >>> # Load from HuggingFace
         >>> loader = create_dataset_loader(
         ...     source="huggingface",

@@ -10,7 +10,6 @@ Backward Compatibility:
 
 # Import config types and errors first
 from ..config.types import (
-    PipelineMode,
     VectorDBType,
     AllocationStrategy,
     DatasetType,
@@ -54,7 +53,6 @@ from .base import (
 
 __all__ = [
     # Enums and types
-    "PipelineMode",
     "VectorDBType",
     "AllocationStrategy",
     "DatasetType",

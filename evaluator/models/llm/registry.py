@@ -51,7 +51,7 @@ class LLMModelCatalog:
 
     MODELS: List[ModelInfo] = [
         # ===== GENERAL PURPOSE MODELS =====
-        
+
         # Tiny Models (< 3B) - Fast, Low Memory
         ModelInfo(
             name="phi3-mini",
@@ -92,7 +92,7 @@ class LLMModelCatalog:
             huggingface_id="Qwen/Qwen2-1.5B-Instruct",
             min_ram_gb=2,
         ),
-        
+
         # Small Models (3-8B) - Balanced Performance
         ModelInfo(
             name="mistral-7b-instruct",
@@ -159,7 +159,7 @@ class LLMModelCatalog:
             huggingface_id="Qwen/Qwen2-7B-Instruct",
             min_ram_gb=8,
         ),
-        
+
         # Medium Models (8-15B)
         ModelInfo(
             name="mixtral-8x7b",
@@ -187,7 +187,7 @@ class LLMModelCatalog:
             huggingface_id="upstage/SOLAR-10.7B-Instruct-v1.0",
             min_ram_gb=12,
         ),
-        
+
         # Large Models (15-30B)
         ModelInfo(
             name="llama3-70b-instruct",
@@ -215,12 +215,12 @@ class LLMModelCatalog:
             huggingface_id="meta-llama/Meta-Llama-3.1-70B-Instruct",
             min_ram_gb=48,
         ),
-        
+
         # ===== MEDICAL DOMAIN MODELS =====
-        
+
         # Note: BioMistral not in official Ollama library - removed
         # Use Meditron (official) or general models with medical prompting
-        
+
         ModelInfo(
             name="meditron-7b",
             display_name="Meditron 7B (Medical - VERIFIED)",
@@ -235,10 +235,10 @@ class LLMModelCatalog:
             min_ram_gb=8,
         ),
         # Note: medllama2 not reliably available in Ollama - use meditron instead
-        
-        
+
+
         # ===== QUANTIZED VERSIONS (Low Memory) =====
-        
+
         ModelInfo(
             name="mistral-7b-q4",
             display_name="Mistral 7B (Q4)",
@@ -292,9 +292,9 @@ class LLMModelCatalog:
             min_ram_gb=14,
             quantization="Q4_0",
         ),
-        
+
         # ===== CODE & SCIENCE MODELS =====
-        
+
         ModelInfo(
             name="codellama-7b",
             display_name="CodeLlama 7B",
@@ -321,9 +321,9 @@ class LLMModelCatalog:
             huggingface_id="deepseek-ai/deepseek-coder-6.7b-instruct",
             min_ram_gb=8,
         ),
-        
+
         # ===== ADDITIONAL MODELS FOR VARIETY =====
-        
+
         # More Tiny Models
         ModelInfo(
             name="tinyllama-1.1b",
@@ -350,7 +350,7 @@ class LLMModelCatalog:
             ollama_name="orca-mini:3b",
             min_ram_gb=3,
         ),
-        
+
         # More Small Models
         ModelInfo(
             name="vicuna-7b",
@@ -400,7 +400,7 @@ class LLMModelCatalog:
             ollama_name="starling-lm:7b",
             min_ram_gb=8,
         ),
-        
+
         # More Medium Models
         ModelInfo(
             name="codellama-13b",
@@ -426,7 +426,7 @@ class LLMModelCatalog:
             ollama_name="wizardlm:13b",
             min_ram_gb=16,
         ),
-        
+
         # Extra Large Models
         ModelInfo(
             name="llama3.1-405b",
@@ -441,7 +441,7 @@ class LLMModelCatalog:
             huggingface_id="meta-llama/Meta-Llama-3.1-405B-Instruct",
             min_ram_gb=256,
         ),
-        
+
         # More Quantized Versions
         ModelInfo(
             name="gemma-7b-q4",
@@ -471,12 +471,12 @@ class LLMModelCatalog:
         ),
         # biomistral removed - not in Ollama library
     ]
-    
+
     @classmethod
     def get_all_models(cls) -> List[ModelInfo]:
         """Get all available models."""
         return cls.MODELS
-    
+
     @classmethod
     def get_model(cls, name: str) -> Optional[ModelInfo]:
         """Get model by name."""
@@ -484,40 +484,40 @@ class LLMModelCatalog:
             if model.name == name or model.ollama_name == name:
                 return model
         return None
-    
+
     @classmethod
     def get_models_by_domain(cls, domain: ModelDomain) -> List[ModelInfo]:
         """Get models filtered by domain."""
         return [m for m in cls.MODELS if m.domain == domain]
-    
+
     @classmethod
     def get_models_by_size(cls, size: ModelSize) -> List[ModelInfo]:
         """Get models filtered by size."""
         return [m for m in cls.MODELS if m.size == size]
-    
+
     @classmethod
     def get_recommended_for_task(cls, task: str) -> List[ModelInfo]:
         """
         Get models recommended for a specific task.
-        
+
         Args:
             task: Task name (e.g., "judge", "query_rewriting", "medical")
-            
+
         Returns:
             List of recommended models
         """
         return [m for m in cls.MODELS if task in m.recommended_for]
-    
+
     @classmethod
     def get_models_within_ram(cls, max_ram_gb: int) -> List[ModelInfo]:
         """Get models that fit within specified RAM."""
         return [m for m in cls.MODELS if m.min_ram_gb <= max_ram_gb]
-    
+
     @classmethod
     def get_default_model(cls) -> ModelInfo:
         """Get the default recommended model."""
         return cls.get_model("mistral-7b-instruct")
-    
+
     @classmethod
     def get_default_medical_model(cls) -> ModelInfo:
         """Get the default recommended model for medical domain."""
@@ -525,7 +525,7 @@ class LLMModelCatalog:
         if medical:
             return medical
         return cls.get_default_model()
-    
+
     @classmethod
     def to_dict_list(cls) -> List[Dict]:
         """Convert all models to dictionary format for API/UI."""

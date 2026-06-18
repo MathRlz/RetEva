@@ -18,8 +18,9 @@ from ...datasets import QueryDataset
 from ...storage.cache import CacheManager
 from ...logging_config import get_logger, log_cache_stats, node_logger
 from ...metrics.domain_terms import load_term_weights
-from ...pipeline.run_graph import _build_run_graph
-from ..helpers import detect_pipeline_mode, PIPELINE_MODE_LABELS
+from ...pipeline.graph.modes import build_run_graph
+from ..helpers import detect_graph_template
+from ...pipeline.graph.templates import GRAPH_TEMPLATES
 from ..stage_registry import validate_graph_handlers
 from ..handlers.rag import drop_mirrored_top_level_keys
 from ..result_schema import RunResults
@@ -139,23 +140,23 @@ def run_graph(
     progress_callback = context.progress_callback
     features = context.features or RunFeatures()
 
-    # Determine mode + build the stage graph (the source of truth for what runs). The
-    # config's explicit pipeline_mode wins — cross-modal audio_emb builds a text pipeline
-    # for the corpus, which pipeline-presence detection would misread as audio_text fusion.
+    # Determine mode + build the stage graph (the source of truth for what runs). The config's
+    # graph template wins — cross-modal audio_emb builds a text pipeline for the corpus, which
+    # pipeline-presence detection would misread as audio_text fusion.
     configured_mode = None
     if eval_config is not None and getattr(eval_config, "model", None) is not None:
-        from ...config.types import enum_to_str
+        from ...pipeline.graph.modes import _config_template
 
-        configured_mode = enum_to_str(eval_config.model.pipeline_mode)
-    mode = detect_pipeline_mode(
+        configured_mode = _config_template(eval_config)
+    mode = detect_graph_template(
         retrieval_pipeline,
         asr_pipeline,
         text_embedding_pipeline,
         audio_embedding_pipeline,
         configured_mode=configured_mode,
     )
-    logger.info("Evaluation mode: %s (DAG)", PIPELINE_MODE_LABELS[mode])
-    stage_graph = _build_run_graph(
+    logger.info("Evaluation template: %s (DAG)", GRAPH_TEMPLATES.get(mode, mode))
+    stage_graph = build_run_graph(
         mode,
         graph_override=graph_override,
         embedding_fusion_config=features.embedding_fusion_config,

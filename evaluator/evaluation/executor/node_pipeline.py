@@ -34,71 +34,9 @@ def _node_pipeline(s: "RunState", stage: str, params):
     if attr is None or not (params.get("model") or params.get("name")):
         yield
         return
-    provider = getattr(s, "service_provider", None)
-    cm = getattr(s.config, "model", None)
-    cache = s.cache_manager
     saved = getattr(s, attr)
     try:
-        if stage == "asr":
-            mtype = params.get("model") or getattr(cm, "asr_model_type", None) or ""
-            name = params.get("name") or getattr(cm, "asr_model_name", None)
-            device = params.get("device") or getattr(cm, "asr_device", "cuda:0")
-            adapter = params.get("adapter") or getattr(cm, "asr_adapter_path", None)
-            from ...pipeline.asr_pipeline import ASRPipeline
-
-            if provider is not None:
-                model = provider.get_asr_model(mtype, name, adapter, device)
-            else:
-                from ...models import create_asr_model
-
-                model = create_asr_model(
-                    model_type=mtype,
-                    model_name=name,
-                    adapter_path=adapter,
-                    device=device,
-                )
-            s.asr_pipeline = ASRPipeline(model, cache)
-        elif stage == "text_embedding":
-            mtype = (
-                params.get("model") or getattr(cm, "text_emb_model_type", None) or ""
-            )
-            name = params.get("name") or getattr(cm, "text_emb_model_name", None)
-            device = params.get("device") or getattr(cm, "text_emb_device", "cuda:0")
-            from ...pipeline.text_embedding_pipeline import TextEmbeddingPipeline
-
-            if provider is not None:
-                model = provider.get_text_embedding_model(mtype, name, device)
-            else:
-                from ...models import create_text_embedding_model
-
-                model = create_text_embedding_model(
-                    model_type=mtype, model_name=name, device=device
-                )
-            s.text_embedding_pipeline = TextEmbeddingPipeline(model, cache)
-        elif stage == "audio_embedding":
-            mtype = (
-                params.get("model") or getattr(cm, "audio_emb_model_type", None) or ""
-            )
-            name = params.get("name") or getattr(cm, "audio_emb_model_name", None)
-            device = params.get("device") or getattr(cm, "audio_emb_device", "cuda:0")
-            from ...pipeline.audio_embedding_pipeline import AudioEmbeddingPipeline
-
-            if provider is not None:
-                model = provider.get_audio_embedding_model(
-                    mtype,
-                    name,
-                    getattr(cm, "audio_emb_model_path", None),
-                    getattr(cm, "audio_emb_dim", 2048),
-                    getattr(cm, "audio_emb_dropout", 0.1),
-                    device,
-                )
-            else:
-                from ...models import create_audio_embedding_model
-
-                model = create_audio_embedding_model(
-                    model_type=mtype, model_name=name, device=device
-                )
-            s.audio_embedding_pipeline = AudioEmbeddingPipeline(model, cache)
+        setattr(s, attr, _build_node_pipeline(s, stage, params))
         logger.info(
             "node '%s' per-instance model: type=%s name=%s",
             getattr(s.current_node, "id", "?"),
@@ -108,6 +46,43 @@ def _node_pipeline(s: "RunState", stage: str, params):
         yield
     finally:
         setattr(s, attr, saved)
+
+
+_BUILDER_METHOD = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding": "audio_emb"}
+
+
+def _build_node_pipeline(s: "RunState", stage: str, params: dict):
+    """Build a per-node pipeline from the node's params overlaid on the global model config.
+
+    Honors the FULL model param set (``model_path`` / ``dim`` / ``dropout`` / ``pooling`` (via
+    ``params``) / ``embedding_space`` / ``quantization`` / ``size``) by overlaying the node's
+    params onto a copy of ``config.model`` and building through the **factory branch** of
+    ``_ModelBuilders`` (``service_provider=None``) — the provider's ``get_*`` signatures omit
+    several of these, so a per-node override must build standalone (it builds once per run, so
+    forgoing model-reuse is fine)."""
+    from types import SimpleNamespace
+
+    from ...config.graph_config import _MODEL_NODE_FIELDS
+    from ...pipeline.factory import _ModelBuilders
+
+    node_to_field = _MODEL_NODE_FIELDS.get(stage, {})
+    overrides = {field: params[key] for key, field in node_to_field.items() if key in params}
+    eff_model = replace(s.config.model, **overrides)
+    model = getattr(
+        _ModelBuilders(SimpleNamespace(model=eff_model), None, None), _BUILDER_METHOD[stage]
+    )()
+    cache = s.cache_manager
+    if stage == "asr":
+        from ...pipeline.asr_pipeline import ASRPipeline
+
+        return ASRPipeline(model, cache)
+    if stage == "text_embedding":
+        from ...pipeline.text_embedding_pipeline import TextEmbeddingPipeline
+
+        return TextEmbeddingPipeline(model, cache)
+    from ...pipeline.audio_embedding_pipeline import AudioEmbeddingPipeline
+
+    return AudioEmbeddingPipeline(model, cache)
 
 
 @contextmanager

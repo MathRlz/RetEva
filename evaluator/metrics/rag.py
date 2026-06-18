@@ -17,7 +17,7 @@ LLM-judged ones (RAGAS-style), each in ``[0, 1]`` (1 = best):
 from __future__ import annotations
 
 import re
-from typing import Any, List, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from .clinical import DEFAULT_CRITICAL_TERMS
 

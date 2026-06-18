@@ -8,12 +8,39 @@ from __future__ import annotations
 
 import time
 
-from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
 from ..executor.state import RunState
 from ..audio_refs import audio_refs_from_questions
 
 logger = get_logger(__name__)
+
+
+def _augment_audio_one(id_path, *, augmenter, n_variants, base_seed, node_id, out_dir):
+    """Per-item audio augmentation — the 4b ``parallel_map`` unit: decode one query clip, write its
+    ``n_variants`` perturbed WAV(s), return the ``(vid, out_path)`` pairs (lineage ids ``q·augN``
+    when n_variants > 1). Top-level + picklable so the ``process`` backend can run it; the
+    perturbation is a pure function of (audio, sr, seed), so every backend is byte-identical."""
+    import os
+
+    import numpy as np
+    import soundfile as sf
+
+    from ...datasets.core import load_audio_file
+    from ..provenance import item_seed
+
+    qid, path = id_path
+    waveform, sr = load_audio_file(path)
+    audio = np.asarray(waveform.squeeze().numpy(), dtype=np.float32)
+    pairs = []
+    for variant in range(n_variants):
+        perturbed = augmenter.augment(
+            audio, int(sr), seed=item_seed(base_seed, str(qid), node_id, variant)
+        )
+        vid = str(qid) if n_variants == 1 else f"{qid}·aug{variant}"
+        out_path = os.path.join(out_dir, f"{vid.replace('·', '_')}.wav")
+        sf.write(out_path, perturbed, int(sr))
+        pairs.append((vid, out_path))
+    return pairs
 
 
 def _stage_augment_audio(s: RunState) -> None:
@@ -27,14 +54,11 @@ def _stage_augment_audio(s: RunState) -> None:
     """
     import os
 
-    import numpy as np
-    import soundfile as sf
-
     from ...config.audio_augmentation import AudioAugmentationConfig
     from ...pipeline.audio.augmentation import AudioAugmenter
     from ..audio_refs import RefAudioDatasetView  # noqa: F401  (doc link)
     from ..item_set import ItemSet
-    from ..provenance import DEFAULT_SEED, item_seed
+    from ..provenance import DEFAULT_SEED
 
     refs = s.keyed_items("query_audio", default=None)
     if not isinstance(refs, ItemSet) or not refs.ids or not all(
@@ -71,22 +95,24 @@ def _stage_augment_audio(s: RunState) -> None:
     )
     os.makedirs(out_dir, exist_ok=True)
 
-    from ...datasets.core import load_audio_file
-    from ...utils.progress import progress_iter
+    import functools
 
+    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+
+    # Per-item decode + perturb + write through the 4b parallel_map (sync default → byte-identical
+    # to the serial loop; the perturbation is pure in (audio, sr, seed), so thread/process match).
+    backend, workers = resolve_cpu_backend(s.config)
+    per_item = parallel_map(
+        functools.partial(
+            _augment_audio_one, augmenter=augmenter, n_variants=n_variants,
+            base_seed=base_seed, node_id=node_id, out_dir=out_dir,
+        ),
+        list(zip(refs.ids, refs.values)),
+        backend=backend, workers=workers,
+    )
     out_ids, out_paths = [], []
-    for qid, path in progress_iter(
-        zip(refs.ids, refs.values), "Augmenting audio", total=len(refs.ids), unit="clip"
-    ):
-        waveform, sr = load_audio_file(path)
-        audio = np.asarray(waveform.squeeze().numpy(), dtype=np.float32)
-        for variant in range(n_variants):
-            perturbed = augmenter.augment(
-                audio, int(sr), seed=item_seed(base_seed, str(qid), node_id, variant)
-            )
-            vid = str(qid) if n_variants == 1 else f"{qid}·aug{variant}"
-            out_path = os.path.join(out_dir, f"{vid.replace('·', '_')}.wav")
-            sf.write(out_path, perturbed, int(sr))
+    for pairs in per_item:
+        for vid, out_path in pairs:
             out_ids.append(vid)
             out_paths.append(out_path)
     s.put_artifact("query_audio", ItemSet(out_ids, out_paths))
@@ -96,8 +122,6 @@ def _stage_augment_audio(s: RunState) -> None:
         len(refs.ids),
         len(out_ids),
     )
-
-
 
 
 def _stage_tts(s: RunState) -> None:

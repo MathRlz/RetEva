@@ -44,11 +44,15 @@ def _graph_view_from_config(config_dict: dict):
         from evaluator.pipeline import (
             build_graph_from_spec,
             build_stage_graph,
-            get_stage_node_def,
         )
 
         model = config_dict.get("model") or {}
-        mode = config_dict.get("pipeline_mode") or model.get("pipeline_mode")
+        # The template is on graph_override now; tolerate legacy snapshots' flat pipeline_mode.
+        mode = (
+            (config_dict.get("graph_override") or {}).get("template")
+            or config_dict.get("pipeline_mode")
+            or model.get("pipeline_mode")
+        )
         if not mode:
             return [], {}
         mode = str(mode)

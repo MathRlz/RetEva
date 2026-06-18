@@ -10,7 +10,7 @@ Two registries drive graph construction:
 * ``build_graph_from_spec`` — the one way a graph is built: from an ordered list of node
   ids, each node is auto-wired to the earlier nodes that produce its required / present
   optional input artifacts (``edges`` adds ordering not implied by data). Named modes
-  (``PIPELINE_MODE_SPECS``) are just ordered node-id lists fed to this engine.
+  (``GRAPH_TEMPLATE_SPECS``) are just ordered node-id lists fed to this engine.
 
 This ``__init__`` re-exports the full public (and historically-imported private) surface
 so ``from evaluator.pipeline.graph import X`` and the legacy ``evaluator.pipeline.stage_graph``
@@ -33,15 +33,14 @@ from .cse import (  # noqa: F401  (re-export surface)
 )
 from .assembly import FeatureSet, assemble_specs  # noqa: F401  (re-export surface)
 from .modes import (  # noqa: F401  (re-export surface)
-    PIPELINE_MODE_SPECS,
-    PipelineModeSpec,
+    GRAPH_TEMPLATE_SPECS,
+    GraphTemplateSpec,
     _features_from_config,
-    _make_spec,
+    _make_template_spec,
     _required_model_fields,
     build_graph_for_config,
     build_stage_graph,
-    list_pipeline_mode_specs,
-    resolve_pipeline_mode_spec,
+    resolve_graph_template,
 )
 from .registry import (  # noqa: F401  (re-export surface)
     ARTIFACT_CORPUS,
@@ -95,7 +94,7 @@ __all__ = [
     "StageNode",
     "StageNodeDef",
     "StageGraph",
-    "PipelineModeSpec",
+    "GraphTemplateSpec",
     # Registry
     "register_stage_node",
     "registered_stage_names",
@@ -126,9 +125,8 @@ __all__ = [
     # Modes
     "build_stage_graph",
     "build_graph_for_config",
-    "list_pipeline_mode_specs",
-    "resolve_pipeline_mode_spec",
-    "PIPELINE_MODE_SPECS",
+    "resolve_graph_template",
+    "GRAPH_TEMPLATE_SPECS",
     # Dataset roles
     "DATASET_ROLE_BOTH",
     "DATASET_ROLE_CORPUS",

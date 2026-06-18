@@ -1,7 +1,6 @@
 """Eviction, size-budget, and cache-clearing logic."""
 
 import logging
-import sqlite3
 from contextlib import closing
 from typing import Any, Dict
 

@@ -31,6 +31,7 @@ def _asset_version(filename: str) -> str:
     except OSError:
         return "0"
 
+
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.jobs import JobManager
 from evaluator.webapi.ui._common import _TEMPLATES_DIR, make_page

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from typing import Dict, Optional, Tuple, Any, Callable, MutableMapping, List
-import logging
+import json
 import time
 
 from ..models import (
@@ -18,6 +18,24 @@ from .model_services import (
     FactoryModelService,
     LLMServerService,
 )
+from ..logging_config import get_logger
+
+
+def _kw_default(obj: Any) -> Any:
+    """JSON fallback for non-native kwarg values. Sets/frozensets become a sorted list so the key
+    is deterministic across processes (``str(set)`` order is hash-seed dependent); everything else
+    falls back to ``str``."""
+    if isinstance(obj, (set, frozenset)):
+        return sorted(map(str, obj))
+    return str(obj)
+
+
+def _kw_key(kwargs: Dict[str, Any]) -> Tuple[Any, ...]:
+    """A stable, hashable key fragment for model-specific kwargs — empty (no key change) when no
+    kwargs, so existing callers cache exactly as before; a non-empty set caches distinctly (e.g.
+    ``pooling=mean_abtt`` vs ``attention`` are different models)."""
+    return (json.dumps(kwargs, sort_keys=True, default=_kw_default),) if kwargs else ()
+
 
 ASRKey = Tuple[str, Optional[str], Optional[str], str]
 TextKey = Tuple[str, Optional[str], str]
@@ -25,7 +43,7 @@ AudioKey = Tuple[str, Optional[str], Optional[str], int, float, str]
 RerankerKey = Tuple[str, Optional[str], Optional[str], int, int]
 TTSKey = Tuple[str, str, str, int]
 LLMServerKey = Tuple[str, str, int, str, int]
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ModelServiceProvider:
@@ -125,11 +143,15 @@ class ModelServiceProvider:
         model_name: Optional[str],
         adapter_path: Optional[str],
         device: str,
+        **kwargs: Any,
     ):
+        # Model-specific params (size, quantization, the model's own Params fields) flow through
+        # **kwargs straight to the factory, and are folded into the cache key (registry-driven —
+        # the provider needn't know what they mean).
         key = self._key_for(
             "asr", model_type=model_type, model_name=model_name,
             adapter_path=adapter_path, device=device,
-        )
+        ) + _kw_key(kwargs)
         return self._get_or_create(
             self._asr_services,
             key,
@@ -138,6 +160,7 @@ class ModelServiceProvider:
                 model_name=model_name,
                 adapter_path=adapter_path,
                 device=device,
+                **kwargs,
             ),
             f"asr:{model_type}@{device}",
         )
@@ -147,10 +170,11 @@ class ModelServiceProvider:
         model_type: str,
         model_name: Optional[str],
         device: str,
+        **kwargs: Any,
     ):
         key = self._key_for(
             "text", model_type=model_type, model_name=model_name, device=device,
-        )
+        ) + _kw_key(kwargs)
         return self._get_or_create(
             self._text_services,
             key,
@@ -158,6 +182,7 @@ class ModelServiceProvider:
                 model_type=model_type,
                 model_name=model_name,
                 device=device,
+                **kwargs,
             ),
             f"text_embedding:{model_type}@{device}",
         )
@@ -170,11 +195,12 @@ class ModelServiceProvider:
         emb_dim: int,
         dropout: float,
         device: str,
+        **kwargs: Any,
     ):
         key = self._key_for(
             "audio", model_type=model_type, model_name=model_name, model_path=model_path,
             emb_dim=emb_dim, dropout=dropout, device=device,
-        )
+        ) + _kw_key(kwargs)
         return self._get_or_create(
             self._audio_services,
             key,
@@ -185,6 +211,7 @@ class ModelServiceProvider:
                 emb_dim=emb_dim,
                 dropout=dropout,
                 device=device,
+                **kwargs,
             ),
             f"audio_embedding:{model_type}@{device}",
         )

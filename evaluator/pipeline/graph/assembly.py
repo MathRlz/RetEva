@@ -55,7 +55,6 @@ class FeatureSet:
     # in canonical rerank→mmr→threshold order. A tuple (frozen-dataclass friendly); repeats
     # allowed for cascades. See ``_refine_chain``.
     refine_ops: tuple = ()
-    tts_enabled: bool = False
     sink_enabled: bool = False
     correction_enabled: bool = False
     answer_gen_enabled: bool = False
@@ -74,7 +73,6 @@ class FeatureSet:
             rerank_enabled=True,
             mmr_enabled=True,
             threshold_enabled=True,
-            tts_enabled=True,
             sink_enabled=True,
             correction_enabled=True,
             answer_gen_enabled=True,
@@ -152,7 +150,7 @@ def _retrieve_core(mode: str, f: FeatureSet) -> List[Any]:
             # Embedding level: fuse the vectors, then one retrieval.
             return ["audio_embedding", "text_embedding", "fusion", "retrieval"]
         return ["audio_embedding", "retrieval"]
-    raise ValueError(f"Unknown pipeline mode: {mode}")
+    raise ValueError(f"Unknown graph template: {mode}")
 
 
 def assemble_specs(mode: str, f: FeatureSet) -> List[Any]:
@@ -160,8 +158,9 @@ def assemble_specs(mode: str, f: FeatureSet) -> List[Any]:
     `_sorted` stable-sorts by slot. The result feeds ``build_graph_from_spec`` (auto-wiring).
     """
     items: List[Tuple[float, Any]] = [(SLOT_SOURCE, "dataset_source")]
-    if f.tts_enabled:
-        items.append((SLOT_TTS, "tts"))
+    # Every speech template consumes query audio; a tts node gap-fills any missing clip (free
+    # no-op — no model load — when all audio is present), so it belongs in every graph.
+    items.append((SLOT_TTS, "tts"))
 
     if mode == "asr_only":
         items += [

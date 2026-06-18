@@ -6,7 +6,6 @@ registers itself via ``@register_stage_handler`` at import time.
 
 from __future__ import annotations
 
-import time
 from typing import Any, List, Optional
 
 from ..stage_registry import register_stage_handler

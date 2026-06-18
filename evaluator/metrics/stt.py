@@ -7,10 +7,12 @@ normalize = Compose([
     RemoveMultipleSpaces()
 ])
 
+
 def word_error_rate(ref: str, hyp: str) -> float:
     ref = normalize(ref)
     hyp = normalize(hyp)
     return wer(ref, hyp)
+
 
 def character_error_rate(ref: str, hyp: str) -> float:
     ref = normalize(ref)
@@ -81,4 +83,3 @@ def term_weighted_wer(
                 )
 
     return dp[n][m] / total_weight
-

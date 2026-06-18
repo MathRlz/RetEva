@@ -5,7 +5,6 @@ import subprocess
 import time
 import os
 import requests
-from typing import Optional
 
 from .base import BaseLLMServer, ServerStatus
 
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class OllamaServer(BaseLLMServer):
     """Ollama backend for local LLM serving."""
-    
+
     def __init__(
         self,
         model: str,
@@ -25,7 +24,7 @@ class OllamaServer(BaseLLMServer):
     ):
         """
         Initialize Ollama server.
-        
+
         Args:
             model: Ollama model name (e.g., "mistral:7b-instruct")
             host: Server host
@@ -35,26 +34,26 @@ class OllamaServer(BaseLLMServer):
         """
         super().__init__(model, host, port, gpu_layers, **kwargs)
         self.ollama_host = os.getenv("OLLAMA_HOST", f"http://{host}:{port}")
-        
+
     def start(self, progress_callback=None) -> bool:
         """
         Start Ollama server.
-        
+
         Ollama typically runs as a system service. This method checks
         if it's running and pulls the model if needed.
-        
+
         Args:
             progress_callback: Optional callback(status, message, progress) to report progress
-        
+
         Returns:
             True if server is ready, False otherwise
         """
         logger.info(f"Checking Ollama server at {self.ollama_host}")
         self.status = ServerStatus.STARTING
-        
+
         if progress_callback:
             progress_callback("checking", "Checking Ollama installation...", 5)
-        
+
         # Check if Ollama is installed
         if not self._check_ollama_installed():
             logger.error("Ollama is not installed. Please install from https://ollama.ai")
@@ -62,10 +61,10 @@ class OllamaServer(BaseLLMServer):
             if progress_callback:
                 progress_callback("error", "Ollama not installed", 0)
             return False
-        
+
         if progress_callback:
             progress_callback("checking", "Checking if Ollama service is running...", 15)
-        
+
         # Check if server is running
         if not self._check_server_running():
             logger.info("Starting Ollama service...")
@@ -76,22 +75,22 @@ class OllamaServer(BaseLLMServer):
                 if progress_callback:
                     progress_callback("error", "Failed to start Ollama service", 0)
                 return False
-        
+
         # Wait for server to be ready
         if progress_callback:
             progress_callback("checking", "Waiting for Ollama service...", 35)
-        
+
         if not self._wait_for_server(timeout=30):
             logger.error("Ollama server failed to start")
             self.status = ServerStatus.ERROR
             if progress_callback:
                 progress_callback("error", "Ollama service timeout", 0)
             return False
-        
+
         # Pull model if not present
         if progress_callback:
             progress_callback("checking", f"Checking if model {self.model} is available...", 45)
-        
+
         if not self._check_model_present():
             logger.info(f"Model {self.model} not found, pulling...")
             if progress_callback:
@@ -105,20 +104,20 @@ class OllamaServer(BaseLLMServer):
         else:
             if progress_callback:
                 progress_callback("checking", f"Model {self.model} already available", 95)
-        
+
         self.status = ServerStatus.RUNNING
         logger.info(f"Ollama server ready with model {self.model}")
         if progress_callback:
             progress_callback("complete", f"Server ready with {self.model}!", 100)
         return True
-    
+
     def stop(self) -> bool:
         """
         Stop Ollama server by unloading the model.
-        
+
         Note: Ollama runs as a system service. We unload the model to free memory
         but the service continues running for other users/models.
-        
+
         Returns:
             True if model unloaded successfully
         """
@@ -132,7 +131,7 @@ class OllamaServer(BaseLLMServer):
                 text=True,
                 timeout=5
             )
-            
+
             if self.model in result.stdout:
                 logger.info(f"Stopping model {self.model}...")
                 # Stop the specific model
@@ -142,21 +141,21 @@ class OllamaServer(BaseLLMServer):
                     text=True,
                     timeout=10
                 )
-            
+
             self.status = ServerStatus.STOPPED
             logger.info(f"Model {self.model} unloaded (Ollama service still running)")
             return True
-            
+
         except Exception as e:
             logger.warning(f"Could not unload model: {e}")
             # Still mark as stopped even if unload failed
             self.status = ServerStatus.STOPPED
             return True
-    
+
     def get_backend_name(self) -> str:
         """Get backend name."""
         return "ollama"
-    
+
     def _check_ollama_installed(self) -> bool:
         """Check if Ollama is installed."""
         try:
@@ -169,7 +168,7 @@ class OllamaServer(BaseLLMServer):
             return result.returncode == 0
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
-    
+
     def _check_server_running(self) -> bool:
         """Check if Ollama server is running."""
         try:
@@ -180,11 +179,11 @@ class OllamaServer(BaseLLMServer):
             return response.status_code == 200
         except requests.exceptions.RequestException:
             return False
-    
+
     def _start_ollama_service(self) -> bool:
         """
         Try to start Ollama service.
-        
+
         Returns:
             True if started or already running
         """
@@ -202,7 +201,7 @@ class OllamaServer(BaseLLMServer):
             logger.warning(f"Could not start Ollama service: {e}")
             # Service might already be running
             return self._check_server_running()
-    
+
     def _wait_for_server(self, timeout: int = 30) -> bool:
         """Wait for server to be ready."""
         start_time = time.time()
@@ -211,7 +210,7 @@ class OllamaServer(BaseLLMServer):
                 return True
             time.sleep(1)
         return False
-    
+
     def _check_model_present(self) -> bool:
         """Check if model is already pulled."""
         try:
@@ -227,20 +226,20 @@ class OllamaServer(BaseLLMServer):
         except Exception as e:
             logger.debug(f"Error checking models: {e}")
         return False
-    
+
     def _pull_model(self, progress_callback=None) -> bool:
         """
         Pull model from Ollama registry.
-        
+
         Args:
             progress_callback: Optional callback(status, message, progress) to report progress
         """
         try:
             logger.info(f"Pulling model {self.model} (this may take a while)...")
-            
+
             if progress_callback:
                 progress_callback("downloading", f"Downloading {self.model}...", 0)
-            
+
             # Use Popen to stream output
             process = subprocess.Popen(
                 ["ollama", "pull", self.model],
@@ -249,13 +248,13 @@ class OllamaServer(BaseLLMServer):
                 text=True,
                 bufsize=1
             )
-            
+
             # Track progress from output
             for line in process.stdout:
                 line = line.strip()
                 if line:
                     logger.debug(f"Pull output: {line}")
-                    
+
                     # Parse progress from output
                     # Ollama outputs lines like: "pulling manifest", "pulling <hash>", etc.
                     if progress_callback:
@@ -268,27 +267,27 @@ class OllamaServer(BaseLLMServer):
                         elif line.startswith("pulling"):
                             # Extracting percentage if available
                             progress_callback("downloading", line, 50)
-            
+
             process.wait()
-            
+
             if process.returncode == 0:
                 logger.info(f"Model {self.model} pulled successfully")
                 if progress_callback:
                     progress_callback("complete", f"Model {self.model} ready!", 100)
                 return True
             else:
-                logger.error(f"Failed to pull model")
+                logger.error("Failed to pull model")
                 if progress_callback:
                     progress_callback("error", f"Failed to download {self.model}", 0)
                 return False
-                
+
         except subprocess.TimeoutExpired:
             logger.error("Model pull timed out after 10 minutes")
             return False
         except Exception as e:
             logger.error(f"Error pulling model: {e}")
             return False
-    
+
     def get_api_url(self) -> str:
         """Get OpenAI-compatible API URL."""
         return f"{self.ollama_host}/v1/chat/completions"

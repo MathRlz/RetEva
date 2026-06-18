@@ -28,11 +28,13 @@ def _log_embedding_stats(embeddings, label: str) -> None:
     if len(embeddings) == 0:
         return
     emb_array = np.array(embeddings)
-    logger.info(f"{label} shape: {emb_array.shape}")
+    logger.info("%s shape: %s", label, emb_array.shape)
     logger.info(
-        f"{label} stats - mean: {emb_array.mean():.4f}, std: {emb_array.std():.4f}"
+        "%s stats - mean: %.4f, std: %.4f", label, emb_array.mean(), emb_array.std()
     )
-    logger.info(f"{label} norms - mean: {np.linalg.norm(emb_array, axis=1).mean():.4f}")
+    logger.info(
+        "%s norms - mean: %.4f", label, np.linalg.norm(emb_array, axis=1).mean()
+    )
 
 
 def _embed_all_audio(dataset, audio_embedding_pipeline, batch_size, num_workers):
@@ -120,7 +122,7 @@ def _stage_audio_embedding(s: RunState) -> None:
     # Pure transform (Phase 3): publishes only the audio query vectors. GT
     # (reference_transcription / relevant_docs) comes from dataset_source.
     _publish_query_vectors(s, emb, qids, name="audio_query_vectors")
-    logger.info(f"Audio Embedding Phase complete: {len(emb)} audio embeddings")
+    logger.info("Audio Embedding Phase complete: %d audio embeddings", len(emb))
     s.cb("phase_1_audio", s.total, s.total, "Audio embedding complete")
     _log_embedding_stats(emb, "Audio embedding")
 
@@ -136,6 +138,12 @@ def _stage_text_embedding(s: RunState) -> None:
         return
     s.cb("phase_2_embedding", 0, s.total, "Phase 2: Text embedding")
     query_text = s.input("query_text")
+    if not query_text:
+        # No text query in this run (e.g. an audio_text fusion over a pure-audio dataset with no
+        # text-query column) → publish nothing; a downstream fusion node falls back to the audio
+        # stream. Was a crash (`len(None)`).
+        logger.debug("text_embedding: no query_text bound — skipping (no text_query_vectors)")
+        return
     params = s.node_params
     node_id = getattr(s.current_node, "id", "text_embedding")
     # Per-item identity rides the keyed query_text ItemSet (M1d-2).
@@ -168,7 +176,7 @@ def _stage_text_embedding(s: RunState) -> None:
     embeddings = np.array(embs)
     # Distinct stream (no query_vectors mutation): retrieval/fusion read it by name.
     _publish_query_vectors(s, embeddings, ids, name="text_query_vectors")
-    logger.info(f"Text Embedding Phase complete: {len(embeddings)} embeddings")
+    logger.info("Text Embedding Phase complete: %d embeddings", len(embeddings))
     s.cb("phase_2_embedding", s.total, s.total, "Text embedding complete")
     if s.cache_manager and s.experiment_id:
         s.cache_manager.set_checkpoint(
@@ -231,15 +239,18 @@ def _stage_fusion(s: RunState) -> None:
     if fusion_meta is not None:
         s.put_artifact("fusion_reducer", fusion_meta)
         logger.debug("Fusion reducer fit per-run (kept on the bus for reuse/audit).")
-    logger.info(f"Fused embedding shape: {fused_embeddings.shape}")
+    logger.info("Fused embedding shape: %s", fused_embeddings.shape)
     logger.info(
-        f"Fused embedding stats - mean: {fused_embeddings.mean():.4f}, std: {fused_embeddings.std():.4f}"
+        "Fused embedding stats - mean: %.4f, std: %.4f",
+        fused_embeddings.mean(), fused_embeddings.std(),
     )
     logger.info(
-        f"Fused embedding norms - mean: {np.linalg.norm(fused_embeddings, axis=1).mean():.4f}"
+        "Fused embedding norms - mean: %.4f",
+        np.linalg.norm(fused_embeddings, axis=1).mean(),
     )
     logger.info(
-        f"Using fused embeddings for retrieval (method: {s.embedding_fusion_config.fusion_method})"
+        "Using fused embeddings for retrieval (method: %s)",
+        s.embedding_fusion_config.fusion_method,
     )
     s.put_artifact("fused_query_vectors", fused_embeddings)
 

@@ -6,7 +6,6 @@ registers itself via ``@register_stage_handler`` at import time.
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import numpy as np
@@ -15,7 +14,6 @@ from tqdm import tqdm
 from ...utils.progress import progress_disabled
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
-from ..helpers import _search_results_to_keys
 from ..executor.state import RunState
 from ...models.retrieval.query.optimization import (
     rewrite_query,
@@ -26,6 +24,16 @@ from ...models.retrieval.query.optimization import (
 )
 
 logger = get_logger(__name__)
+
+
+def _augment_one_text(id_text, *, augmenter, base_seed, node_id):
+    """One ``(id, text)`` → its deterministically-perturbed text. Module-level + picklable so it is
+    the per-item unit for the 4b ``parallel_map`` (sync default → byte-identical to the serial
+    comprehension; thread/process parallelize a heavy custom augmenter)."""
+    from ..provenance import item_seed
+
+    qid, text = id_text
+    return augmenter.augment(text, seed=item_seed(base_seed, qid, node_id, 0))
 
 
 def _node_correction_config(s: "RunState") -> Any:
@@ -80,12 +88,28 @@ def _stage_query_correction(s: "RunState") -> None:
     cfg = _node_correction_config(s)
     if cfg is None or not getattr(cfg, "enabled", False):
         return
-    from ..query_correction import correct_query_texts, correction_diff
+    import functools
+
+    from ..query_correction import (
+        correct_one_text,
+        resolve_correction_client,
+        correction_diff,
+    )
+    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
     from ..item_set import ItemSet
 
     items = s.input_items("query_text")
     texts = list(items.values) if items is not None else list(s.input("query_text"))
-    corrected = correct_query_texts(texts, cfg)
+    # Per-item correction through the 4b parallel_map (sync default → byte-identical to the batch
+    # call). The llm method's client is built once and shared across items; the process backend
+    # can't pickle a live client, so llm correction runs sync/thread (it's I/O-bound anyway).
+    client = resolve_correction_client(cfg)
+    backend, workers = resolve_cpu_backend(s.config)
+    corrected = parallel_map(
+        functools.partial(correct_one_text, config=cfg, client=client),
+        texts,
+        backend=backend, workers=workers,
+    )
     n_changed = sum(1 for a, b in zip(texts, corrected) if a != b)
     # Publish the corrected text under a DISTINCT name (no query_text mutation); downstream
     # reads it via QUERY_TEXT_CHAIN. Per-item identity rides the incoming ItemSet (M1d-2).
@@ -115,7 +139,7 @@ def _stage_augmenter(s: "RunState") -> None:
     which perturbations apply."""
     from ...pipeline.text_augmentation import TextAugmentConfig, TextAugmenter
     from ..item_set import ItemSet
-    from ..provenance import DEFAULT_SEED, item_seed
+    from ..provenance import DEFAULT_SEED
 
     params = s.node_params
     node_id = getattr(s.current_node, "id", "augmenter")
@@ -137,17 +161,26 @@ def _stage_augmenter(s: "RunState") -> None:
         if not isinstance(corpus_items, ItemSet):
             logger.warning("augmenter '%s' (docs axis): no corpus on the bus", node_id)
             return
-        perturbed = []
-        n_changed = 0
-        for doc_id, doc in zip(corpus_items.ids, corpus_items.values):
-            doc = dict(doc) if isinstance(doc, dict) else {"text": str(doc)}
-            new_text = augmenter.augment(
-                str(doc.get("text", "")), seed=item_seed(base_seed, doc_id, node_id, 0)
-            )
-            if new_text != doc.get("text"):
-                n_changed += 1
-            doc["text"] = new_text
-            perturbed.append(doc)
+        import functools
+
+        from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+
+        perturbed = [
+            dict(d) if isinstance(d, dict) else {"text": str(d)}
+            for d in corpus_items.values
+        ]
+        old_texts = [str(d.get("text", "")) for d in perturbed]
+        backend, workers = resolve_cpu_backend(s.config)
+        new_texts = parallel_map(
+            functools.partial(
+                _augment_one_text, augmenter=augmenter, base_seed=base_seed, node_id=node_id
+            ),
+            list(zip(corpus_items.ids, old_texts)),
+            backend=backend, workers=workers,
+        )
+        n_changed = sum(1 for o, n in zip(old_texts, new_texts) if o != n)
+        for d, new_text in zip(perturbed, new_texts):
+            d["text"] = new_text
         s.put_items("corpus", ItemSet(list(corpus_items.ids), perturbed))
         logger.info(
             "augmenter '%s' (docs axis): %d/%d corpus docs perturbed",
@@ -164,10 +197,18 @@ def _stage_augmenter(s: "RunState") -> None:
         texts = list(s.input("query_text"))
         ids = [str(i) for i in range(len(texts))]
 
-    augmented = [
-        augmenter.augment(t, seed=item_seed(base_seed, qid, node_id, 0))
-        for qid, t in zip(ids, texts)
-    ]
+    import functools
+
+    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+
+    backend, workers = resolve_cpu_backend(s.config)
+    augmented = parallel_map(
+        functools.partial(
+            _augment_one_text, augmenter=augmenter, base_seed=base_seed, node_id=node_id
+        ),
+        list(zip(ids, texts)),
+        backend=backend, workers=workers,
+    )
     n_changed = sum(1 for a, b in zip(texts, augmented) if a != b)
     # Distinct output (no query_text mutation); downstream reads QUERY_TEXT_CHAIN.
     if len(ids) == len(augmented) and len(set(ids)) == len(ids):
@@ -180,6 +221,17 @@ def _stage_augmenter(s: "RunState") -> None:
         n_changed,
         len(augmented),
     )
+
+
+def _optimize_one_text(q, *, fn, cfg):
+    """Per-item query optimization (rewrite / HyDE) — the 4b ``parallel_map`` unit. A bad query
+    falls back to its original (one failure never kills the map). Top-level + picklable so the
+    ``process`` backend can run it."""
+    try:
+        return fn(q, cfg)
+    except Exception as exc:  # noqa: BLE001 — a bad query falls back to the original
+        logger.warning("Query optimization failed for %r: %s", q[:80], exc)
+        return q
 
 
 def _stage_query_optimization(s: "RunState") -> None:
@@ -198,13 +250,19 @@ def _stage_query_optimization(s: "RunState") -> None:
         else [str(i) for i in range(len(texts))]
     )
     s.cb("phase_1_5_query_opt", 0, s.total, f"Phase 1.5: Query optimization ({cfg.method})")
-    optimized = []
-    for q in tqdm(texts, desc=f"Query optimization ({cfg.method})", disable=progress_disabled()):
-        try:
-            optimized.append(fn(q, cfg))
-        except Exception as exc:  # noqa: BLE001 — a bad query falls back to the original
-            logger.warning("Query optimization failed for %r: %s", q[:80], exc)
-            optimized.append(q)
+    # Per-item optimization through the 4b parallel_map (sync default → byte-identical to the serial
+    # loop; rewrite/HyDE are I/O-bound LLM calls, so thread is the right backend). The per-item unit
+    # falls back to the original query on failure.
+    import functools
+
+    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+
+    backend, workers = resolve_cpu_backend(s.config)
+    optimized = parallel_map(
+        functools.partial(_optimize_one_text, fn=fn, cfg=cfg),
+        texts,
+        backend=backend, workers=workers,
+    )
     from .asr import _publish_keyed_or_plain
 
     _publish_keyed_or_plain(s, "optimized_query_text", optimized, ids)
@@ -284,8 +342,6 @@ def _node_query_opt_config(s: "RunState") -> Any:
     if "use_initial_context" in overlay:
         overlay["use_initial_context"] = bool(overlay["use_initial_context"])
     return replace(base, **overlay)
-
-
 
 
 def _retrieved_doc_texts(results: Any, top_k: int) -> list:

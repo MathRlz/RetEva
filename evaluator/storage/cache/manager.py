@@ -277,7 +277,6 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
         Returns True if anything was removed. Used to drop the index cache tied to a
         specific run (its ``db_key`` is stored in the run's metadata).
         """
-        import sqlite3
         from contextlib import closing
 
         removed = False

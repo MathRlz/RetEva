@@ -17,7 +17,7 @@ def parse_compare_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare two evaluation result files with statistical significance testing"
     )
-    
+
     parser.add_argument(
         "file_a",
         type=str,
@@ -50,22 +50,22 @@ def parse_compare_args(args: Optional[List[str]] = None) -> argparse.Namespace:
         default="text",
         help="Output format (default: text)"
     )
-    
+
     return parser.parse_args(args)
 
 
 def run_compare(args: argparse.Namespace) -> int:
     """Run experiment comparison.
-    
+
     Args:
         args: Parsed command-line arguments.
-        
+
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
     path_a = Path(args.file_a)
     path_b = Path(args.file_b)
-    
+
     # Validate paths
     if not path_a.exists():
         print(f"Error: File not found: {path_a}", file=sys.stderr)
@@ -73,7 +73,7 @@ def run_compare(args: argparse.Namespace) -> int:
     if not path_b.exists():
         print(f"Error: File not found: {path_b}", file=sys.stderr)
         return 1
-    
+
     try:
         comparison = compare_result_files(path_a, path_b, args.metrics)
     except json.JSONDecodeError as e:
@@ -82,13 +82,13 @@ def run_compare(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    
+
     # Format output
     if args.format == "json":
         output = json.dumps(comparison, indent=2)
     else:
         output = format_comparison_report(comparison)
-    
+
     # Write output
     if args.output:
         output_path = Path(args.output)
@@ -97,7 +97,7 @@ def run_compare(args: argparse.Namespace) -> int:
         print(f"Comparison saved to: {output_path}")
     else:
         print(output)
-    
+
     return 0
 
 

@@ -14,7 +14,7 @@ from ..helpers import _search_results_to_keys
 from ..item_isolation import isolate_batch
 from ..executor.state import RunState
 from ..executor.node_pipeline import _node_reranking
-from ._common import publish_keyed_or_plain
+from ._common import publish_keyed_or_plain, is_asr_text_retrieval
 from .retrieval_debug import log_retrieval_debug as _log_retrieval_debug
 
 logger = get_logger(__name__)
@@ -33,12 +33,16 @@ def _retrieval_query_texts(s: RunState, rp=None):
     (fusion mode) come from the ctx. ``rp`` is the pipeline actually used (the
     vector_index artifact); falls back to the shared one."""
     rp = rp if rp is not None else s.retrieval_pipeline
-    if s.mode == "asr_text_retrieval":
+    if is_asr_text_retrieval(s):
         # the effective (most-processed) query for sparse/hybrid scoring (QUERY_TEXT_CHAIN)
         return s.input("query_text", default=None)
-    if s.mode == "audio_text_retrieval":
-        return s.get_artifact("reference_transcription", default=None)
-    if s.mode == "audio_emb_retrieval":
+    if s.audio_embedding_pipeline is not None:
+        # Audio query: the spoken reference can drive sparse/hybrid lexical scoring only in
+        # cross-modal audio↔text retrieval; pure audio-embedding self-retrieval has no text
+        # query and supports dense only. The audio_emb/audio_text split is a run policy the
+        # graph can't express (identical node sets), so it reads the run's mode label.
+        if s.mode == "audio_text_retrieval":
+            return s.get_artifact("reference_transcription", default=None)
         if rp.strategy_config.core.mode != "dense":
             raise ValueError(
                 "audio_emb_retrieval supports only retrieval_mode='dense'. "

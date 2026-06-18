@@ -128,16 +128,16 @@ def get_self_rag_prompt(query: str, context: str) -> tuple[str, str]:
 
 def get_rewrite_prompt(query: str, context: Optional[str] = None) -> tuple[str, str]:
     """Get system and user prompts for query rewriting.
-    
+
     Args:
         query: Original query to rewrite.
         context: Optional context from initial retrieval results.
-        
+
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
     system_prompt = QUERY_REWRITE_SYSTEM_PROMPT
-    
+
     if context:
         user_prompt = QUERY_REWRITE_WITH_CONTEXT_PROMPT.format(
             query=query,
@@ -145,16 +145,16 @@ def get_rewrite_prompt(query: str, context: Optional[str] = None) -> tuple[str, 
         )
     else:
         user_prompt = QUERY_REWRITE_USER_PROMPT.format(query=query)
-    
+
     return system_prompt, user_prompt
 
 
 def get_hyde_prompt(query: str) -> tuple[str, str]:
     """Get system and user prompts for HyDE.
-    
+
     Args:
         query: Query for which to generate hypothetical document.
-        
+
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
@@ -165,10 +165,10 @@ def get_hyde_prompt(query: str) -> tuple[str, str]:
 
 def get_decompose_prompt(query: str) -> tuple[str, str]:
     """Get system and user prompts for query decomposition.
-    
+
     Args:
         query: Complex query to decompose.
-        
+
     Returns:
         Tuple of (system_prompt, user_prompt).
     """
@@ -179,10 +179,10 @@ def get_decompose_prompt(query: str) -> tuple[str, str]:
 
 def get_multi_query_prompt(query: str) -> tuple[str, str]:
     """Get system and user prompts for multi-query generation.
-    
+
     Args:
         query: Query for which to generate variations.
-        
+
     Returns:
         Tuple of (system_prompt, user_prompt).
     """

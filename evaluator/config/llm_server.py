@@ -6,10 +6,10 @@ from dataclasses import dataclass
 class LLMServerConfig:
     """
     Configuration for local LLM server.
-    
+
     Enables running local LLM models (Ollama, vLLM, llama.cpp) instead of
     relying on paid API services for query optimization and judging.
-    
+
     Attributes:
         enabled: Whether to use local LLM server. Default: False.
         backend: Server backend to use. Default: "ollama".
@@ -20,7 +20,7 @@ class LLMServerConfig:
         auto_start: Auto-start server if not running. Default: True.
         gpu_layers: Number of GPU layers (-1 for all, 0 for CPU only). Default: -1.
         timeout_s: Server startup timeout in seconds. Default: 60.
-    
+
     Examples:
         >>> # Use Ollama with Mistral
         >>> config = LLMServerConfig(
@@ -28,7 +28,7 @@ class LLMServerConfig:
         ...     backend="ollama",
         ...     model="mistral:7b-instruct"
         ... )
-        >>> 
+        >>>
         >>> # Use medical domain model
         >>> config = LLMServerConfig(
         ...     enabled=True,
@@ -45,7 +45,7 @@ class LLMServerConfig:
     auto_start: bool = True
     gpu_layers: int = -1
     timeout_s: int = 60
-    
+
     def __post_init__(self):
         """Validate configuration."""
         valid_backends = {"ollama", "vllm", "llamacpp"}
@@ -53,10 +53,10 @@ class LLMServerConfig:
             raise ValueError(
                 f"backend must be one of {valid_backends}, got {self.backend}"
             )
-        
+
         if self.port < 1 or self.port > 65535:
             raise ValueError(f"port must be in [1, 65535], got {self.port}")
-    
+
     def get_api_url(self) -> str:
         """Get the OpenAI-compatible API endpoint URL."""
         return f"http://{self.host}:{self.port}/v1/chat/completions"

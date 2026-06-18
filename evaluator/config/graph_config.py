@@ -249,13 +249,17 @@ def _translate_graph(
             f"Unknown key(s) under graph: {sorted(_unknown_graph)}. "
             f"Allowed: {sorted(_GRAPH_KEYS)}."
         )
-    if "mode" in graph:
-        model["pipeline_mode"] = graph["mode"]
+    if "mode" in graph and "nodes" not in graph:
+        # The graph template is a build-time reference on graph_override (expanded with the
+        # config's features). There is no pipeline_mode field; an explicit graph.nodes wins.
+        legacy.setdefault("graph_override", {})["template"] = graph["mode"]
+    # Back-compat: a legacy flat ``model: {pipeline_mode: X}`` becomes a template reference too
+    # (the field is gone, so it must not reach ModelConfig).
+    if isinstance(model, dict) and model.get("pipeline_mode"):
+        legacy.setdefault("graph_override", {}).setdefault("template", model["pipeline_mode"])
+    if isinstance(model, dict):
+        model.pop("pipeline_mode", None)
     if "nodes" in graph:
-        if "mode" not in graph:
-            raise GraphConfigError(
-                "graph.nodes requires graph.mode too (mode drives handler behavior)."
-            )
         node_ids = graph["nodes"]
         # Items are a node-type string OR a dict {id, type, params} for a distinct
         # instance (e.g. two rerankers with different models).
@@ -614,6 +618,44 @@ def legacy_yaml_to_graph_yaml(old: Dict[str, Any]) -> Dict[str, Any]:
     # everything else (advanced flags, llm, device_pool, …) stays top-level (passthrough)
     new.update(old)
     return new
+
+
+def resolved_node_config(config: Any) -> Dict[str, Any]:
+    """The executed DAG as a self-contained, node-centric config (graph-first Phase 5).
+
+    Serializes ``build_graph_for_config(config)`` to ``graph: {nodes, edges}`` — each model-
+    bearing node carrying its resolved model params — plus the non-graph config sections
+    (experiment / dataset / data / vector_db / runtime / feature blocks). There is **no
+    pipeline_mode**: the graph IS the spec of what actually ran, so the resolved config can
+    never list a model (e.g. a default ``asr_model``) for a node the run never executed — the
+    bug that started this. Round-trips: loading it via ``from_yaml`` rebuilds the same graph.
+    """
+    from .serialization import to_nested_dict
+    from ..pipeline.graph.modes import build_graph_for_config
+    from ..pipeline.graph.operators import node_kind
+
+    # Reuse the migration translator for the non-graph sections + the per-kind resolved-config
+    # map (model fields → node params, vector_db → store/retrieval) it already computes; then
+    # drop its mode-based graph block + leftover model passthrough in favour of the real DAG.
+    ncfg = legacy_yaml_to_graph_yaml(to_nested_dict(config))
+    per_kind = ncfg.pop("nodes", {}) or {}
+    ncfg.pop("model", None)
+
+    graph = build_graph_for_config(config)
+    nodes = []
+    edges = []
+    for n in graph.nodes:
+        kind = node_kind(n.stage, n.params)
+        entry: Dict[str, Any] = {"id": n.id, "type": kind}
+        # Drop unset fields (None / empty) so a node carries only what was actually resolved.
+        params = {k: v for k, v in (per_kind.get(kind) or {}).items() if v not in (None, {}, [])}
+        if params:
+            entry["params"] = params
+        nodes.append(entry)
+        for dep in n.depends_on:
+            edges.append({"from": dep, "to": n.id})
+    ncfg["graph"] = {"nodes": nodes, "edges": edges}
+    return ncfg
 
 
 def load_graph_config(path: str, *, validate: bool = True) -> EvaluationConfig:

@@ -16,15 +16,15 @@ from .strategies import (
 __all__ = [
     # Sparse retrieval
     "BM25Retriever",
-    
+
     # Hybrid retrieval
     "HybridRetriever",
     "reciprocal_rank_fusion",
-    
+
     # Reranking
     "BaseReranker",
     "CrossEncoderReranker",
-    
+
     # Advanced strategies
     "DistanceMetric",
     "compute_similarity",

@@ -12,6 +12,7 @@ from typing import Any, Dict
 import yaml
 
 from ..errors import ConfigurationError
+from ..logging_config import get_logger
 from .audio_synthesis import AudioSynthesisConfig
 from .audio_augmentation import AudioAugmentationConfig
 from .answer_generation import AnswerGenerationConfig
@@ -80,6 +81,19 @@ def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> 
 
     # Create a copy to avoid modifying the original
     config_dict = dict(config_dict)
+
+    # Back-compat: there is no `model.pipeline_mode` field anymore — a legacy flat
+    # `model: {pipeline_mode: X}` is a graph *template* reference now. Move it onto
+    # `graph_override["template"]` (an explicit `graph_override.nodes` wins) and drop it before
+    # ModelConfig construction, which would otherwise reject the unknown key.
+    _model = config_dict.get("model")
+    if isinstance(_model, dict) and "pipeline_mode" in _model:
+        _model = dict(_model)
+        template = _model.pop("pipeline_mode", None)
+        config_dict["model"] = _model
+        override = config_dict.get("graph_override") or {}
+        if template is not None and not override.get("nodes"):
+            config_dict["graph_override"] = {**override, "template": str(template)}
 
     # The optional `runtime:`/`experiment:` blocks are flattened up into the
     # top level (deep-merging any dict values) before sub-config construction.
@@ -171,7 +185,10 @@ def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> 
     config = _construct_subconfig(cls, {**main_config, **sub_configs}, "")
 
     if validate:
-        config.validate()
+        for warning in config.validate():
+            # Surface non-fatal config warnings (dim mismatch, dataset compat, …) at load —
+            # they were silently dropped before.
+            get_logger(__name__).warning("config: %s", warning)
 
     return config
 

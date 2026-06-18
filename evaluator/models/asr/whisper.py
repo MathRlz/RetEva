@@ -1,5 +1,5 @@
 """Whisper ASR model implementation."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import ClassVar, Dict, List, Optional
 import torch
 from .base_asr import HuggingFaceASRModel
@@ -25,27 +25,27 @@ class WhisperModel(HuggingFaceASRModel):
     def __init__(self, model_name: str = "openai/whisper-small", adapter_path: Optional[str] = None):
         """
         Initialize Whisper ASR model.
-        
+
         Args:
             model_name: HuggingFace model identifier (e.g., 'openai/whisper-small')
             adapter_path: Optional path to PEFT/LoRA adapter weights
         """
         super().__init__(model_name, adapter_path)
-        
+
         # Whisper-specific: also load feature extractor for direct access
         from transformers import WhisperFeatureExtractor
         self.feature_extractor = WhisperFeatureExtractor.from_pretrained(model_name)
-    
+
     def _create_processor(self):
         """Create Whisper processor."""
         from transformers import WhisperProcessor
         return WhisperProcessor.from_pretrained(self.model_name)
-    
+
     def _create_model(self):
         """Create Whisper model for conditional generation."""
         from transformers import WhisperForConditionalGeneration
         return WhisperForConditionalGeneration.from_pretrained(self.model_name)
-    
+
     def _extract_features(self, processed_audio: List):
         """Extract features using Whisper feature extractor."""
         inputs = self.feature_extractor(
@@ -55,7 +55,7 @@ class WhisperModel(HuggingFaceASRModel):
             return_attention_mask=True
         )
         return inputs.input_features, inputs.attention_mask
-    
+
     def _generate_transcriptions(
         self,
         features: torch.Tensor,

@@ -6,10 +6,10 @@ from typing import Optional
 
 def get_adapter_suffix(adapter_path: Optional[str]) -> str:
     """Extract a short identifier from adapter path.
-    
+
     Args:
         adapter_path: Path to adapter weights directory.
-        
+
     Returns:
         Suffix string like "_adapter_<name>" or empty string if no adapter.
     """
@@ -38,13 +38,14 @@ def generate_model_description(config) -> str:
         Model description string.
     """
     model = config.model
-    if model.pipeline_mode == "audio_emb_retrieval":
+    template = config.graph_template
+    if template == "audio_emb_retrieval":
         return _describe_model(
             model.audio_emb_model_type,
             model.audio_emb_model_name,
             model.audio_emb_adapter_path,
         )
-    if model.pipeline_mode == "asr_only":
+    if template == "asr_only":
         return _describe_model(
             model.asr_model_type, model.asr_model_name, model.asr_adapter_path
         )

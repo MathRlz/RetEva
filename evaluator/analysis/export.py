@@ -10,13 +10,13 @@ from typing import Any, Dict, List, Optional
 
 def export_to_csv(results: Dict[str, Any], output_path: str) -> None:
     """Export metrics to CSV format.
-    
+
     Creates a flat CSV with one row per metric.
-    
+
     Args:
         results: Results dictionary with metric names as keys.
         output_path: Path to output CSV file.
-        
+
     Example output:
         metric,value
         MRR,0.85
@@ -24,27 +24,27 @@ def export_to_csv(results: Dict[str, Any], output_path: str) -> None:
     """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Separate metadata from metrics
-    skip_keys = {"asr", "embedder", "per_sample", "details", "config", 
-                 "metadata", "pipeline_mode", "phased", "audio_embedder", 
+    skip_keys = {"asr", "embedder", "per_sample", "details", "config",
+                 "metadata", "pipeline_mode", "phased", "audio_embedder",
                  "text_embedder"}
-    
+
     rows = []
-    
+
     # Add metadata rows first
-    for key in ["asr", "embedder", "audio_embedder", "text_embedder", 
+    for key in ["asr", "embedder", "audio_embedder", "text_embedder",
                 "pipeline_mode"]:
         if key in results:
             rows.append({"metric": key, "value": str(results[key])})
-    
+
     # Add numeric metrics
     for key, value in results.items():
         if key in skip_keys:
             continue
         if isinstance(value, (int, float)):
             rows.append({"metric": key, "value": value})
-    
+
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["metric", "value"])
         writer.writeheader()
@@ -163,14 +163,14 @@ def export_to_latex(
     caption: str = "Evaluation Results"
 ) -> None:
     """Generate LaTeX table from results.
-    
+
     Creates a booktabs-style table with proper formatting.
-    
+
     Args:
         results: Results dictionary with metric names as keys.
         output_path: Path to output .tex file.
         caption: Table caption.
-        
+
     Example output:
         \\begin{table}[htbp]
         \\centering
@@ -187,11 +187,11 @@ def export_to_latex(
     """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
-    skip_keys = {"asr", "embedder", "per_sample", "details", "config", 
-                 "metadata", "pipeline_mode", "phased", "audio_embedder", 
+
+    skip_keys = {"asr", "embedder", "per_sample", "details", "config",
+                 "metadata", "pipeline_mode", "phased", "audio_embedder",
                  "text_embedder"}
-    
+
     # Collect metrics
     metrics = []
     for key, value in results.items():
@@ -199,7 +199,7 @@ def export_to_latex(
             continue
         if isinstance(value, (int, float)):
             metrics.append((key, value))
-    
+
     # Build LaTeX table
     lines = []
     lines.append("\\begin{table}[htbp]")
@@ -209,7 +209,7 @@ def export_to_latex(
     lines.append("\\toprule")
     lines.append("Metric & Value \\\\")
     lines.append("\\midrule")
-    
+
     for metric_name, value in metrics:
         escaped_name = _escape_latex(metric_name)
         if isinstance(value, float):
@@ -217,11 +217,11 @@ def export_to_latex(
         else:
             formatted_value = str(value)
         lines.append(f"{escaped_name} & {formatted_value} \\\\")
-    
+
     lines.append("\\bottomrule")
     lines.append("\\end{tabular}")
     lines.append("\\end{table}")
-    
+
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
@@ -233,18 +233,18 @@ def compare_experiments_to_latex(
     caption: str = "Experiment Comparison"
 ) -> str:
     """Generate LaTeX comparison table for multiple experiments.
-    
+
     Creates a table with experiments as columns and metrics as rows.
-    
+
     Args:
         results_list: List of result dictionaries.
         names: List of experiment names (same order as results_list).
         output_path: Optional path to save the .tex file.
         caption: Table caption.
-        
+
     Returns:
         LaTeX table string.
-        
+
     Raises:
         ValueError: If results_list and names have different lengths.
     """
@@ -253,31 +253,31 @@ def compare_experiments_to_latex(
             f"results_list and names must have same length: "
             f"{len(results_list)} vs {len(names)}"
         )
-    
+
     if not results_list:
         raise ValueError("results_list cannot be empty")
-    
-    skip_keys = {"asr", "embedder", "per_sample", "details", "config", 
-                 "metadata", "pipeline_mode", "phased", "audio_embedder", 
+
+    skip_keys = {"asr", "embedder", "per_sample", "details", "config",
+                 "metadata", "pipeline_mode", "phased", "audio_embedder",
                  "text_embedder"}
-    
+
     # Find common numeric metrics
     all_metrics = set()
     for results in results_list:
         for key, value in results.items():
             if key not in skip_keys and isinstance(value, (int, float)):
                 all_metrics.add(key)
-    
+
     metrics = sorted(all_metrics)
-    
+
     # Build column spec: l for metric name, then r for each experiment
     n_experiments = len(results_list)
     col_spec = "l" + "r" * n_experiments
-    
+
     # Build header row
     escaped_names = [_escape_latex(name) for name in names]
     header = "Metric & " + " & ".join(escaped_names) + " \\\\"
-    
+
     # Build LaTeX table
     lines = []
     lines.append("\\begin{table}[htbp]")
@@ -287,7 +287,7 @@ def compare_experiments_to_latex(
     lines.append("\\toprule")
     lines.append(header)
     lines.append("\\midrule")
-    
+
     for metric in metrics:
         escaped_metric = _escape_latex(metric)
         values = []
@@ -299,55 +299,55 @@ def compare_experiments_to_latex(
                 values.append(f"{value:.4f}")
             else:
                 values.append(str(value))
-        
+
         row = f"{escaped_metric} & " + " & ".join(values) + " \\\\"
         lines.append(row)
-    
+
     lines.append("\\bottomrule")
     lines.append("\\end{tabular}")
     lines.append("\\end{table}")
-    
+
     latex_content = "\n".join(lines)
-    
+
     if output_path:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(latex_content)
-    
+
     return latex_content
 
 
 def export_sample_results(results: Dict[str, Any], output_path: str) -> None:
     """Export per-sample results to CSV.
-    
+
     Creates a CSV with one row per sample, including all available metrics.
-    
+
     Args:
         results: Results dictionary containing 'per_sample' or 'details'.
         output_path: Path to output CSV file.
-        
+
     Raises:
         ValueError: If no per-sample data is available.
     """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     per_sample = results.get("per_sample")
     details = results.get("details")
-    
+
     if per_sample and isinstance(per_sample, dict):
         # Format: {"metric": [scores...]}
         metrics = list(per_sample.keys())
         if not metrics:
             raise ValueError("per_sample dictionary is empty")
-        
+
         n_samples = max(len(v) for v in per_sample.values())
-        
+
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["sample_id"] + metrics)
-            
+
             for i in range(n_samples):
                 row = [i + 1]
                 for metric in metrics:
@@ -357,23 +357,23 @@ def export_sample_results(results: Dict[str, Any], output_path: str) -> None:
                     else:
                         row.append("")
                 writer.writerow(row)
-    
+
     elif details and isinstance(details, list):
         # Format: [{"metric1": val1, "metric2": val2, ...}, ...]
         if not details or not isinstance(details[0], dict):
             raise ValueError("details must be a list of dictionaries")
-        
+
         # Get all column names from all items
         all_keys = set()
         for item in details:
             all_keys.update(item.keys())
         columns = sorted(all_keys)
-        
+
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns)
             writer.writeheader()
             writer.writerows(details)
-    
+
     else:
         raise ValueError(
             "No per-sample data found. Results must contain 'per_sample' "

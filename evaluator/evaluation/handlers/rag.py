@@ -17,6 +17,7 @@ from ..helpers import _payload_to_key
 from ..answer_gen import generate_answers
 from ..executor.state import RunState
 from .retrieval import _retrieved_from_bus
+from ._common import is_asr_text_retrieval, retrieval_ran
 
 logger = get_logger(__name__)
 
@@ -54,7 +55,7 @@ def _generate_answer_details(
     # Bus-only (M1d-2): the effective (most-processed) query in ASR modes (QUERY_TEXT_CHAIN).
     query_texts = (
         s.input("query_text", default=[])
-        if s.mode == "asr_text_retrieval"
+        if is_asr_text_retrieval(s)
         else s.get_artifact("reference_transcription", default=[])
     )
     answer_results = generate_answers(
@@ -189,7 +190,7 @@ def _stage_generate(s: RunState) -> None:
     ``answer_generation`` into ``s.results`` + the per-query detail map onto
     ``s.ans_detail_by_qid`` (read by the build_query_traces node). Conditional on
     ``answer_generation.enabled``."""
-    if s.mode == "asr_only":
+    if not retrieval_ran(s):
         return
     results_with_scores, _, query_ids = _retrieved_from_bus(s)
     s.ans_detail_by_qid = _generate_answer_details(
@@ -231,7 +232,7 @@ def _stage_build_query_traces(s: RunState) -> None:
     generated answers (``s.ans_detail_by_qid``, empty when no answer_gen ran) and the
     per-item WER/recall. Always present in retrieval modes when tracing is on — so the
     judge + report read the traces without the old ``traces_built`` state machine."""
-    if s.mode == "asr_only":
+    if not retrieval_ran(s):
         return
     # In a branched run this node is expanded per branch; the report carries a single
     # top-level `query_traces`, so the first branch (topological order) builds it and the
@@ -256,7 +257,7 @@ def _stage_build_query_traces(s: RunState) -> None:
 def _stage_answer_judge(s: RunState) -> None:
     """LLM-judge comparison node: scores the query traces (built upstream) vs the judge
     rubric + calibrates against IR metrics. Present only when the judge is enabled."""
-    if s.mode == "asr_only":
+    if not retrieval_ran(s):
         return
     _, retrieved_keys, _ids = _retrieved_from_bus(s)
     _run_judge(s, s.results, s.metrics_all_relevant, s.per_query_recall5, retrieved_keys)

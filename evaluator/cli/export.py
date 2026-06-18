@@ -21,7 +21,7 @@ def parse_export_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export evaluation results to CSV, Excel, or LaTeX formats"
     )
-    
+
     parser.add_argument(
         "input",
         type=str,
@@ -59,27 +59,27 @@ def parse_export_args(args: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Experiment names for comparison table (required for latex-compare)"
     )
-    
+
     return parser.parse_args(args)
 
 
 def run_export(args: argparse.Namespace) -> int:
     """Run export command.
-    
+
     Args:
         args: Parsed command-line arguments.
-        
+
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
     input_paths = [Path(p) for p in args.input]
-    
+
     # Validate input files exist
     for path in input_paths:
         if not path.exists():
             print(f"Error: File not found: {path}", file=sys.stderr)
             return 1
-    
+
     try:
         if args.format == "latex-compare":
             # Multi-file comparison
@@ -89,7 +89,7 @@ def run_export(args: argparse.Namespace) -> int:
                     file=sys.stderr
                 )
                 return 1
-            
+
             # Generate names if not provided
             names = args.names
             if names is None:
@@ -101,7 +101,7 @@ def run_export(args: argparse.Namespace) -> int:
                     file=sys.stderr
                 )
                 return 1
-            
+
             results_list = [load_results(p) for p in input_paths]
             compare_experiments_to_latex(
                 results_list,
@@ -110,7 +110,7 @@ def run_export(args: argparse.Namespace) -> int:
                 caption=args.caption
             )
             print(f"LaTeX comparison table saved to: {args.output}")
-        
+
         else:
             # Single file export
             if len(input_paths) > 1:
@@ -118,21 +118,21 @@ def run_export(args: argparse.Namespace) -> int:
                     f"Warning: {args.format} format only uses first input file",
                     file=sys.stderr
                 )
-            
+
             results = load_results(input_paths[0])
-            
+
             if args.format == "csv":
                 export_to_csv(results, args.output)
                 print(f"CSV exported to: {args.output}")
-            
+
             elif args.format == "excel":
                 export_to_excel(results, args.output)
                 print(f"Excel file exported to: {args.output}")
-            
+
             elif args.format == "latex":
                 export_to_latex(results, args.output, caption=args.caption)
                 print(f"LaTeX table saved to: {args.output}")
-            
+
             elif args.format == "samples":
                 export_sample_results(results, args.output)
                 print(f"Per-sample results exported to: {args.output}")
@@ -168,7 +168,7 @@ def run_export(args: argparse.Namespace) -> int:
                 print(f"Logged report to W&B (run: {args.output})")
 
         return 0
-    
+
     except json.JSONDecodeError as e:
         print(f"Error: Invalid JSON in input file: {e}", file=sys.stderr)
         return 1

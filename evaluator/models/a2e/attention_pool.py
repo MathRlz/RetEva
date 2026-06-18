@@ -9,7 +9,6 @@ Whisper encoder (``attention_pool``) or a SeamlessM4T-v2 encoder
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar, Dict, List, Optional, Tuple
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

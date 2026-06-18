@@ -12,16 +12,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from ..pipeline import RetrievalPayload
 from ..models.retrieval.contracts import ScoredRetrievalResult, normalize_search_results
 
-# Human-readable label per pipeline mode (used for log messages).
-PIPELINE_MODE_LABELS: Dict[str, str] = {
-    "audio_text_retrieval": "Audio-to-Text Retrieval",
-    "audio_emb_retrieval": "Audio Embedding Retrieval",
-    "asr_text_retrieval": "ASR + Text Retrieval",
-    "asr_only": "ASR Only",
-}
+# Human-readable labels live with the templates (``graph.templates.GRAPH_TEMPLATES``) — the single
+# source — since the four names are graph templates now.
 
 
-def detect_pipeline_mode(
+def detect_graph_template(
     retrieval_pipeline: Optional[Any],
     asr_pipeline: Optional[Any],
     text_embedding_pipeline: Optional[Any],
@@ -135,8 +130,7 @@ def asr_collate_fn(batch):
 
 
 __all__ = [
-    "PIPELINE_MODE_LABELS",
-    "detect_pipeline_mode",
+    "detect_graph_template",
     "_payload_to_key",
     "_search_results_to_keys",
     "_build_relevant_from_item",

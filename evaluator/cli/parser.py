@@ -7,7 +7,7 @@ from typing import List, Optional
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     """Parse command line arguments (from *argv*, default ``sys.argv[1:]``)."""
     parser = argparse.ArgumentParser(description="Evaluate ASR and Text Embedding Models")
-    
+
     # Config file
     parser.add_argument("--config", type=str, default=None,
                        help="Path to YAML configuration file")
@@ -37,16 +37,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--audio_emb_model_name", type=str, default=None)
     parser.add_argument("--audio_emb_adapter_path", type=str, default=None,
                        help="Path to PEFT/LoRA adapter weights for audio embedding model")
-    
+
     # Pipeline mode
     parser.add_argument("--pipeline_mode", type=str, default=None,
                        choices=["asr_text_retrieval", "audio_emb_retrieval", "asr_only"])
-    
+
     # Device arguments
     parser.add_argument("--asr_device", type=str, default=None)
     parser.add_argument("--text_emb_device", type=str, default=None)
     parser.add_argument("--audio_emb_device", type=str, default=None)
-    
+
     # GPU pool arguments
     parser.add_argument("--devices", type=str, default=None,
                        help="Comma-separated list of devices for GPU pool (e.g., 'cuda:0,cuda:1')")
@@ -86,7 +86,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Worker count for --cpu_stage_executor (0 = auto)",
     )
-    
+
     # Dataset arguments
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument("--questions_path", type=str, default=None,
@@ -98,7 +98,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                        help="Include up to N query-level traces in results (0 disables)")
     parser.add_argument("--skip_dataset_validation", action="store_true",
                        help="Skip dataset integrity checks (not recommended for benchmark runs)")
-    
+
     # Vector DB arguments
     parser.add_argument("--db_type", type=str, default=None,
                        choices=["in_memory", "faiss", "faiss_gpu", "faiss_mmap"])
@@ -110,22 +110,22 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                        choices=["none", "token_overlap"])
     parser.add_argument("--reranker_top_k", type=int, default=None)
     parser.add_argument("--reranker_weight", type=float, default=None)
-    
+
     # Cache arguments
     parser.add_argument("--no_cache", action="store_true",
                        help="Disable caching")
     parser.add_argument("--cache_dir", type=str, default=None)
     parser.add_argument("--clear_cache", action="store_true",
                        help="Clear all caches before running")
-    
+
     # Logging arguments
     parser.add_argument("--log_level", type=str, default=None,
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
-    
+
     # Output arguments
     parser.add_argument("--experiment_name", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
-    
+
     # Checkpoint arguments
     parser.add_argument("--no_checkpoint", action="store_true",
                        help="Disable checkpointing")
@@ -235,7 +235,7 @@ def _set_nested_attr(obj, path: tuple, value) -> None:
 
 def apply_args_to_config(args: argparse.Namespace, config) -> None:
     """Apply command-line arguments to configuration object using mapping.
-    
+
     Args:
         args: Parsed command-line arguments.
         config: EvaluationConfig object to modify in-place.
@@ -294,31 +294,31 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
                     setattr(config.model, stale_field, None)
 
     # Handle special cases with custom logic
-    
+
     # Device pool configuration
     if args.devices is not None or args.allocation_strategy is not None:
         if config.device_pool is None:
             config.device_pool = DevicePoolConfig()
-        
+
         if args.devices is not None:
             config.device_pool.available_devices = [
                 d.strip() for d in args.devices.split(",")
             ]
         if args.allocation_strategy is not None:
             config.device_pool.allocation_strategy = args.allocation_strategy
-    
+
     # Dataset validation flag (inverted logic)
     if args.skip_dataset_validation:
         config.data.strict_validation = False
-    
+
     # Cache disabled flag (inverted logic)
     if args.no_cache:
         config.cache.enabled = False
-    
+
     # Checkpoint disabled flag (inverted logic)
     if args.no_checkpoint:
         config.checkpoint_enabled = False
-    
+
     # Judge enabled flag (explicit)
     if args.judge_enabled:
         config.judge.enabled = True

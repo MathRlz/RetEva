@@ -8,7 +8,7 @@ import os
 import time
 import urllib.request
 from collections import OrderedDict
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from ..config.llm_backend import LLMConfig
 from .cost import COST

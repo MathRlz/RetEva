@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional, Generator, Any, Callable
 
-from .monitor import GPUMonitor, get_monitor, MemoryInfo
+from .monitor import GPUMonitor, get_monitor
 
 logger = logging.getLogger(__name__)
 

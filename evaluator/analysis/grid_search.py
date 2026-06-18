@@ -117,7 +117,6 @@ class GridSearch:
 
         # Nested parameter
         parent_attr = parts[0]
-        child_path = ".".join(parts[1:])
 
         # Get parent object
         parent = getattr(config, parent_attr)

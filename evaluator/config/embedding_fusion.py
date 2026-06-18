@@ -7,10 +7,10 @@ from typing import Optional
 class EmbeddingFusionConfig:
     """
     Configuration for audio-text embedding fusion.
-    
+
     When both audio and text embedding pipelines are available, this config
     controls how to fuse the embeddings for improved retrieval performance.
-    
+
     Attributes:
         enabled: Whether embedding fusion is enabled. Default: False.
         audio_weight: Weight for audio embeddings (0.0-1.0). Default: 0.5.
@@ -26,7 +26,7 @@ class EmbeddingFusionConfig:
             Options: None, "pca", "random_projection", "learned" (future).
         target_dim: Target dimension after reduction (only for concatenate). Default: None.
         require_same_dimensions: If True, require audio and text embeddings to have same dim. Default: False.
-    
+
     Examples:
         >>> # Balanced audio-text fusion
         >>> config = EmbeddingFusionConfig(
@@ -35,14 +35,14 @@ class EmbeddingFusionConfig:
         ...     text_weight=0.5,
         ...     fusion_method="weighted"
         ... )
-        >>> 
+        >>>
         >>> # Audio-dominant fusion
         >>> config = EmbeddingFusionConfig(
         ...     enabled=True,
         ...     audio_weight=0.7,
         ...     text_weight=0.3
         ... )
-        >>> 
+        >>>
         >>> # Concatenation with dimension reduction
         >>> config = EmbeddingFusionConfig(
         ...     enabled=True,
@@ -62,14 +62,14 @@ class EmbeddingFusionConfig:
     dimension_reduction: Optional[str] = None  # None | pca | random_projection
     target_dim: Optional[int] = None
     require_same_dimensions: bool = False
-    
+
     def __post_init__(self):
         """Validate configuration."""
         if not 0.0 <= self.audio_weight <= 1.0:
             raise ValueError(f"audio_weight must be in [0, 1], got {self.audio_weight}")
         if not 0.0 <= self.text_weight <= 1.0:
             raise ValueError(f"text_weight must be in [0, 1], got {self.text_weight}")
-        
+
         if self.level not in {"embedding", "result"}:
             raise ValueError(
                 f"embedding_fusion.level must be 'embedding' or 'result', got {self.level}"
@@ -79,7 +79,7 @@ class EmbeddingFusionConfig:
             raise ValueError(
                 f"fusion_method must be one of {valid_methods}, got {self.fusion_method}"
             )
-        
+
         if self.dimension_reduction is not None:
             valid_reductions = {"pca", "random_projection"}
             if self.dimension_reduction not in valid_reductions:

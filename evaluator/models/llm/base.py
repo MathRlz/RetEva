@@ -31,7 +31,7 @@ class ServerHealth:
 
 class BaseLLMServer(ABC):
     """Abstract base class for LLM server implementations."""
-    
+
     def __init__(
         self,
         model: str,
@@ -42,7 +42,7 @@ class BaseLLMServer(ABC):
     ):
         """
         Initialize LLM server.
-        
+
         Args:
             model: Model name or path
             host: Server host address
@@ -57,48 +57,47 @@ class BaseLLMServer(ABC):
         self.kwargs = kwargs
         self.status = ServerStatus.STOPPED
         self._process = None
-        
+
     @abstractmethod
     def start(self) -> bool:
         """
         Start the LLM server.
-        
+
         Returns:
             True if server started successfully, False otherwise
         """
         pass
-    
+
     @abstractmethod
     def stop(self) -> bool:
         """
         Stop the LLM server.
-        
+
         Returns:
             True if server stopped successfully, False otherwise
         """
         pass
-    
+
     def health_check(self, timeout: int = 5) -> ServerHealth:
         """
         Check if server is healthy and responding.
-        
+
         Args:
             timeout: Request timeout in seconds
-            
+
         Returns:
             ServerHealth object with check results
         """
         import time
         start_time = time.time()
-        
+
         try:
-            url = self.get_api_url()
             # Try a simple health check endpoint or chat completion
             response = requests.get(
                 f"http://{self.host}:{self.port}/health",
                 timeout=timeout
             )
-            
+
             if response.status_code == 200:
                 elapsed_ms = (time.time() - start_time) * 1000
                 return ServerHealth(
@@ -110,7 +109,7 @@ class BaseLLMServer(ABC):
                 )
         except requests.exceptions.RequestException as e:
             logger.debug(f"Health check failed: {e}")
-        
+
         # Fallback: try chat completions endpoint
         try:
             response = requests.post(
@@ -122,7 +121,7 @@ class BaseLLMServer(ABC):
                 },
                 timeout=timeout
             )
-            
+
             if response.status_code in (200, 400):  # 400 might be format issue but server is up
                 elapsed_ms = (time.time() - start_time) * 1000
                 return ServerHealth(
@@ -134,7 +133,7 @@ class BaseLLMServer(ABC):
                 )
         except requests.exceptions.RequestException as e:
             logger.debug(f"API endpoint check failed: {e}")
-        
+
         return ServerHealth(
             is_healthy=False,
             status=self.status,
@@ -142,29 +141,29 @@ class BaseLLMServer(ABC):
             model_loaded=None,
             response_time_ms=None
         )
-    
+
     def get_api_url(self) -> str:
         """
         Get the OpenAI-compatible API endpoint URL.
-        
+
         Returns:
             Full URL to chat completions endpoint
         """
         return f"http://{self.host}:{self.port}/v1/chat/completions"
-    
+
     def get_base_url(self) -> str:
         """
         Get the base URL for the server.
-        
+
         Returns:
             Base URL without endpoint path
         """
         return f"http://{self.host}:{self.port}"
-    
+
     def get_status(self) -> Dict[str, Any]:
         """
         Get current server status information.
-        
+
         Returns:
             Dictionary with status information
         """
@@ -178,12 +177,12 @@ class BaseLLMServer(ABC):
             "is_healthy": health.is_healthy,
             "response_time_ms": health.response_time_ms,
         }
-    
+
     @abstractmethod
     def get_backend_name(self) -> str:
         """
         Get the name of the backend implementation.
-        
+
         Returns:
             Backend name (e.g., "ollama", "vllm", "llamacpp")
         """

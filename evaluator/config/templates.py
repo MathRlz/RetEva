@@ -11,7 +11,7 @@ class ConfigTemplates:
         """Minimal setup for first run or smoke test."""
         config = EvaluationConfig.from_dict({}, validate=False)
         config.experiment_name = "minimal_eval"
-        config.model.pipeline_mode = "asr_text_retrieval"
+        config.graph_override = {"template": "asr_text_retrieval"}
         config.model.asr_model_type = "whisper"
         config.model.text_emb_model_type = "labse"
         config.data.batch_size = 16
@@ -35,11 +35,10 @@ class ConfigTemplates:
         """Template for direct audio-embedding retrieval path."""
         config = EvaluationConfig.from_dict({}, validate=False)
         config.experiment_name = "audio_embedding_eval"
-        config.model.pipeline_mode = "audio_emb_retrieval"
+        config.graph_override = {"template": "audio_emb_retrieval"}
         config.model.audio_emb_model_type = "attention_pool"
         config.model.text_emb_model_type = "labse"
         config.model.audio_emb_dim = 768
         config.data.batch_size = 16
         config.vector_db.k = 5
         return config
-

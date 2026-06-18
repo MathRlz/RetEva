@@ -209,6 +209,25 @@ def correct_query_texts(
     return corrector(texts, config, client)
 
 
+def resolve_correction_client(config: Any) -> Optional[Any]:
+    """Build the batch-level client a corrector needs **once**, so a per-item map (4b) doesn't
+    rebuild it per call. Only the ``llm`` method needs one; ``rule``/``kb`` return None (and stay
+    picklable for the ``process`` backend)."""
+    if getattr(config, "method", "rule") != "llm":
+        return None
+    from ..llm.client import LLMClient
+
+    return LLMClient(config.to_llm_config(), component="query_correction")
+
+
+def correct_one_text(text: str, config: Any, client: Optional[Any] = None) -> str:
+    """Correct a single query text — the per-item unit for the 4b ``parallel_map`` (sync default →
+    byte-identical to :func:`correct_query_texts`). Pass a ``client`` from
+    :func:`resolve_correction_client` to reuse one across items (the ``llm`` method; rule/kb ignore
+    it). Top-level (not a closure) so the ``process`` backend can pickle it."""
+    return correct_query_texts([text or ""], config, client)[0]
+
+
 def correction_diff(raw: List[str], corrected: List[str]) -> List[Dict[str, Any]]:
     """Per-item record of what the corrector changed (the evidence for the correction branch)."""
     return [

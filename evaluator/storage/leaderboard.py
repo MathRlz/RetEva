@@ -140,7 +140,7 @@ class ExperimentStore:
                     getattr(config, "experiment_group", None),
                     json.dumps(tags) if tags else None,
                     config.data.dataset_name,
-                    str(config.model.pipeline_mode),
+                    str(config.graph_template),
                     metadata.get("start_time"),
                     metadata.get("end_time"),
                     metadata.get("duration_seconds"),

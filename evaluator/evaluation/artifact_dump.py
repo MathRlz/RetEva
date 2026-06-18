@@ -31,8 +31,8 @@ def _rows(value: Any):
             for item_id, val in value.items():
                 yield {"id": str(item_id), "value": _coerce(val)}
             return
-        except Exception:  # noqa: BLE001 - fall through to the scalar form
-            pass
+        except Exception as exc:  # noqa: BLE001 - fall through to the scalar form
+            logger.debug("artifact dump: items() iteration failed (%s); scalar form", exc)
     yield {"value": _coerce(value)}
 
 
@@ -43,7 +43,8 @@ def _coerce(val: Any) -> Any:
         try:
             out = val.tolist()
             return out[:64] if isinstance(out, list) else out
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("artifact dump: tolist() failed (%s); using str()", exc)
             return str(val)
     return val
 

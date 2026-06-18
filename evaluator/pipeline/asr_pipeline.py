@@ -1,7 +1,6 @@
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
-import numpy as np
 import torch
 
 from ..storage.cache import CacheManager

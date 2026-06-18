@@ -13,11 +13,11 @@ The top-level ``evaluator`` namespace exposes the stable, high-level API:
 - quick_evaluate() - One-line evaluation for simple cases
 - run_evaluation() - Run evaluation from a prepared EvaluationConfig
 - EvaluationConfig / EvaluationResults - Core input/output types
-    
+
     Example::
-    
+
         from evaluator import evaluate_from_preset
-        
+
         results = evaluate_from_preset(
             "whisper_labse",
             data_path="questions.json",

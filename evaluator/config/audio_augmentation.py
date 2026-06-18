@@ -7,9 +7,9 @@ from typing import Tuple
 class AudioAugmentationConfig:
     """
     Configuration for audio augmentation during evaluation.
-    
+
     Adds noise, speed perturbation, and codec simulation to test ASR robustness.
-    
+
     Attributes:
         enabled: Whether audio augmentation is enabled. Default: False.
         add_noise: Add background noise. Default: False.
@@ -27,7 +27,7 @@ class AudioAugmentationConfig:
             Options: "mp3", "opus", "speex".
         bitrate: Codec bitrate in kbps. Default: 64.
         n_variants: Number of augmented variants per sample. Default: 1.
-    
+
     Examples:
         >>> config = AudioAugmentationConfig(
         ...     enabled=True,

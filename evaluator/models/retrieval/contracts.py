@@ -1,7 +1,7 @@
 """Typed contracts for retrieval payloads and scored results."""
 
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Iterable, List, Mapping, Sequence, Tuple, Union
 
 
 RetrievalPayload = Union[Mapping[str, Any], str]
@@ -35,4 +35,3 @@ def normalize_batch_search_results(
 ) -> List[List[ScoredRetrievalResult]]:
     """Normalize batched retrieval outputs into contract form."""
     return [normalize_search_results(results) for results in batch_results]
-

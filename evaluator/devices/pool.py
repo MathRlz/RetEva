@@ -21,12 +21,12 @@ class DeviceUsage:
     total_memory_gb: float
     reserved_memory_gb: float = 0.0
     allocations: Dict[str, float] = field(default_factory=dict)
-    
+
     @property
     def free_memory_gb(self) -> float:
         """Calculate free memory after reservations."""
         return max(0.0, self.total_memory_gb - self.reserved_memory_gb)
-    
+
     @property
     def utilization(self) -> float:
         """Calculate utilization as a fraction (0.0 to 1.0)."""
@@ -37,11 +37,11 @@ class DeviceUsage:
 
 class GPUPool:
     """Manages GPU device allocation for models.
-    
+
     The GPUPool tracks which devices are available and how much memory
     is reserved on each. It supports different allocation strategies
     and can fall back to CPU when GPU memory is exhausted.
-    
+
     Example:
         >>> pool = GPUPool(["cuda:0", "cuda:1"])
         >>> device = pool.allocate("asr", memory_gb=2.5)
@@ -49,7 +49,7 @@ class GPUPool:
         'cuda:0'
         >>> pool.release("asr")
     """
-    
+
     def __init__(
         self,
         devices: List[str],
@@ -58,7 +58,7 @@ class GPUPool:
         allow_cpu_fallback: bool = True,
     ):
         """Initialize the GPU pool.
-        
+
         Args:
             devices: List of device strings (e.g., ["cuda:0", "cuda:1"]).
                     Use ["auto"] to auto-detect available GPUs.
@@ -76,33 +76,33 @@ class GPUPool:
         # (F2). Re-entrant: ``allocate`` holds it while the strategy calls back into
         # ``get_next_round_robin_device`` / ``_reserve``.
         self._lock = threading.RLock()
-        
+
         # Resolve "auto" to actual devices
         if devices == ["auto"] or (len(devices) == 1 and devices[0] == "auto"):
             devices = self._auto_detect_devices()
-        
+
         # Initialize device usage tracking
         self._devices: Dict[str, DeviceUsage] = {}
         for device in devices:
             self._devices[device] = self._create_device_usage(device)
-    
+
     def _auto_detect_devices(self) -> List[str]:
         """Auto-detect available GPU devices."""
         gpu_count = self._monitor.get_device_count()
         if gpu_count == 0:
             logger.info("No GPUs detected, using CPU")
             return ["cpu"]
-        
+
         devices = [f"cuda:{i}" for i in range(gpu_count)]
         logger.info(f"Auto-detected {gpu_count} GPU(s): {devices}")
         return devices
-    
+
     def _create_device_usage(self, device: str) -> DeviceUsage:
         """Create a DeviceUsage object for a device."""
         if device == "cpu":
             # CPU has "unlimited" memory for our purposes
             return DeviceUsage(device=device, total_memory_gb=float('inf'))
-        
+
         # Parse device index
         if ":" in device:
             try:
@@ -111,35 +111,35 @@ class GPUPool:
                 device_idx = 0
         else:
             device_idx = 0
-        
+
         # Get actual memory from monitor
         memory_info = self._monitor.get_memory_usage(device_idx)
         if memory_info is not None:
             # Apply buffer
             total_usable = memory_info.total * (1 - self._memory_buffer_percent)
             return DeviceUsage(device=device, total_memory_gb=total_usable)
-        
+
         # Fallback: assume 8GB if we can't query
         return DeviceUsage(device=device, total_memory_gb=8.0)
-    
+
     def set_strategy(self, strategy: "AllocationStrategy") -> None:
         """Set the allocation strategy.
-        
+
         Args:
             strategy: The allocation strategy to use.
         """
         self._strategy = strategy
-    
+
     def allocate(self, model_type: str, memory_gb: float) -> str:
         """Allocate a device for a model.
-        
+
         Args:
             model_type: Identifier for the model (e.g., "asr", "text_embedding").
             memory_gb: Estimated memory requirement in GB.
-            
+
         Returns:
             Device string (e.g., "cuda:0", "cpu").
-            
+
         Raises:
             RuntimeError: If no device can accommodate the model.
         """
@@ -198,21 +198,21 @@ class GPUPool:
             f"No device available for model '{model_type}' requiring {memory_gb:.1f}GB. "
             f"Available devices: {list(self._devices.keys())}, Current usage: {usage_info}"
         )
-    
+
     def _find_best_device(self, memory_gb: float) -> Optional[str]:
         """Find the device with the most free memory that can fit the model."""
         best_device = None
         best_free = -1.0
-        
+
         for device, usage in self._devices.items():
             if device == "cpu":
                 continue  # Prefer GPUs
             if usage.free_memory_gb >= memory_gb and usage.free_memory_gb > best_free:
                 best_device = device
                 best_free = usage.free_memory_gb
-        
+
         return best_device
-    
+
     def _reserve(self, device: str, model_type: str, memory_gb: float) -> None:
         """Reserve memory on a device for a model."""
         with self._lock:
@@ -221,10 +221,10 @@ class GPUPool:
             usage = self._devices[device]
             usage.reserved_memory_gb += memory_gb
             usage.allocations[model_type] = memory_gb
-    
+
     def release(self, model_type: str) -> None:
         """Release a model's allocation.
-        
+
         Args:
             model_type: Identifier for the model to release.
         """
@@ -241,21 +241,21 @@ class GPUPool:
                     )
                     return
             logger.warning(f"Attempted to release '{model_type}' but no allocation found")
-    
+
     def get_usage(self) -> Dict[str, DeviceUsage]:
         """Get current allocation status for all devices.
-        
+
         Returns:
             Dictionary mapping device strings to DeviceUsage objects.
         """
         return dict(self._devices)
-    
+
     def get_device_for_model(self, model_type: str) -> Optional[str]:
         """Get the device currently allocated to a model.
-        
+
         Args:
             model_type: Identifier for the model.
-            
+
         Returns:
             Device string if allocated, None otherwise.
         """
@@ -263,28 +263,28 @@ class GPUPool:
             if model_type in usage.allocations:
                 return device
         return None
-    
+
     @property
     def devices(self) -> List[str]:
         """List of devices in the pool."""
         return list(self._devices.keys())
-    
+
     @property
     def gpu_devices(self) -> List[str]:
         """List of GPU devices in the pool (excludes CPU)."""
         return [d for d in self._devices.keys() if d != "cpu"]
-    
+
     def get_next_round_robin_device(self) -> str:
         """Get the next GPU device in round-robin order."""
         gpu_devices = self.gpu_devices
         if not gpu_devices:
             return "cpu"
-        
+
         with self._lock:
             device = gpu_devices[self._round_robin_index % len(gpu_devices)]
             self._round_robin_index += 1
         return device
-    
+
     @contextmanager
     def managed_allocation(
         self,
@@ -293,12 +293,12 @@ class GPUPool:
         cleanup_on_exit: bool = False
     ) -> Generator[str, None, None]:
         """Context manager for model allocation with automatic cleanup.
-        
+
         Args:
             model_type: Identifier for the model.
             memory_gb: Estimated memory requirement in GB.
             cleanup_on_exit: Whether to clear GPU cache on exit.
-            
+
         Yields:
             Device string allocated for the model.
         """

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from ..stage_registry import register_stage_handler
 from ._common import publish_keyed_or_plain as _publish_keyed_or_plain  # noqa: F401
+from ._common import retrieval_ran
 from ...logging_config import get_logger
 from ..helpers import _build_relevant_from_item
 from ..executor.state import RunState
@@ -19,7 +20,7 @@ logger = get_logger(__name__)
 def _run_asr_phase(
     dataset,
     asr_pipeline,
-    mode,
+    with_relevance,
     oracle_mode,
     batch_size,
     num_workers,
@@ -66,13 +67,12 @@ def _run_asr_phase(
     asr_hyps_for_wer = list(hypotheses)
 
     relevance: list = []
-    query_ids: list = []
     # Query ids align the per-item ASR scores to keyed ItemSets so the metric registry can
-    # score WER/CER (L3a) — needed for asr_only too, which has no retrieval/relevance.
-    if mode in ("asr_text_retrieval", "asr_only"):
-        query_ids = [str(dataset[i].get("question_id", i)) for i in range(len(dataset))]
-    if mode == "asr_text_retrieval":
-        # Keep relevance aligned with query order for IR metrics.
+    # score WER/CER (L3a) — set whenever ASR runs (this path only runs for ASR nodes), so
+    # asr_only gets them too even though it has no retrieval/relevance.
+    query_ids = [str(dataset[i].get("question_id", i)) for i in range(len(dataset))]
+    if with_relevance:
+        # Retrieval ran (asr_text_retrieval): keep relevance aligned with query order for IR.
         relevance = [_build_relevant_from_item(dataset[i]) for i in range(len(dataset))]
     return hypotheses, ground_truth, asr_hyps_for_wer, relevance, query_ids
 
@@ -119,7 +119,7 @@ def _stage_asr(s: RunState) -> None:
         ) = _run_asr_phase(
             audio_dataset,
             s.asr_pipeline,
-            s.mode,
+            retrieval_ran(s),  # asr_text_retrieval (retrieval ran) → build IR relevance
             oracle,
             s.batch_size,
             s.num_workers,
@@ -152,5 +152,3 @@ def _stage_asr(s: RunState) -> None:
         s.total,
         "Oracle bypass complete" if s.oracle_mode else "ASR transcription complete",
     )
-
-

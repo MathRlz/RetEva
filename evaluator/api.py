@@ -8,12 +8,12 @@ Public Functions
 evaluate_from_config(config_path, auto_devices=True)
     Run evaluation from a YAML configuration file. Loads config, creates
     pipelines, and executes the full evaluation workflow.
-    
+
 evaluate_from_preset(preset_name, data_path=None, corpus_path=None, **overrides)
     Run evaluation using a named preset (e.g., "whisper_labse") with optional
     parameter overrides. Presets provide optimized configurations for common
     evaluation scenarios.
-    
+
 quick_evaluate(audio_dir, model="whisper", embedding="labse", ...)
     Quick one-line evaluation with minimal configuration. Ideal for rapid
     testing and prototyping with sensible defaults.
@@ -33,7 +33,7 @@ Examples
 Basic usage with config file::
 
     from evaluator import evaluate_from_config
-    
+
     results = evaluate_from_config("configs/whisper_eval.yaml")
     print(results)  # Pretty printed summary
     print(f"MRR: {results.get_metric('MRR'):.4f}")
@@ -42,7 +42,7 @@ Basic usage with config file::
 Using presets for common scenarios::
 
     from evaluator import evaluate_from_preset
-    
+
     results = evaluate_from_preset(
         "whisper_labse",
         data_path="questions.json",
@@ -54,7 +54,7 @@ Using presets for common scenarios::
 Quick evaluation for rapid testing::
 
     from evaluator import quick_evaluate
-    
+
     results = quick_evaluate(
         "test_audio/",
         model="whisper",
@@ -72,7 +72,7 @@ All functions raise:
 Example error handling::
 
     from evaluator import evaluate_from_config, ConfigurationError, EvaluationError
-    
+
     try:
         results = evaluate_from_config("config.yaml")
     except ConfigurationError as e:
@@ -106,10 +106,10 @@ def evaluate_from_config(
     auto_devices: bool = True,
 ) -> EvaluationResults:
     """Run evaluation from a YAML configuration file.
-    
+
     Loads the config, auto-configures devices if needed, creates pipelines,
     and runs the full evaluation.
-    
+
     Args:
         config_path: Path to YAML configuration file.
         auto_devices: If True, auto-configure device assignments based on
@@ -119,47 +119,47 @@ def evaluate_from_config(
         - pipeline_mode: The evaluation mode used
         - WER, CER: ASR metrics (if ASR mode)
         - MRR, MAP, Recall@k, NDCG@k: IR metrics (if retrieval mode)
-        
+
     Raises:
         ConfigurationError: If config file doesn't exist or is invalid.
         EvaluationError: If evaluation fails during execution.
-    
+
     Examples:
         Loading and running evaluation from a config file::
-        
+
             >>> results = evaluate_from_config("configs/whisper_eval.yaml")
             >>> print(f"MRR: {results.metrics['MRR']:.4f}")
             MRR: 0.7523
             >>> # Or access directly
             >>> print(f"MRR: {results.get_metric('MRR'):.4f}")
             MRR: 0.7523
-        
+
         Running on CPU by disabling auto device detection::
-        
+
             >>> # Config file should have device settings for CPU
             >>> results = evaluate_from_config(
             ...     "configs/cpu_eval.yaml",
             ...     auto_devices=False
             ... )
-        
+
         Using the results object::
-        
+
             >>> results = evaluate_from_config("configs/full_eval.yaml")
             >>> print(results)  # Pretty printed output
             >>> print(results.summary())  # One-line summary
             >>> results.save("results/my_eval.json")  # Save to file
-        
+
     """
     config_path = Path(config_path)
-    
+
     if not config_path.exists():
         raise ConfigurationError(f"Config file not found: {config_path}")
-    
+
     if config_path.suffix not in ('.yaml', '.yml'):
         raise ConfigurationError(
             f"Config file must be YAML (.yaml or .yml), got: {config_path.suffix}"
         )
-    
+
     try:
         config = EvaluationConfig.from_yaml(str(config_path))
     except ConfigurationError:
@@ -169,10 +169,10 @@ def evaluate_from_config(
             f"Failed to parse config file: {e}. "
             "Tip: validate YAML syntax and required fields (model/data/vector_db)."
         ) from e
-    
+
     if auto_devices:
         config = config.with_auto_devices()
-    
+
     return run_evaluation(config)
 
 
@@ -183,16 +183,16 @@ def evaluate_from_preset(
     **overrides: Any
 ) -> EvaluationResults:
     """Run evaluation using a named preset with optional overrides.
-    
+
     Presets provide pre-configured model combinations optimized for common
     evaluation scenarios.
-    
+
     Available presets:
         - whisper_labse: Whisper ASR + LaBSE embedding
         - wav2vec_jina: Wav2Vec2 ASR + Jina V4 embedding
         - audio_only: Direct audio embedding (no ASR)
         - fast_dev: Quick development testing (smaller models)
-    
+
     Args:
         preset_name: Name of the preset to use.
         data_path: Optional path to questions/queries file. Overrides
@@ -201,17 +201,17 @@ def evaluate_from_preset(
             preset's data.corpus_path.
         **overrides: Additional config overrides using underscore notation.
             E.g., model_asr_device='cpu', data_batch_size=16.
-    
+
     Returns:
         EvaluationResults containing evaluation metrics.
-        
+
     Raises:
         ConfigurationError: If preset doesn't exist or overrides are invalid.
         EvaluationError: If evaluation fails during execution.
-    
+
     Examples:
         Using a preset with custom data paths::
-        
+
             >>> results = evaluate_from_preset(
             ...     "whisper_labse",
             ...     data_path="my_questions.json",
@@ -219,18 +219,18 @@ def evaluate_from_preset(
             ... )
             >>> print(f"MRR: {results.get_metric('MRR'):.4f}")
             MRR: 0.7234
-        
+
         Overriding batch size and retrieval settings::
-        
+
             >>> results = evaluate_from_preset(
             ...     "fast_dev",
             ...     data_path="test_data.json",
             ...     data_batch_size=16,
             ...     vector_db_k=10
             ... )
-        
+
         Running on CPU with trace limit::
-        
+
             >>> results = evaluate_from_preset(
             ...     "whisper_labse",
             ...     data_path="questions.json",
@@ -238,13 +238,13 @@ def evaluate_from_preset(
             ...     model_text_emb_device="cpu",
             ...     data_trace_limit=100  # Only process first 100 samples
             ... )
-        
+
         Listing available presets::
-        
+
             >>> from evaluator.config.model_presets import list_presets
             >>> print(list_presets())
             ['whisper_labse', 'wav2vec_jina', 'audio_only', 'fast_dev']
-        
+
     """
     available = list_presets()
     if preset_name not in available:
@@ -252,13 +252,13 @@ def evaluate_from_preset(
             f"Unknown preset '{preset_name}'. "
             f"Available presets: {', '.join(available)}"
         )
-    
+
     # Build overrides for data paths
     if data_path is not None:
         overrides['data_questions_path'] = data_path
     if corpus_path is not None:
         overrides['data_corpus_path'] = corpus_path
-    
+
     try:
         config = EvaluationConfig.from_preset(preset_name, **overrides)
     except ConfigurationError:
@@ -268,7 +268,7 @@ def evaluate_from_preset(
             f"Failed to create config from preset: {e}. "
             "Tip: check override names (e.g., data_batch_size, vector_db_k)."
         ) from e
-    
+
     return run_evaluation(config)
 
 
@@ -285,10 +285,10 @@ def quick_evaluate(
     **kwargs: Any
 ) -> EvaluationResults:
     """Run a quick evaluation with minimal configuration.
-    
+
     Designed for rapid testing and prototyping. Automatically configures
     devices and uses sensible defaults.
-    
+
     Args:
         audio_dir: Directory containing audio files or path to prepared dataset.
         model: ASR model type. Options: "whisper", "wav2vec2". Default: "whisper".
@@ -299,50 +299,50 @@ def quick_evaluate(
         batch_size: Processing batch size. Default: 32.
         trace_limit: Limit number of samples (0 = no limit). Default: 0.
         **kwargs: Additional overrides passed to config.
-    
+
     Returns:
         EvaluationResults containing evaluation metrics.
-        
+
     Raises:
         ConfigurationError: If audio_dir doesn't exist or model is invalid.
         EvaluationError: If evaluation fails during execution.
-    
+
     Examples:
         Minimal usage with defaults::
-        
+
             >>> results = quick_evaluate("test_audio/")
             >>> print(f"MRR: {results.get_metric('MRR'):.4f}")
             MRR: 0.6789
             >>> print(results.summary())
             MRR: 0.6789, WER: 15.23%
-        
+
         Specifying model and embedding::
-        
+
             >>> results = quick_evaluate(
             ...     audio_dir="prepared_data/",
             ...     model="whisper",
             ...     embedding="labse",
             ...     k=10
             ... )
-        
+
         Quick test with limited samples::
-        
+
             >>> results = quick_evaluate(
             ...     "test_audio/",
             ...     trace_limit=50,  # Only process first 50 samples
             ...     batch_size=16
             ... )
             >>> print(results)  # Pretty printed output
-        
+
         With corpus for retrieval::
-        
+
             >>> results = quick_evaluate(
             ...     audio_dir="questions/",
             ...     corpus_path="corpus.json",
             ...     model="wav2vec2",
             ...     embedding="jina_v4"
             ... )
-        
+
     """
     audio_path = Path(audio_dir)
     if not audio_path.exists():

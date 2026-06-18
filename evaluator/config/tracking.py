@@ -6,7 +6,7 @@ from typing import Optional
 @dataclass
 class TrackingConfig:
     """Configuration for experiment tracking.
-    
+
     Attributes:
         enabled: Whether experiment tracking is enabled.
         backend: Tracking backend to use. Currently only "mlflow" is supported.
@@ -19,7 +19,7 @@ class TrackingConfig:
     backend: str = "mlflow"
     mlflow_tracking_uri: Optional[str] = None
     mlflow_experiment_name: Optional[str] = None
-    
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         valid_backends = ["mlflow"]

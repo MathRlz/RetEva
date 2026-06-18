@@ -20,7 +20,7 @@ class BgeM3Model(TextEmbeddingModel):
 
     def __init__(self, model_name: str = "BAAI/bge-m3"):
         from FlagEmbedding import BGEM3FlagModel
-        
+
         self.model_name = model_name
         self.model = BGEM3FlagModel(model_name, use_fp16=True)
 

@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 @dataclass
 class PipelineBundle:
     """Bundle of pipelines created from configuration.
-    
+
     This dataclass provides a cleaner return type for create_pipeline_from_config(),
     with named attributes instead of tuple unpacking.
-    
+
     Attributes:
         asr_pipeline: ASR pipeline for speech-to-text conversion
         text_embedding_pipeline: Text embedding pipeline for encoding text
@@ -34,19 +34,19 @@ class PipelineBundle:
     mode: str = ""
     device_pool: Optional["GPUPool"] = None
     service_provider: Optional["ModelServiceProvider"] = None
-    
+
     def validate(self, mode: str) -> None:
         """Validate that required pipelines for the given mode are present.
-        
+
         Args:
             mode: The pipeline mode to validate against
-            
+
         Raises:
             ValueError: If required pipelines for the mode are missing
         """
         required = self._get_required_pipelines(mode)
         missing = []
-        
+
         if "asr" in required and self.asr_pipeline is None:
             missing.append("asr_pipeline")
         if "text_embedding" in required and self.text_embedding_pipeline is None:
@@ -55,13 +55,13 @@ class PipelineBundle:
             missing.append("audio_embedding_pipeline")
         if "retrieval" in required and self.retrieval_pipeline is None:
             missing.append("retrieval_pipeline")
-        
+
         if missing:
             raise ValueError(
                 f"Mode '{mode}' requires the following pipelines which are missing: "
                 f"{', '.join(missing)}"
             )
-    
+
     @staticmethod
     def _get_required_pipelines(mode: str) -> set:
         """Get the set of required pipeline types for a given mode."""
@@ -72,29 +72,29 @@ class PipelineBundle:
             "asr_only": {"asr"},
         }
         if mode not in requirements:
-            raise ValueError(f"Unknown pipeline mode: {mode}")
+            raise ValueError(f"Unknown graph template: {mode}")
         return requirements[mode]
-    
+
     @property
     def has_asr(self) -> bool:
         """Check if ASR pipeline is available."""
         return self.asr_pipeline is not None
-    
+
     @property
     def has_text_embedding(self) -> bool:
         """Check if text embedding pipeline is available."""
         return self.text_embedding_pipeline is not None
-    
+
     @property
     def has_audio_embedding(self) -> bool:
         """Check if audio embedding pipeline is available."""
         return self.audio_embedding_pipeline is not None
-    
+
     @property
     def has_retrieval(self) -> bool:
         """Check if retrieval pipeline is available."""
         return self.retrieval_pipeline is not None
-    
+
     @property
     def can_fuse_embeddings(self) -> bool:
         """Check if both audio and text embedding pipelines are available for fusion."""

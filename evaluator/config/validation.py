@@ -65,6 +65,7 @@ def validate(config: Any) -> List[str]:
     warnings: List[str] = []
 
     cuda_available, cuda_count = _detect_cuda()
+    _validate_template(config, errors)
     _validate_devices(config, errors, warnings, cuda_available, cuda_count)
     _validate_model_types(config, errors)
     _validate_embedding_dims(config, warnings)
@@ -78,6 +79,21 @@ def validate(config: Any) -> List[str]:
             "Configuration validation failed:\n  - " + "\n  - ".join(errors)
         )
     return warnings
+
+
+def _validate_template(config, errors):
+    """A graph-template reference must name a known template — caught at validate time (with the
+    available list) instead of only when the graph is built. An explicit ``graph.nodes`` wins, so
+    skip the check then."""
+    override = getattr(config, "graph_override", None) or {}
+    template = override.get("template")
+    if not template or override.get("nodes"):
+        return
+    from ..pipeline.graph.modes import GRAPH_TEMPLATE_SPECS
+
+    if template not in GRAPH_TEMPLATE_SPECS:
+        available = ", ".join(sorted(GRAPH_TEMPLATE_SPECS))
+        errors.append(f"unknown graph template '{template}'. Available templates: {available}")
 
 
 def _validate_devices(config, errors, warnings, cuda_available, cuda_count):
@@ -131,7 +147,7 @@ def _validate_model_types(config, errors):
 
 def _validate_embedding_dims(config, warnings):
     """Warn when audio/text embedding dimensions disagree."""
-    if config.model.pipeline_mode != "audio_emb_retrieval":
+    if config.graph_template != "audio_emb_retrieval":
         return
     text_emb_dim = get_text_embedding_dim(config.model.text_emb_model_type)
     audio_emb_dim = config.model.audio_emb_dim
@@ -229,7 +245,7 @@ def _validate_dataset_compat(config, warnings):
         from ..datasets.descriptor import resolve_dataset_descriptor
 
         descriptor = resolve_dataset_descriptor(config.data)
-        mode = enum_to_str(config.model.pipeline_mode)
+        mode = enum_to_str(config.graph_template)
         if not descriptor.supports_pipeline_mode(mode):
             warnings.append(
                 f"Pipeline mode '{mode}' is not in the compatible modes for dataset "
@@ -353,7 +369,7 @@ def preflight_check(config: Any) -> List[str]:
                     )
 
     # Validate pipeline mode consistency
-    if config.model.pipeline_mode == "asr_text_retrieval":
+    if config.graph_template == "asr_text_retrieval":
         if config.model.asr_model_type is None:
             warnings.append(
                 "pipeline_mode is 'asr_text_retrieval' but asr_model_type is None. "
@@ -364,7 +380,7 @@ def preflight_check(config: Any) -> List[str]:
                 "pipeline_mode is 'asr_text_retrieval' but text_emb_model_type is None. "
                 "Set a text embedding model or change pipeline_mode."
             )
-    elif config.model.pipeline_mode == "audio_emb_retrieval":
+    elif config.graph_template == "audio_emb_retrieval":
         if config.model.audio_emb_model_type is None:
             warnings.append(
                 "pipeline_mode is 'audio_emb_retrieval' but audio_emb_model_type is None. "

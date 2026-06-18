@@ -10,7 +10,7 @@ Main Components:
 
 Usage:
     from evaluator.judge import run_llm_judging
-    
+
     judge_results = run_llm_judging(traces, config.judge)
 """
 
@@ -23,7 +23,7 @@ from .core import (
 
 # Import prompts if they exist
 try:
-    from .prompts import (
+    from .prompts import (  # noqa: F401
         RELEVANCE_JUDGE_PROMPT,
         MULTI_ASPECT_JUDGE_PROMPT,
         FEW_SHOT_EXAMPLES,
@@ -34,7 +34,7 @@ except ImportError:
 
 # Import calibration if it exists
 try:
-    from .calibration import calibrate_judge, JudgeCalibrator
+    from .calibration import calibrate_judge, JudgeCalibrator  # noqa: F401
     _has_calibration = True
 except ImportError:
     _has_calibration = False

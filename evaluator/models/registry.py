@@ -9,8 +9,8 @@ identifiers.  The registry auto-discovers this at registration time and
 exposes it via :meth:`ModelRegistry.get_params_class` /
 :func:`resolve_model_name`.
 """
-from dataclasses import fields as dc_fields, asdict as dc_asdict
-from typing import Dict, List, Type, Callable, Optional, Any
+from dataclasses import fields as dc_fields
+from typing import Dict, Type, Optional, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class ModelRegistry:
         **metadata
     ):
         """Register a model class.
-        
+
         Args:
             model_type: Unique identifier for this model type (e.g., 'whisper')
             model_class: The model class to register
@@ -80,7 +80,7 @@ class ModelRegistry:
                 f"Model type '{model_type}' already registered in {self.name} registry. "
                 f"Overwriting with {class_name}"
             )
-        
+
         self._registry[model_type] = model_class
         if default_name:
             self._default_names[model_type] = default_name
@@ -96,16 +96,16 @@ class ModelRegistry:
 
         class_name = model_class.__name__ if model_class is not None else "None"
         logger.debug(f"Registered {model_type} -> {class_name} in {self.name} registry")
-    
+
     def get(self, model_type: str) -> Type:
         """Get a registered model class.
-        
+
         Args:
             model_type: The model type identifier
-            
+
         Returns:
             The registered model class
-            
+
         Raises:
             ValueError: If model type is not registered
         """
@@ -118,52 +118,52 @@ class ModelRegistry:
                 f"Available types: {available}"
             )
         return self._registry[model_type]
-    
+
     def get_default_name(self, model_type: str) -> Optional[str]:
         """Get the default model name for a model type.
-        
+
         Args:
             model_type: The model type identifier
-            
+
         Returns:
             Default model name or None
         """
         self._ensure_populated()
         return self._default_names.get(model_type)
-    
+
     def get_metadata(self, model_type: str) -> Dict[str, Any]:
         """Get metadata for a model type.
-        
+
         Args:
             model_type: The model type identifier
-            
+
         Returns:
             Metadata dictionary
         """
         self._ensure_populated()
         return self._metadata.get(model_type, {})
-    
+
     def list_types(self) -> list[str]:
         """List all registered model types.
-        
+
         Returns:
             List of registered model type identifiers
         """
         self._ensure_populated()
         return list(self._registry.keys())
-    
+
     def is_registered(self, model_type: str) -> bool:
         """Check if a model type is registered.
-        
+
         Args:
             model_type: The model type identifier
-            
+
         Returns:
             True if registered, False otherwise
         """
         self._ensure_populated()
         return model_type in self._registry or model_type in self._aliases
-    
+
     def get_params_class(self, model_type: str) -> Optional[Type]:
         """Return the Params dataclass for *model_type*, or None."""
         self._ensure_populated()
@@ -257,12 +257,12 @@ class ModelRegistry:
         **metadata
     ):
         """Decorator for registering model classes.
-        
+
         Example:
             @asr_registry.decorator('whisper', default_name='openai/whisper-medium')
             class WhisperModel(ASRModel):
                 ...
-        
+
         Args:
             model_type: Unique identifier for this model type
             default_name: Default model name/checkpoint

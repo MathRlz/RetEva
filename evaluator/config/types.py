@@ -3,17 +3,6 @@ from enum import Enum
 from typing import Any, Union
 
 
-class PipelineMode(str, Enum):
-    """Pipeline execution modes for evaluation."""
-    ASR_TEXT_RETRIEVAL = "asr_text_retrieval"
-    AUDIO_EMB_RETRIEVAL = "audio_emb_retrieval"
-    ASR_ONLY = "asr_only"
-    AUDIO_TEXT_RETRIEVAL = "audio_text_retrieval"
-    
-    def __str__(self) -> str:
-        return self.value
-
-
 class VectorDBType(str, Enum):
     """Vector database backend types."""
     INMEMORY = "inmemory"
@@ -33,7 +22,7 @@ class AllocationStrategy(str, Enum):
     MEMORY_AWARE = "memory_aware"
     PACKING = "packing"
     MANUAL = "manual"
-    
+
     def __str__(self) -> str:
         return self.value
 
@@ -46,21 +35,21 @@ class DatasetType(str, Enum):
     QUESTION_ANSWERING = "question_answering"
     MULTIMODAL_QA = "multimodal_qa"
     PASSAGE_RANKING = "passage_ranking"
-    
+
     def __str__(self) -> str:
         return self.value
 
 
 def to_enum(value: Any, enum_class: type[Enum]) -> Enum:
     """Convert a value to an enum, accepting both strings and enum instances.
-    
+
     Args:
         value: String value or enum instance to convert.
         enum_class: Target enum class.
-        
+
     Returns:
         Enum instance.
-        
+
     Raises:
         ValueError: If value is not a valid enum member.
     """
@@ -80,10 +69,10 @@ def to_enum(value: Any, enum_class: type[Enum]) -> Enum:
 
 def enum_to_str(value: Union[str, Enum]) -> str:
     """Convert enum to string for serialization.
-    
+
     Args:
         value: String or enum instance.
-        
+
     Returns:
         String value.
     """

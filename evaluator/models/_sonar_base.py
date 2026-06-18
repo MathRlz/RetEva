@@ -5,6 +5,8 @@ device-bound inference pipeline that must be rebuilt to move devices. This mixin
 holds the common install hint, device coercion, and ``to()`` rebuild logic; each
 subclass supplies ``_build_pipeline(device)``.
 """
+from abc import ABC, abstractmethod
+
 import torch
 
 SONAR_INSTALL_HINT = (
@@ -13,13 +15,14 @@ SONAR_INSTALL_HINT = (
 )
 
 
-class SonarPipelineMixin:
+class SonarPipelineMixin(ABC):
     """Device handling for SONAR pipeline-backed models."""
 
     @staticmethod
     def _coerce_device(device) -> torch.device:
         return device if isinstance(device, torch.device) else torch.device(device)
 
+    @abstractmethod
     def _build_pipeline(self, device: torch.device):
         """Construct the SONAR pipeline bound to ``device``. Subclass implements."""
         raise NotImplementedError

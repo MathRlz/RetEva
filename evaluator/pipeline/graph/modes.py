@@ -1,6 +1,6 @@
 """Named pipeline modes + their derivation into node-id specs.
 
-A named mode (``PIPELINE_MODE_SPECS``) is just an ordered node-id list fed to the
+A named mode (``GRAPH_TEMPLATE_SPECS``) is just an ordered node-id list fed to the
 auto-wiring engine. The list is assembled declaratively from a :class:`FeatureSet`
 (`graph/assembly.py`); ``build_stage_graph`` / ``build_graph_for_config`` are the public
 entry points (the former for tests, the latter the single config chokepoint).
@@ -13,7 +13,6 @@ from .assembly import FeatureSet, assemble_specs
 from .branches import build_branched_graph
 from .registry import (
     StageGraph,
-    get_stage_node_def,
     node_model_field,
     validate_graph_artifacts,
 )
@@ -21,15 +20,15 @@ from .wiring import _normalize_spec_item, _wire_nodes, build_graph_from_spec
 
 
 @dataclass(frozen=True)
-class PipelineModeSpec:
-    mode: str
+class GraphTemplateSpec:
+    name: str
     required_model_fields: Tuple[str, ...]
 
 
-def _required_model_fields(mode: str) -> Tuple[str, ...]:
-    """Union of model fields over a mode's nodes (maximal feature set)."""
+def _required_model_fields(name: str) -> Tuple[str, ...]:
+    """Union of model fields over a template's nodes (maximal feature set)."""
     fields: List[str] = []
-    for spec in assemble_specs(mode, FeatureSet.maximal()):
+    for spec in assemble_specs(name, FeatureSet.maximal()):
         _id, ntype, _params = _normalize_spec_item(spec)
         field = node_model_field(ntype, _params)  # resolves a callable model_field
         if field and field not in fields:
@@ -37,16 +36,16 @@ def _required_model_fields(mode: str) -> Tuple[str, ...]:
     return tuple(fields)
 
 
-def _make_spec(mode: str) -> PipelineModeSpec:
-    return PipelineModeSpec(
-        mode=mode,
-        required_model_fields=_required_model_fields(mode),
+def _make_template_spec(name: str) -> GraphTemplateSpec:
+    return GraphTemplateSpec(
+        name=name,
+        required_model_fields=_required_model_fields(name),
     )
 
 
-PIPELINE_MODE_SPECS: Dict[str, PipelineModeSpec] = {
-    mode: _make_spec(mode)
-    for mode in (
+GRAPH_TEMPLATE_SPECS: Dict[str, GraphTemplateSpec] = {
+    name: _make_template_spec(name)
+    for name in (
         "asr_only",
         "asr_text_retrieval",
         "audio_emb_retrieval",
@@ -55,15 +54,11 @@ PIPELINE_MODE_SPECS: Dict[str, PipelineModeSpec] = {
 }
 
 
-def list_pipeline_mode_specs() -> List[PipelineModeSpec]:
-    return [PIPELINE_MODE_SPECS[key] for key in sorted(PIPELINE_MODE_SPECS.keys())]
-
-
-def resolve_pipeline_mode_spec(mode: str) -> PipelineModeSpec:
-    if mode not in PIPELINE_MODE_SPECS:
-        available = ", ".join(sorted(PIPELINE_MODE_SPECS.keys()))
-        raise ValueError(f"Unknown pipeline mode: {mode}. Available modes: {available}")
-    return PIPELINE_MODE_SPECS[mode]
+def resolve_graph_template(name: str) -> GraphTemplateSpec:
+    if name not in GRAPH_TEMPLATE_SPECS:
+        available = ", ".join(sorted(GRAPH_TEMPLATE_SPECS.keys()))
+        raise ValueError(f"Unknown graph template: {name}. Available templates: {available}")
+    return GRAPH_TEMPLATE_SPECS[name]
 
 
 def build_stage_graph(
@@ -76,7 +71,6 @@ def build_stage_graph(
     mmr_enabled: bool = False,
     threshold_enabled: bool = False,
     refine_ops: tuple = (),
-    tts_enabled: bool = False,
     sink_enabled: bool = False,
     correction_enabled: bool = False,
     answer_gen_enabled: bool = False,
@@ -89,7 +83,7 @@ def build_stage_graph(
     query_opt_method: str = "rewrite",
 ) -> StageGraph:
     """Build execution DAG for currently supported pipeline modes (kwargs → FeatureSet)."""
-    resolve_pipeline_mode_spec(mode)  # validates the mode
+    resolve_graph_template(mode)  # validates the mode
     features = FeatureSet(
         embedding_fusion_enabled=embedding_fusion_enabled,
         result_fusion_enabled=result_fusion_enabled,
@@ -100,7 +94,6 @@ def build_stage_graph(
         mmr_enabled=mmr_enabled,
         threshold_enabled=threshold_enabled,
         refine_ops=tuple(refine_ops),
-        tts_enabled=tts_enabled,
         sink_enabled=sink_enabled,
         correction_enabled=correction_enabled,
         answer_gen_enabled=answer_gen_enabled,
@@ -173,24 +166,114 @@ def _attach_dataset_fields(node_spec: Any, config: Any) -> list:
     return out
 
 
-def build_graph_for_config(config: Any) -> StageGraph:
-    """Build the execution DAG for a config: explicit ``graph_override`` if present,
-    else derived from ``pipeline_mode``. Single source for run + preview + CLI so they
-    never disagree. Duck-typed (no config import)."""
-    mode = str(config.model.pipeline_mode)
-    override = getattr(config, "graph_override", None)
-    if override and not override.get("branches"):
+def _wire_mode_graph(
+    mode: Optional[str],
+    features: "FeatureSet",
+    *,
+    graph_override: Optional[dict],
+    config: Any,
+    attach_fields: bool,
+) -> StageGraph:
+    """Shared assembly tail for both graph builders: an explicit ``graph_override`` if given,
+    else ``assemble_specs(mode, features)``; branch-expand or wire. ``attach_fields`` injects the
+    dataset column schema into ``dataset_source`` nodes — done for the config/preview path (so the
+    DAG display shows real columns) but NOT for the run (which wires from the static node outputs,
+    the source of the run's reference_transcription binding). A mode-less explicit DAG labels
+    "custom"."""
+    override = graph_override or {}
+    if override.get("nodes") and not override.get("branches"):
+        nodes = override["nodes"]
+        if attach_fields:
+            nodes = _attach_dataset_fields(nodes, config)
         return build_graph_from_spec(
-            _attach_dataset_fields(override["nodes"], config),
-            mode=mode,
-            edges=override.get("edges"),
+            nodes, mode=mode or "custom", edges=override.get("edges")
         )
-    base = _attach_dataset_fields(
-        assemble_specs(mode, _features_from_config(config)), config
-    )
-    if override and override.get("branches"):
+    if mode is None:
+        raise ValueError(
+            "a config needs a template (graph.mode) or an explicit graph.nodes to build from."
+        )
+    base = assemble_specs(mode, features)
+    if attach_fields:
+        base = _attach_dataset_fields(base, config)
+    if override.get("branches"):
         return build_branched_graph(base, override["branches"], mode=mode)
     return build_graph_from_spec(base, mode=mode)
+
+
+def _config_template(config: Any) -> Optional[str]:
+    """The graph template a config selects (``graph_override['template']``, set from
+    ``graph.mode``). ``None`` for an explicit-graph config — the run derives the label instead."""
+    override = getattr(config, "graph_override", None) or {}
+    template = override.get("template")
+    return str(template) if template else None
+
+
+def build_graph_for_config(config: Any) -> StageGraph:
+    """Build the execution DAG for a config: an explicit ``graph.nodes`` if present, else the
+    config's graph *template* (``graph.mode``) expanded with its feature flags. Single source for
+    preview + CLI + the factory's build plan. Duck-typed (no config import). The run uses
+    :func:`build_run_graph`, which sources its feature flags from the built pipelines instead."""
+    return _wire_mode_graph(
+        _config_template(config),
+        _features_from_config(config),
+        graph_override=getattr(config, "graph_override", None),
+        config=config,
+        attach_fields=True,
+    )
+
+
+def build_run_graph(
+    mode,
+    *,
+    graph_override,
+    embedding_fusion_config,
+    query_opt_config,
+    retrieval_pipeline,
+    eval_config,
+    query_correction_config=None,
+    trace_limit=0,
+):
+    """Build the execution DAG for a run: like :func:`build_graph_for_config` but the
+    feature flags are sourced from what actually got built/bound at runtime — fusion /
+    query-opt / correction from the run's ``RunFeatures``, rerank / mmr / threshold off the
+    built retrieval pipeline's strategy config, ``trace`` from the run's trace limit — so the
+    graph reflects reality, not just the config's declared intent. (Moved from the former
+    ``pipeline/run_graph.py``; shares ``_wire_mode_graph`` with the config builder.)"""
+    from dataclasses import replace
+
+    def _enabled(cfg):
+        return bool(cfg is not None and getattr(cfg, "enabled", False))
+
+    fusion_on = _enabled(embedding_fusion_config)
+    # The built retrieval pipeline is the authoritative source for the refine sub-steps
+    # (rerank / mmr / threshold) — read them off its strategy config.
+    sc = getattr(retrieval_pipeline, "strategy_config", None)
+    rerank_on = bool(
+        sc
+        and (
+            str(sc.reranking.mode) != "none"
+            or getattr(retrieval_pipeline, "reranker", None) is not None
+        )
+    )
+    mmr_on = bool(sc and sc.post_processing.use_mmr)
+    threshold_on = bool(sc and sc.post_processing.min_similarity_threshold is not None)
+    features = replace(
+        _features_from_config(eval_config),
+        embedding_fusion_enabled=fusion_on,
+        result_fusion_enabled=fusion_on
+        and getattr(embedding_fusion_config, "level", "embedding") == "result",
+        query_opt_enabled=_enabled(query_opt_config),
+        query_opt_method=str(getattr(query_opt_config, "method", "rewrite")),
+        correction_enabled=_enabled(query_correction_config),
+        rerank_enabled=rerank_on,
+        mmr_enabled=mmr_on,
+        threshold_enabled=threshold_on,
+        trace_enabled=trace_limit > 0,
+    )
+    # attach_fields=False — the run wires from the static dataset_source outputs (parity).
+    return _wire_mode_graph(
+        mode, features, graph_override=graph_override, config=eval_config, attach_fields=False
+    )
 
 
 def _features_from_config(config: Any) -> FeatureSet:
@@ -227,9 +310,6 @@ def _features_from_config(config: Any) -> FeatureSet:
             _vdb and getattr(_vdb, "min_similarity_threshold", None) is not None
         ),
         refine_ops=tuple(getattr(_vdb, "refine_ops", None) or ()),
-        tts_enabled=bool(
-            getattr(config, "audio_synthesis", None) and config.audio_synthesis.enabled
-        ),
         sink_enabled=bool(
             getattr(config, "dataset_sink", None) and config.dataset_sink.enabled
         ),

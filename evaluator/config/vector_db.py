@@ -1,5 +1,5 @@
 """Vector database configuration."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Union
 
 from ..config.types import VectorDBType, to_enum
@@ -60,26 +60,26 @@ class BackendConfig:
 class VectorDBConfig:
     """
     Configuration for vector database and retrieval settings.
-    
+
     Controls vector store backend, retrieval strategies, reranking, and advanced
     retrieval options like MMR and hybrid search.
-    
+
     Attributes:
         type: Vector database type. Default: "inmemory".
             Options: "inmemory", "faiss", "faiss_gpu", "chromadb", "qdrant".
         k: Number of documents to retrieve. Default: 5.
         gpu_id: GPU device ID for FAISS GPU. Default: 0.
-        
+
         retrieval_mode: Retrieval strategy. Default: "dense".
             Options: "dense", "sparse", "hybrid".
         hybrid_dense_weight: Weight for dense retrieval in hybrid mode (0.0-1.0). Default: 0.5.
         hybrid_fusion_method: Method for combining hybrid results. Default: "weighted".
             Options: "weighted", "rrf", "max_score".
         rrf_k: RRF k parameter (higher = more weight to top results). Default: 60.
-        
+
         bm25_k1: BM25 k1 parameter. Default: 1.5.
         bm25_b: BM25 b parameter. Default: 0.75.
-        
+
         reranker_mode: Reranking strategy. Default: "none".
             Options: "none", "token_overlap", "cross_encoder".
         reranker_top_k: Number of candidates to rerank. Default: 20.
@@ -87,25 +87,25 @@ class VectorDBConfig:
         reranker_enabled: Whether cross-encoder reranking is enabled. Default: False.
         reranker_model: Cross-encoder model identifier. Default: "cross-encoder/ms-marco-MiniLM-L-6-v2".
         reranker_device: Device for reranker (None = auto-detect).
-        
+
         use_mmr: Enable Maximal Marginal Relevance for diversity. Default: False.
         mmr_lambda: MMR lambda parameter (0-1, higher = more relevance). Default: 0.5.
         min_similarity_threshold: Filter results below this score. Optional.
         distance_metric: Distance metric for similarity. Default: "cosine".
             Options: "cosine", "euclidean", "dot_product".
-        
+
         chromadb_path: Path for ChromaDB persistent storage (None = in-memory).
         chromadb_collection_name: Collection name in ChromaDB. Default: "documents".
-        
+
         qdrant_url: URL for Qdrant server (e.g., "http://localhost:6333"). Optional.
         qdrant_path: Path for Qdrant local storage (None = in-memory). Optional.
         qdrant_collection_name: Collection name in Qdrant. Default: "documents".
         qdrant_api_key: API key for Qdrant Cloud. Optional.
-    
+
     Examples:
         >>> # Dense retrieval with FAISS
         >>> config = VectorDBConfig(type="faiss", k=10)
-        >>> 
+        >>>
         >>> # Hybrid retrieval with reranking
         >>> config = VectorDBConfig(
         ...     type="chromadb",
@@ -114,7 +114,7 @@ class VectorDBConfig:
         ...     reranker_enabled=True,
         ...     reranker_top_k=50
         ... )
-        >>> 
+        >>>
         >>> # MMR for diversity
         >>> config = VectorDBConfig(
         ...     type="qdrant",
@@ -164,7 +164,7 @@ class VectorDBConfig:
         """Normalize type to enum and validate settings."""
         if isinstance(self.type, str):
             self.type = to_enum(self.type, VectorDBType)
-        
+
         # Validate weights and thresholds
         valid_retrieval_modes = {"dense", "sparse", "hybrid"}
         if self.retrieval_mode not in valid_retrieval_modes:
@@ -180,10 +180,10 @@ class VectorDBConfig:
 
         if not 0.0 <= self.hybrid_dense_weight <= 1.0:
             raise ValueError(f"hybrid_dense_weight must be in [0, 1], got {self.hybrid_dense_weight}")
-        
+
         if not 0.0 <= self.mmr_lambda <= 1.0:
             raise ValueError(f"mmr_lambda must be in [0, 1], got {self.mmr_lambda}")
-        
+
         if not 0.0 <= self.diversity_penalty <= 1.0:
             raise ValueError(f"diversity_penalty must be in [0, 1], got {self.diversity_penalty}")
 

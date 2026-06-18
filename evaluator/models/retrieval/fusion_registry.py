@@ -139,4 +139,3 @@ def fuse_hybrid_results(
         top_k=top_k,
         rrf_k=rrf_k,
     )
-

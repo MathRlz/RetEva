@@ -88,7 +88,7 @@ def validate_embedding_spaces(config: Any) -> None:
     model = getattr(config, "model", None)
     if model is None:
         return
-    mode = str(getattr(model, "pipeline_mode", ""))
+    mode = str(getattr(config, "graph_template", None) or "")
     vdb = getattr(config, "vector_db", None)
     retrieval_mode = str(getattr(vdb, "retrieval_mode", "dense")) if vdb else "dense"
     if retrieval_mode not in _VECTOR_MODES:
@@ -194,8 +194,8 @@ def resolve_query_space(config: Any, stream_name: Optional[str]) -> Optional[str
         reg, mtype, mname, override = audio
     elif name == "text_query_vectors":
         reg, mtype, mname, override = text
-    else:  # query_vectors / default: the mode's primary query embedder
-        is_audio = str(getattr(model, "pipeline_mode", "")) == "audio_emb_retrieval"
+    else:  # query_vectors / default: the template's primary query embedder
+        is_audio = (getattr(config, "graph_template", None) or "") == "audio_emb_retrieval"
         reg, mtype, mname, override = audio if is_audio else text
     if not mtype:
         return None

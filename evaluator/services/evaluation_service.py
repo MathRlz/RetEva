@@ -45,7 +45,7 @@ def _resolve_profile_snapshot(config: EvaluationConfig) -> Dict[str, Any]:
         "evaluation_mode": profile.evaluation_mode,
         "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
         "pipeline_mode_supported": profile.supports_pipeline_mode(
-            str(config.model.pipeline_mode)
+            str(config.graph_template)
         ),
     }
 
@@ -172,13 +172,11 @@ def _run_core(
 
     run_pre_flight(config)
 
-    # Prepare the dataset (load + TTS-synthesize missing query audio) BEFORE building the
-    # model pipelines, so a TTS model is loaded and fully offloaded before the ASR/embedding
-    # models are constructed — they are never co-resident (which avoids the native crash a
-    # TTS runtime can inflict on a subsequently-built embedder).
+    # Load the dataset. TTS synthesis of any missing query audio is in-graph now (the tts
+    # node gap-fills during execution), so this is load + validation only.
     dataset = prepare_dataset(
         config,
-        retrieval_required=_mode_needs_retrieval(config.model.pipeline_mode),
+        retrieval_required=_run_needs_retrieval(config),
         cache_manager=cache_manager,
     )
 
@@ -194,6 +192,20 @@ def _run_core(
                 f"replay: no dataset rows match query id(s) {sorted(set(map(str, query_ids)))}"
             )
         logger.info("replay: sliced dataset to %d row(s) by query id", len(dataset))
+
+    # Run-start summary on the shared service path (the CLI logs the full config at debug; this
+    # one INFO line makes a webapi/API run diagnosable: what ran, over how much data).
+    from ..logging_config import runtime_logger
+
+    runtime_logger.info(
+        "run start: template=%s rows=%d retrieval=%s fusion=%s correction=%s query_opt=%s",
+        config.graph_template,
+        len(dataset),
+        _run_needs_retrieval(config),
+        bool(getattr(getattr(config, "embedding_fusion", None), "enabled", False)),
+        bool(getattr(getattr(config, "query_correction", None), "enabled", False)),
+        bool(getattr(getattr(config, "query_optimization", None), "enabled", False)),
+    )
 
     bundle = create_pipeline_from_config(
         config, cache_manager, service_provider=service_provider
@@ -271,7 +283,7 @@ def run_evaluation(
             "start_time": start_time.isoformat(),
             "end_time": end_time.isoformat(),
             "duration_seconds": duration,
-            "pipeline_mode": config.model.pipeline_mode,
+            "pipeline_mode": config.graph_template,
             "dataset_profile": _resolve_profile_snapshot(config),
         }
         if hasattr(dataset, "__len__"):
@@ -310,68 +322,34 @@ def _mode_needs_retrieval(mode) -> bool:
     return str(mode) != "asr_only"
 
 
+def _run_needs_retrieval(config) -> bool:
+    """Whether this run retrieves (so the corpus is required). A named mode: every mode but
+    ``asr_only``. A graph-only config (mode=None): derive it from the execution graph — a
+    ``search`` node means retrieval (graph-first Phase 4)."""
+    mode = config.graph_template
+    if mode is not None:
+        return _mode_needs_retrieval(mode)
+    from ..pipeline.graph.modes import build_graph_for_config
+
+    return any(n.stage == "search" for n in build_graph_for_config(config).nodes)
+
+
 def prepare_dataset(
     config: EvaluationConfig,
     *,
     retrieval_required: bool,
     cache_manager: CacheManager | None = None,
 ):
-    """Validate + load the dataset and synthesize any missing query audio.
-
-    Runs before the model pipelines are built so a TTS model is loaded and offloaded
-    before the ASR/embedding models are constructed (no co-resident native runtimes).
-    Synthesized audio is cached via ``cache_manager`` (so ``--no-cache``/``--clear-cache``
-    apply) when supplied.
+    """Validate + load the dataset. TTS synthesis of any missing query audio is **in-graph**
+    now — the ``tts`` node (``SLOT_TTS``, present in every speech template; a free no-op, no model
+    load, when nothing is missing) gap-fills, so dataset loading no longer triggers synthesis.
+    Previously a pre-graph ``_synthesize_query_audio`` fallback handled the synthesis-disabled +
+    audio-missing case; that's redundant now that the tts node runs regardless of the
+    ``audio_synthesis.enabled`` flag. ``cache_manager`` is kept for API stability (the in-graph tts
+    node caches via the run's cache manager).
     """
-    logger = get_logger(__name__)
     validate_dataset_runtime_config(config, retrieval_required=retrieval_required)
-    dataset = load_runtime_dataset(config)
-    _synthesize_query_audio(config, dataset, logger, cache_manager)
-    return dataset
-
-
-def _synthesize_query_audio(
-    config: EvaluationConfig, dataset, logger, cache_manager=None
-) -> None:
-    """Synthesize audio for questions lacking ``audio_path`` (when enabled or needed).
-
-    When ``audio_synthesis.enabled`` the in-graph ``tts`` node performs synthesis, so
-    this pre-graph path only covers the implicit fallback: questions missing audio with
-    synthesis not explicitly enabled.
-    """
-    if config.audio_synthesis.enabled:
-        return  # handled by the in-graph tts node
-    questions_missing_audio = (
-        hasattr(dataset, "questions")
-        and dataset.questions
-        and any(not getattr(q, "audio_path", None) for q in dataset.questions)
-    )
-    if not questions_missing_audio:
-        return
-    if questions_missing_audio and not config.audio_synthesis.enabled:
-        logger.info("Audio missing for some questions — auto-synthesizing with TTS")
-    else:
-        logger.info(
-            "Audio synthesis enabled - checking for questions needing synthesis"
-        )
-    if not (hasattr(dataset, "questions") and dataset.questions):
-        logger.warning(
-            "Dataset does not have 'questions' attribute, TTS synthesis skipped"
-        )
-        return
-    from ..pipeline.audio.prepare import synthesize_missing_query_audio
-
-    logger.info(
-        "STAGE prepare_dataset: TTS synthesis START (provider=%s)",
-        config.audio_synthesis.provider,
-    )
-    synthesize_missing_query_audio(
-        dataset.questions,
-        config.audio_synthesis,
-        log=logger,
-        cache_manager=cache_manager,
-    )
-    logger.info("STAGE prepare_dataset: TTS synthesis DONE")
+    return load_runtime_dataset(config)
 
 
 def load_dataset(

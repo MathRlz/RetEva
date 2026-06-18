@@ -22,6 +22,7 @@ def _ensure_faiss():
         faiss = _faiss
     return faiss
 
+
 class VectorStore(ABC):
     @abstractmethod
     def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
@@ -30,7 +31,7 @@ class VectorStore(ABC):
     @abstractmethod
     def search(self, query: np.ndarray, k: int) -> List[Tuple[Any, float]]:
         pass
-    
+
     def search_batch(self, queries: np.ndarray, k: int) -> List[List[Tuple[Any, float]]]:
         """Batch search — default loops over search(). Override for vectorized impl."""
         return [self.search(q, k) for q in queries]
@@ -78,6 +79,7 @@ class VectorStore(ABC):
         """Load vector store from disk."""
         pass
 
+
 class InMemoryVectorStore(VectorStore):
     def __init__(self) -> None:
         self.vectors: np.ndarray | None = None
@@ -97,7 +99,7 @@ class InMemoryVectorStore(VectorStore):
         query_norm = np.linalg.norm(query)
         if query_norm > MIN_NORM_THRESHOLD:
             query = query / query_norm
-        
+
         sims = np.dot(self.vectors, query.T).squeeze()
         indices = np.argsort(-sims)[:k]
         return [
@@ -134,18 +136,18 @@ class InMemoryVectorStore(VectorStore):
             raise ValueError("Cannot save: vectors not built yet. Call build() first.")
         save_path = Path(path)
         save_path.mkdir(parents=True, exist_ok=True)
-        
+
         # Save vectors
         np.save(save_path / "vectors.npy", self.vectors)
-        
+
         # Save payloads
         with open(save_path / "payloads.json", 'w') as f:
             json.dump(self.payloads, f, indent=2)
-    
+
     def load(self, path: Union[str, Path]) -> None:
         """Load vector store from disk."""
         load_path = Path(path)
-        
+
         # Load vectors
         self.vectors = np.load(load_path / "vectors.npy")
 
@@ -196,7 +198,7 @@ class FaissVectorStore(VectorStore):
         faiss.write_index(self.index, str(save_path / "faiss.index"))
         with open(save_path / "payloads.json", 'w') as f:
             json.dump(self.payloads, f, indent=2)
-    
+
     def load(self, path: Union[str, Path]) -> None:
         """Load FAISS index from disk."""
         load_path = Path(path)
@@ -355,33 +357,33 @@ class FaissGpuVectorStore(VectorStore):
         """Save GPU FAISS index to disk (converts to CPU first)."""
         save_path = Path(path)
         save_path.mkdir(parents=True, exist_ok=True)
-        
+
         # Convert GPU index to CPU for saving
         cpu_index = faiss.index_gpu_to_cpu(self.index)
         faiss.write_index(cpu_index, str(save_path / "faiss.index"))
-        
+
         # Save payloads
         with open(save_path / "payloads.json", 'w') as f:
             json.dump(self.payloads, f, indent=2)
-        
+
         # Save metadata
         with open(save_path / "metadata.json", 'w') as f:
             json.dump({'dim': self.dim, 'gpu_id': self.gpu_id}, f)
-    
+
     def load(self, path: Union[str, Path]) -> None:
         """Load FAISS index from disk and move to GPU."""
         load_path = Path(path)
-        
+
         # Load CPU index
         cpu_index = faiss.read_index(str(load_path / "faiss.index"))
-        
+
         # Move to GPU
         self.index = faiss.index_cpu_to_gpu(self.res, self.gpu_id, cpu_index)
-        
+
         # Load payloads
         with open(load_path / "payloads.json", 'r') as f:
             self.payloads = json.load(f)
-        
+
         # Load metadata
         with open(load_path / "metadata.json", 'r') as f:
             metadata = json.load(f)

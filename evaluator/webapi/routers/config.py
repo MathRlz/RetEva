@@ -4,10 +4,7 @@ from typing import Any, Callable, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from evaluator.pipeline.stage_graph import (
-    PIPELINE_MODE_SPECS,
-    resolve_pipeline_mode_spec,
-)
+from evaluator.pipeline.graph.templates import GRAPH_TEMPLATES, graph_template
 from evaluator.datasets.descriptor import list_registered_datasets, get_descriptor
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.form_builder import (
@@ -17,6 +14,8 @@ from evaluator.webapi.form_builder import (
     load_config,
     nested_config,
     prepare_run_config,
+    required_model_fields_for,
+    resolve_node_form,
 )
 from evaluator.webapi.schemas import (
     ConfigCreateRequest,
@@ -44,21 +43,21 @@ def build_config_router(
 
     @router.get("/api/config/schema", summary="Config schema for wizard UI")
     def config_schema() -> Dict[str, Any]:
-        """Return structured schema: pipeline modes → required model fields + compatible datasets,
-        datasets → field requirements + default metrics. Used by frontend wizard."""
+        """Return structured schema: graph templates → required model fields + compatible datasets,
+        datasets → field requirements + default metrics. Used by frontend wizard. (The four former
+        pipeline modes are graph templates now; required fields are graph-derived.)"""
         modes: Dict[str, Any] = {}
-        for mode in sorted(PIPELINE_MODE_SPECS.keys()):
-            try:
-                spec = resolve_pipeline_mode_spec(mode)
-            except ValueError:
+        for name in sorted(GRAPH_TEMPLATES):
+            fields = required_model_fields_for(name)
+            if not fields:
                 continue
             compatible_datasets = [
                 ds_id
                 for ds_id in list_registered_datasets()
-                if (desc := get_descriptor(ds_id)) and desc.supports_pipeline_mode(mode)
+                if (desc := get_descriptor(ds_id)) and desc.supports_pipeline_mode(name)
             ]
-            modes[mode] = {
-                "required_model_fields": list(spec.required_model_fields),
+            modes[name] = {
+                "required_model_fields": fields,
                 "compatible_datasets": compatible_datasets,
             }
 
@@ -127,23 +126,16 @@ def build_config_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get(
-        "/api/graph/template/{mode}", summary="Starter graph for a pipeline mode"
+        "/api/graph/template/{mode}", summary="Starter graph for a template"
     )
     def graph_template_endpoint(mode: str) -> Dict[str, Any]:
-        """The mode's default DAG as a canvas seed: nodes (id/type/params), the resolved
+        """A template's default DAG as a canvas seed: nodes (id/type/params), the resolved
         data bindings (artifact + producer — what the auto-wiring derived, so the canvas
         draws *real* edges), and topological levels for layout. The user starts from a
         working graph and only swaps models/params per node."""
-        from ...pipeline.stage_graph import build_stage_graph
-        from ..form_builder import resolve_node_form
-
         try:
-            graph = build_stage_graph(
-                mode,
-                # audio_text is the fusion mode — its starter includes the fusion path.
-                embedding_fusion_enabled=(mode == "audio_text_retrieval"),
-            )
-        except ValueError as exc:
+            graph = graph_template(mode)
+        except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {
             "mode": graph.mode,

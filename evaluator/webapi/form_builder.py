@@ -15,7 +15,7 @@ from evaluator.config.model_fields import (
     MODEL_FAMILY_FIELDS,
     MODEL_FIELD_FAMILY as _MODEL_FIELD_FAMILY,
 )
-from evaluator.config.types import DatasetType, PipelineMode, VectorDBType
+from evaluator.config.types import DatasetType, VectorDBType
 from evaluator.datasets import (
     list_known_dataset_names,
     resolve_dataset_profile,
@@ -100,10 +100,15 @@ def create_config_options(
     ):
         normalized_models.setdefault(required_family, [])
 
+    from evaluator.pipeline.graph.templates import GRAPH_TEMPLATES, list_graph_templates
+
     defaults = EvaluationConfig()
     return {
         "presets": list_presets(),
-        "pipeline_modes": [mode.value for mode in PipelineMode],
+        # The four former pipeline modes are now graph templates (config-creation skeletons).
+        # Key kept as ``pipeline_modes`` for the existing UI; values are the template names.
+        "pipeline_modes": list(GRAPH_TEMPLATES),
+        "graph_templates": list_graph_templates(),
         "dataset_types": [dataset_type.value for dataset_type in DatasetType],
         "dataset_sources": ["local", "huggingface", "custom"],
         "dataset_names": list_known_dataset_names(),
@@ -218,7 +223,7 @@ def graph_preview(config: EvaluationConfig) -> Dict[str, Any]:
             "evaluation_mode": profile.evaluation_mode,
             "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
             "pipeline_mode_supported": profile.supports_pipeline_mode(
-                str(config.model.pipeline_mode)
+                str(config.graph_template)
             ),
         },
     }
@@ -429,21 +434,34 @@ _MODEL_FIELDS = {
 }
 
 
-def _required_fields(mode: str) -> List[str]:
-    from evaluator.pipeline.stage_graph import resolve_pipeline_mode_spec
+def required_model_fields_for(template: str) -> List[str]:
+    """The model config-field paths a graph *template* needs — derived from the template's nodes
+    (each node's ``model_field``), so this is registry/graph-driven, not a per-mode spec lookup.
+    Identical fields to the former ``resolve_graph_template(mode).required_model_fields`` for
+    the four built-in templates, but works for any template name."""
+    from evaluator.pipeline.graph.templates import graph_template
+
     try:
-        return list(resolve_pipeline_mode_spec(mode).required_model_fields)
-    except ValueError:
+        graph = graph_template(template)
+    except (ValueError, KeyError):
         return []
+    fields: List[str] = []
+    for node in graph.nodes:
+        field = node_model_field(node.stage, node.params)
+        if field and field not in fields:
+            fields.append(field)
+    return fields
 
 
-def _model_section(provider_factory, mode: str, current: Dict[str, str]) -> List[Dict[str, Any]]:
-    """Build the registry-driven model-select descriptors for a pipeline mode."""
+def _model_section(
+    provider_factory, template: str, current: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """Build the registry-driven model-select descriptors for a graph template."""
     models = with_provider(provider_factory, lambda p: p.list_available_models())
     from evaluator.models.registry import FAMILY_REGISTRIES
 
     sections: List[Dict[str, Any]] = []
-    for field in _required_fields(mode):
+    for field in required_model_fields_for(template):
         spec = _MODEL_FIELDS.get(field)
         if not spec:
             continue

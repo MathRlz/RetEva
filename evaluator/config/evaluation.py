@@ -196,6 +196,13 @@ class EvaluationConfig:
     cpu_stage_executor: str = "sync"
     cpu_stage_workers: int = 0  # 0 = auto (os.cpu_count)
 
+    @property
+    def graph_template(self) -> Optional[str]:
+        """The graph template this config selects (``graph_override['template']``, set from
+        ``graph: {mode: …}``), or ``None`` for an explicit-graph / model-only config. Replaces the
+        removed ``model.pipeline_mode`` field — the graph is the spec; this is just its label."""
+        return (self.graph_override or {}).get("template")
+
     # Backward-compatible shortcuts: config.judge <-> config.features.judge, etc.
     # Keeps existing call sites working after the features grouping (#7).
     @property
@@ -307,28 +314,15 @@ class EvaluationConfig:
 
         new_model = replace(self.model)
 
-        # Which models a mode needs is owned by PipelineModeSpec (the single
-        # authority). Map each required model field to its (allocation category,
-        # model-type attr, device attr) and allocate for the ones that are set.
-        from ..pipeline.stage_graph import resolve_pipeline_mode_spec
-
-        _field_to_alloc = {
-            "model.asr_model_type": ("asr", "asr_model_type", "asr_device"),
-            "model.text_emb_model_type": (
-                "text_embedding",
-                "text_emb_model_type",
-                "text_emb_device",
-            ),
-            "model.audio_emb_model_type": (
-                "audio_embedding",
-                "audio_emb_model_type",
-                "audio_emb_device",
-            ),
-        }
-        mode = enum_to_str(self.model.pipeline_mode)
-        spec = resolve_pipeline_mode_spec(mode)
-        for field_name in spec.required_model_fields:
-            category, model_type_attr, device_attr = _field_to_alloc[field_name]
+        # Allocate a device for every model family that is actually configured (graph-first: the
+        # graph carries the models; a family with no model_type set is simply skipped). Was keyed
+        # off the removed pipeline_mode's required fields.
+        _alloc = (
+            ("asr", "asr_model_type", "asr_device"),
+            ("text_embedding", "text_emb_model_type", "text_emb_device"),
+            ("audio_embedding", "audio_emb_model_type", "audio_emb_device"),
+        )
+        for category, model_type_attr, device_attr in _alloc:
             model_type = getattr(self.model, model_type_attr)
             if model_type:
                 mem = estimate_model_memory_gb(category, model_type)

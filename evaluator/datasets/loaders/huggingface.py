@@ -89,10 +89,10 @@ DEFAULT_COLUMN_MAPPING = {
 @dataclass
 class HuggingFaceDatasetLoader:
     """Dataset loader for HuggingFace Hub audio datasets.
-    
+
     Supports common speech recognition datasets and automatically
     maps HuggingFace dataset columns to the expected AudioSample format.
-    
+
     Example:
         >>> loader = HuggingFaceDatasetLoader(
         ...     dataset_name="mozilla-foundation/common_voice_11_0",
@@ -101,7 +101,7 @@ class HuggingFaceDatasetLoader:
         ... )
         >>> samples = loader.load()
         >>> print(len(samples))
-    
+
     Attributes:
         dataset_name: HuggingFace dataset identifier.
         subset: Dataset configuration/subset name (e.g., language code).
@@ -121,13 +121,13 @@ class HuggingFaceDatasetLoader:
     streaming: bool = False
     trust_remote_code: bool = False
     cache_dir: Optional[str] = None
-    
+
     _dataset: Any = field(default=None, repr=False, init=False)
     _samples: Optional[List[AudioSample]] = field(default=None, repr=False, init=False)
-    
+
     def _get_column_mapping(self) -> Dict[str, Optional[str]]:
         """Get column mapping for the dataset.
-        
+
         Returns:
             Dictionary mapping standard names to dataset column names.
         """
@@ -135,19 +135,19 @@ class HuggingFaceDatasetLoader:
             mapping = DEFAULT_COLUMN_MAPPING.copy()
             mapping.update(self.column_mapping)
             return mapping
-        
+
         # Check known datasets
         for known_name, known_mapping in KNOWN_DATASET_MAPPINGS.items():
             if self.dataset_name.startswith(known_name) or known_name in self.dataset_name:
                 return known_mapping
-        
+
         return DEFAULT_COLUMN_MAPPING
-    
+
     def _load_hf_dataset(self) -> Any:
         """Load the HuggingFace dataset."""
         if self._dataset is not None:
             return self._dataset
-        
+
         try:
             from datasets import load_dataset
         except ImportError as e:
@@ -155,7 +155,7 @@ class HuggingFaceDatasetLoader:
                 "HuggingFace datasets library is required for HuggingFaceDatasetLoader. "
                 "Install it with: pip install datasets"
             ) from e
-        
+
         # Reproducibility (R1): support ``repo@revision`` to pin an exact HF dataset
         # snapshot (commit / tag / branch), so a rerun can't silently pick up an upstream
         # change. Plain ``repo`` keeps the default (latest) behaviour.
@@ -181,72 +181,72 @@ class HuggingFaceDatasetLoader:
 
         self._dataset = load_dataset(**load_kwargs)
         return self._dataset
-    
+
     def _extract_audio(self, item: Dict[str, Any], audio_col: str) -> tuple:
         """Extract audio array and sample rate from dataset item.
-        
+
         Returns:
             Tuple of (audio_array, sampling_rate).
         """
         audio_data = item.get(audio_col)
-        
+
         if audio_data is None:
             raise ValueError(f"Audio column '{audio_col}' not found in item")
-        
+
         # HuggingFace audio format: {"array": np.ndarray, "sampling_rate": int}
         if isinstance(audio_data, dict):
             audio_array = audio_data.get("array")
             sampling_rate = audio_data.get("sampling_rate", 16000)
 
             if audio_array is None:
-                raise ValueError(f"Audio data missing 'array' key")
+                raise ValueError("Audio data missing 'array' key")
 
             return _to_mono(np.array(audio_array, dtype=np.float32)), sampling_rate
 
         # Fallback: assume raw numpy array with default sample rate
         return _to_mono(np.array(audio_data, dtype=np.float32)), 16000
-    
+
     def _map_item(self, item: Dict[str, Any], idx: int) -> AudioSample:
         """Map a HuggingFace dataset item to AudioSample.
-        
+
         Args:
             item: Dataset item dictionary.
             idx: Item index (used as fallback sample_id).
-            
+
         Returns:
             AudioSample instance.
         """
         mapping = self._get_column_mapping()
-        
+
         # Extract audio
         audio_col = mapping.get("audio", "audio")
         audio_array, sampling_rate = self._extract_audio(item, audio_col)
-        
+
         # Extract transcription
         trans_col = mapping.get("transcription", "text")
         transcription = str(item.get(trans_col, ""))
-        
+
         # Extract sample ID
         id_col = mapping.get("sample_id")
         if id_col and id_col in item:
             sample_id = str(item[id_col])
         else:
             sample_id = f"{self.dataset_name}_{idx}"
-        
+
         # Extract language
         lang_col = mapping.get("language")
         if lang_col and lang_col in item:
             language = str(item[lang_col])
         else:
             language = self.subset if self.subset else self.default_language
-        
+
         # Collect remaining metadata
         metadata = {
-            k: v for k, v in item.items() 
+            k: v for k, v in item.items()
             if k not in [audio_col, trans_col, id_col, lang_col]
             and not isinstance(v, (np.ndarray, bytes))
         }
-        
+
         return AudioSample(
             audio_array=audio_array,
             sampling_rate=sampling_rate,
@@ -255,19 +255,19 @@ class HuggingFaceDatasetLoader:
             language=language,
             metadata=metadata,
         )
-    
+
     def load(self) -> List[AudioSample]:
         """Load all samples from the HuggingFace dataset.
-        
+
         Returns:
             List of AudioSample objects.
         """
         if self._samples is not None:
             return self._samples
-        
+
         dataset = self._load_hf_dataset()
         samples: List[AudioSample] = []
-        
+
         if self.streaming:
             for idx, item in enumerate(dataset):
                 if self.max_samples is not None and idx >= self.max_samples:
@@ -277,38 +277,38 @@ class HuggingFaceDatasetLoader:
             n_samples = len(dataset) if self.max_samples is None else min(len(dataset), self.max_samples)
             for idx in range(n_samples):
                 samples.append(self._map_item(dataset[idx], idx))
-        
+
         self._samples = samples
         return self._samples
-    
+
     def __len__(self) -> int:
         """Return the number of samples."""
         if self._samples is not None:
             return len(self._samples)
-        
+
         dataset = self._load_hf_dataset()
-        
+
         if self.streaming:
             # For streaming datasets, we need to load to know the count
             return len(self.load())
-        
+
         total = len(dataset)
         if self.max_samples is not None:
             return min(total, self.max_samples)
         return total
-    
+
     def __iter__(self) -> Iterator[AudioSample]:
         """Iterate over samples."""
         return iter(self.load())
-    
+
     def __getitem__(self, idx: int) -> AudioSample:
         """Get a sample by index."""
         return self.load()[idx]
-    
+
     @classmethod
     def list_known_datasets(cls) -> List[str]:
         """List known HuggingFace speech datasets with built-in mappings.
-        
+
         Returns:
             List of dataset identifiers.
         """

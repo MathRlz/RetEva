@@ -47,9 +47,9 @@ from .registry import register_stage_node
 # in asr_only too and adapts to whatever ran.
 #
 # dataset_source is the graph root: it surfaces + validates the dataset's source
-# artifacts so every downstream node hangs off it. (Actual loading + TTS synthesis stay
-# in prepare_dataset before the graph — needed for mode detection and to keep TTS off the
-# embedder's device; this node represents that source in the executed graph.)
+# artifacts so every downstream node hangs off it. (Dataset *loading* stays in prepare_dataset
+# before the graph; TTS synthesis is in-graph — the tts node gap-fills any missing query audio.
+# This node represents the loaded source in the executed graph.)
 # ── operator: source (dataset_source / dataset_union) ────────────────
 # dataset_source surfaces a dataset's source artifacts (role/fields narrowing lives in
 # _effective_outputs, keyed by node_kind); `union: true` is dataset_union (merges every

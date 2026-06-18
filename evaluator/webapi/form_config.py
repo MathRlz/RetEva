@@ -66,9 +66,10 @@ def prepare_run_config(
     config = load_config(payload_config, auto_devices=auto_devices)
     _enforce_data_root(config)
     check_backend_dependencies(config.vector_db)
+    template = config.graph_template
     validate_dataset_runtime_config(
         config,
-        retrieval_required=(str(config.model.pipeline_mode) != "asr_only"),
+        retrieval_required=(template != "asr_only"),
     )
     return config
 
@@ -141,7 +142,8 @@ def _form_to_config(form: Dict[str, str]) -> Dict[str, Any]:
         except ValueError:
             return default
 
-    model: Dict[str, Any] = {"pipeline_mode": s("pipeline_mode") or "asr_text_retrieval"}
+    # The form's template selector → a graph template reference (no pipeline_mode field anymore).
+    model: Dict[str, Any] = {}
     for fam in MODEL_FAMILY_FIELDS:
         if not s(fam.type_field):
             continue
@@ -173,6 +175,7 @@ def _form_to_config(form: Dict[str, str]) -> Dict[str, Any]:
         "experiment_name": s("experiment_name") or "webui_experiment",
         "output_dir": s("output_dir") or "evaluation_results/webui",
         "model": model,
+        "graph_override": {"template": s("pipeline_mode") or "asr_text_retrieval"},
         "data": data,
         "vector_db": {
             "type": s("vector_db_type") or "inmemory",

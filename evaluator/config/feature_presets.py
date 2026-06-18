@@ -239,13 +239,13 @@ PRESET_REGISTRY: Dict[str, Dict[str, Any]] = {
     "fusion_audio_focus": {"embedding_fusion": EmbeddingFusionConfig(**FUSION_AUDIO_FOCUS)},
     "fusion_text_focus": {"embedding_fusion": EmbeddingFusionConfig(**FUSION_TEXT_FOCUS)},
     "fusion_concatenate_pca": {"embedding_fusion": EmbeddingFusionConfig(**FUSION_CONCATENATE_PCA)},
-    
+
     # Query optimization presets
     "query_rewrite": {"query_optimization": QueryOptimizationConfig(**QUERY_REWRITE_ENABLED)},
     "query_hyde": {"query_optimization": QueryOptimizationConfig(**QUERY_HYDE)},
     "query_decompose": {"query_optimization": QueryOptimizationConfig(**QUERY_DECOMPOSE)},
     "query_multi": {"query_optimization": QueryOptimizationConfig(**QUERY_MULTI_QUERY)},
-    
+
     # Hybrid retrieval presets
     "hybrid_balanced": {"vector_db": VectorDBConfig(**HYBRID_BALANCED)},
     "hybrid_semantic": {"vector_db": VectorDBConfig(**HYBRID_SEMANTIC_FOCUS)},
@@ -262,16 +262,16 @@ PRESET_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 def get_preset(preset_name: str) -> Dict[str, Any]:
     """Get a configuration preset by name.
-    
+
     Args:
         preset_name: Name of the preset to retrieve.
-        
+
     Returns:
         Dictionary of configuration parameters.
-        
+
     Raises:
         KeyError: If preset name is not found.
-        
+
     Examples:
         >>> preset = get_preset("medical_optimized")
         >>> config = EvaluationConfig(**preset)
@@ -282,13 +282,13 @@ def get_preset(preset_name: str) -> Dict[str, Any]:
             f"Unknown preset: '{preset_name}'. "
             f"Available presets: {available}"
         )
-    
+
     return PRESET_REGISTRY[preset_name]
 
 
 def list_presets() -> Dict[str, str]:
     """List all available presets with descriptions.
-    
+
     Returns:
         Dictionary mapping preset names to descriptions.
     """
@@ -297,12 +297,12 @@ def list_presets() -> Dict[str, str]:
         "fusion_audio_focus": "Audio-focused fusion (70/30)",
         "fusion_text_focus": "Text-focused fusion (30/70)",
         "fusion_concatenate_pca": "Concatenation with PCA reduction",
-        
+
         "query_rewrite": "Iterative query rewriting with LLM",
         "query_hyde": "HyDE: Hypothetical Document Embeddings",
         "query_decompose": "Query decomposition into sub-queries",
         "query_multi": "Multi-query generation with variations",
-        
+
         "hybrid_balanced": "Balanced hybrid retrieval (50/50)",
         "hybrid_semantic": "Semantic-focused hybrid (70/30)",
         "hybrid_keyword": "Keyword-focused hybrid (30/70)",
@@ -313,20 +313,20 @@ def list_presets() -> Dict[str, str]:
         "fast_baseline": "Minimal configuration for fast baseline",
         "quality_focused": "Maximum quality with all enhancements",
     }
-    
+
     return descriptions
 
 
 def apply_preset(config: EvaluationConfig, preset_name: str) -> EvaluationConfig:
     """Apply a preset to an existing configuration.
-    
+
     Args:
         config: Base configuration to modify.
         preset_name: Name of preset to apply.
-        
+
     Returns:
         New configuration with preset applied.
-        
+
     Examples:
         >>> config = EvaluationConfig()
         >>> config = apply_preset(config, "hybrid_balanced")

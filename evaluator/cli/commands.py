@@ -102,15 +102,23 @@ def _save_results(results, output_path, config, logger) -> None:
     with open(output_path, "w") as f:
         json.dump(results, f, indent=4)
 
-    # R1: persist the *resolved* config (devices/models/effective batch size filled in) next
-    # to the report, so a reproduction uses what actually ran, not the submitted config.
+    # R1: persist the *resolved* config — the executed DAG (graph-first Phase 5) — next to the
+    # report as node-centric YAML, so a reproduction uses the graph that actually ran (no
+    # pipeline_mode, no default model for a node the run never executed).
     try:
+        import yaml
+
+        from ..config.graph_config import resolved_node_config
+
         _base = output_path[:-5] if output_path.endswith(".json") else output_path
-        resolved_path = f"{_base}.config_resolved.json"
+        resolved_path = f"{_base}.config_resolved.yaml"
         with open(resolved_path, "w") as cf:
-            json.dump(config.to_dict(), cf, indent=2, default=str)
+            yaml.safe_dump(
+                resolved_node_config(config), cf,
+                sort_keys=False, default_flow_style=False,
+            )
         logger.info(f"Resolved config saved to: {resolved_path}")
-    except (OSError, AttributeError, TypeError) as exc:
+    except Exception as exc:  # noqa: BLE001 - resolved config is a best-effort sidecar
         logger.warning("could not write resolved config: %s", exc)
 
     logger.info("=" * 60)
@@ -121,7 +129,7 @@ def _save_results(results, output_path, config, logger) -> None:
 
 def _print_graph(config: EvaluationConfig) -> None:
     """Print the execution DAG for *config* without loading any models."""
-    from evaluator.pipeline import build_graph_for_config, get_stage_node_def
+    from evaluator.pipeline import build_graph_for_config
     from evaluator.pipeline.graph.display import display_label
     from evaluator.pipeline.stage_graph import (
         _effective_inputs,
@@ -135,7 +143,6 @@ def _print_graph(config: EvaluationConfig) -> None:
         print(f"  Level {i}: {', '.join(node.id for node in level)}")
     print("  nodes (inputs -> outputs) [deps]:")
     for node in graph.nodes:
-        d = get_stage_node_def(node.stage)
         ins = ", ".join(_effective_inputs(node.stage, node.params)) or "-"
         outs = ", ".join(_effective_outputs(node.stage, node.params)) or "-"
         deps = f"  [after {', '.join(node.depends_on)}]" if node.depends_on else ""

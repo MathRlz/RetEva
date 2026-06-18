@@ -138,13 +138,13 @@ class CrossEncoderReranker(BaseReranker):
 
         # Extract texts for scoring
         texts = [_extract_text(payload) for payload, _ in documents]
-        
+
         # Create query-document pairs
         pairs = [[query, text] for text in texts]
 
         # Get cross-encoder scores
         scores = self.model.predict(pairs, batch_size=self.batch_size)
-        
+
         # Handle both single and batch predictions
         if isinstance(scores, (int, float)):
             scores = [scores]

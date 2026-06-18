@@ -80,12 +80,13 @@ def __getattr__(name: str):
 def __dir__():
     return sorted(set(globals()) | set(_LAZY_EXPORTS))
 
+
 __all__ = [
     # Base classes
     "ASRModel",
     "TextEmbeddingModel",
     "AudioEmbeddingModel",
-    
+
     # Registry system
     "asr_registry",
     "text_embedding_registry",
@@ -96,7 +97,7 @@ __all__ = [
     "register_audio_embedding_model",
     "register_reranker_model",
     "get_all_registered_models",
-    
+
     # ASR models
     "WhisperModel",
     "Wav2Vec2Model",
