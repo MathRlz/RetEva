@@ -1,7 +1,6 @@
 from .asr_pipeline import ASRPipeline
 from .audio import AudioSynthesizer, AudioAugmenter
 from .audio_embedding_pipeline import AudioEmbeddingPipeline
-from .base import BasePipelineABC, EmbeddingPipelineABC, TranscriptionPipelineABC
 from .factory import (
     check_backend_dependencies,
     create_pipeline_from_config,
@@ -11,9 +10,7 @@ from .protocols import (
     ASRPipelineProtocol,
     AudioEmbeddingPipelineProtocol,
     BatchSearchResults,
-    BasePipeline,
     CacheStats,
-    CacheStatsProvider,
     EmbeddingPipeline,
     RetrievalPayload,
     SearchResult,
@@ -70,14 +67,8 @@ __all__ = [
     "DATASET_ROLE_QUESTIONS",
     "AudioSynthesizer",
     "AudioAugmenter",
-    # Base classes
-    "BasePipelineABC",
-    "EmbeddingPipelineABC",
-    "TranscriptionPipelineABC",
     # Protocols
-    "BasePipeline",
     "EmbeddingPipeline",
-    "CacheStatsProvider",
     "TextEmbeddingPipelineProtocol",
     "AudioEmbeddingPipelineProtocol",
     "ASRPipelineProtocol",

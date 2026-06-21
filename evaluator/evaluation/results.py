@@ -26,6 +26,14 @@ from typing import Any, Dict, Union
 
 from ..config import EvaluationConfig
 
+# Canonical headline-metric priority — the report keys shown first / most prominently
+# (the textual ``summary()`` here, the web status chips, any "primary metric" UI). One list so
+# the console summary and the UI never disagree about which metrics lead. Keys absent from a
+# given run are simply skipped.
+HEADLINE_METRICS = (
+    "MRR", "MAP", "Recall@1", "Recall@5", "Recall@10", "NDCG@5", "WER", "CER",
+)
+
 
 @dataclass
 class EvaluationResults:
@@ -347,14 +355,11 @@ class EvaluationResults:
 
         Example:
             >>> print(results.summary())
-            MRR: 0.7523, WER: 12.34%, Recall@5: 0.8912
+            MRR: 0.7523, Recall@5: 0.8912, WER: 12.34%
         """
         key_metrics = []
 
-        # Common important metrics
-        priority = ["MRR", "MAP", "WER", "CER", "Recall@5", "Recall@10", "NDCG@5"]
-
-        for metric in priority:
+        for metric in HEADLINE_METRICS:
             if metric in self.metrics:
                 value = self.metrics[metric]
                 if isinstance(value, float):
@@ -365,9 +370,9 @@ class EvaluationResults:
                 else:
                     key_metrics.append(f"{metric}: {value}")
 
-        # Add any other metrics not in priority list
+        # Add any other metrics not in the headline list
         for metric, value in self.metrics.items():
-            if metric not in priority:
+            if metric not in HEADLINE_METRICS:
                 if isinstance(value, float):
                     key_metrics.append(f"{metric}: {value:.4f}")
                 else:

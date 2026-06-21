@@ -95,20 +95,13 @@ def _stage_augment_audio(s: RunState) -> None:
     )
     os.makedirs(out_dir, exist_ok=True)
 
-    import functools
+    from ..executor.cpu_parallel import run_per_item
 
-    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
-
-    # Per-item decode + perturb + write through the 4b parallel_map (sync default → byte-identical
-    # to the serial loop; the perturbation is pure in (audio, sr, seed), so thread/process match).
-    backend, workers = resolve_cpu_backend(s.config)
-    per_item = parallel_map(
-        functools.partial(
-            _augment_audio_one, augmenter=augmenter, n_variants=n_variants,
-            base_seed=base_seed, node_id=node_id, out_dir=out_dir,
-        ),
-        list(zip(refs.ids, refs.values)),
-        backend=backend, workers=workers,
+    # Per-item decode + perturb + write; the perturbation is pure in (audio, sr, seed).
+    per_item = run_per_item(
+        s, _augment_audio_one, list(zip(refs.ids, refs.values)),
+        augmenter=augmenter, n_variants=n_variants,
+        base_seed=base_seed, node_id=node_id, out_dir=out_dir,
     )
     out_ids, out_paths = [], []
     for pairs in per_item:

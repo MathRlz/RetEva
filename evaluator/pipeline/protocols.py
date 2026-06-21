@@ -14,48 +14,6 @@ from ..models.retrieval.contracts import ScoredRetrievalResult
 
 
 @runtime_checkable
-class CacheStatsProvider(Protocol):
-    """Protocol for components that provide cache statistics."""
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """
-        Get cache statistics.
-
-        Returns:
-            Dictionary with cache statistics. For single-category caches:
-            - hits: Number of cache hits
-            - misses: Number of cache misses
-            - hit_rate: Ratio of hits to total requests
-
-            For multi-category caches, returns nested dict with per-category stats.
-        """
-        ...
-
-    def reset_cache_stats(self) -> None:
-        """Reset all cache statistics to zero."""
-        ...
-
-
-@runtime_checkable
-class BasePipeline(Protocol):
-    """
-    Base protocol for all pipeline components.
-
-    All pipelines should implement:
-    - get_cache_stats() for cache statistics reporting
-    - reset_cache_stats() for resetting cache statistics
-    """
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        ...
-
-    def reset_cache_stats(self) -> None:
-        """Reset cache statistics."""
-        ...
-
-
-@runtime_checkable
 class EmbeddingPipeline(Protocol):
     """
     Protocol for embedding pipelines (text and audio).

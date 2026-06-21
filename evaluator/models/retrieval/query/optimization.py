@@ -335,6 +335,84 @@ def generate_multi_queries(
     )
 
 
+def _combine_rrf(results_list, *, k, rrf_k, weights):
+    from ..rag.hybrid import reciprocal_rank_fusion
+
+    return reciprocal_rank_fusion(results_list, k=rrf_k, top_n=k)
+
+
+def _combine_weighted(results_list, *, k, rrf_k, weights):
+    if weights is None:
+        weights = [1.0 / len(results_list)] * len(results_list)
+    combined_scores: Dict[str, float] = {}
+    payload_lookup: Dict[str, Any] = {}
+    for results, weight in zip(results_list, weights):
+        for payload, score in results:
+            # Key by str only for de-dup; the original payload is preserved.
+            key = str(payload)
+            combined_scores[key] = combined_scores.get(key, 0.0) + score * weight
+            payload_lookup.setdefault(key, payload)
+    combined = sorted(
+        ((payload_lookup[key], total) for key, total in combined_scores.items()),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    return combined[:k]
+
+
+def _combine_union(results_list, *, k, rrf_k, weights):
+    # Include all unique documents, sorted by best score.
+    best: Dict[str, Tuple[Any, float]] = {}
+    for results in results_list:
+        for payload, score in results:
+            key = str(payload)
+            if key not in best or score > best[key][1]:
+                best[key] = (payload, score)
+    combined = sorted(best.values(), key=lambda x: x[1], reverse=True)
+    return combined[:k]
+
+
+def _combine_intersection(results_list, *, k, rrf_k, weights):
+    # Only documents appearing in every query, scored by their average.
+    payload_scores: Dict[str, List[float]] = {}
+    payload_lookup: Dict[str, Any] = {}
+    for results in results_list:
+        for payload, score in results:
+            key = str(payload)  # de-dup key only
+            payload_scores.setdefault(key, []).append(score)
+            payload_lookup.setdefault(key, payload)
+    n_queries = len(results_list)
+    intersection = [
+        (payload_lookup[key], sum(scores) / len(scores))
+        for key, scores in payload_scores.items()
+        if len(scores) == n_queries
+    ]
+    combined = sorted(intersection, key=lambda x: x[1], reverse=True)
+    return combined[:k]
+
+
+# Multi-query combine-strategy registry — distinct from the dense+sparse fusion registry (N result
+# lists, plus union/intersection). Register a strategy to add one without editing the dispatcher.
+_COMBINE_REGISTRY: Dict[str, Callable] = {}
+
+
+def register_combine_strategy(name: str, fn: Callable) -> None:
+    """Register a multi-query result-combination strategy under ``name``."""
+    _COMBINE_REGISTRY[name] = fn
+
+
+def list_combine_strategies() -> List[str]:
+    """Registered multi-query combine-strategy names (sorted) — the single source for config
+    validation and the builder's ``combine_strategy`` select."""
+    return sorted(_COMBINE_REGISTRY)
+
+
+register_combine_strategy("rrf", _combine_rrf)
+register_combine_strategy("weighted", _combine_weighted)
+register_combine_strategy("union", _combine_union)
+register_combine_strategy("intersection", _combine_intersection)
+
+
 def combine_retrieval_results(
     results_list: List[List[Tuple[Any, float]]],
     strategy: str = "rrf",
@@ -342,102 +420,27 @@ def combine_retrieval_results(
     rrf_k: int = 60,
     weights: Optional[List[float]] = None
 ) -> List[Tuple[Any, float]]:
-    """Combine results from multiple queries.
-
-    Merges retrieval results from multiple queries using various strategies.
+    """Combine results from multiple queries via the registered ``strategy``
+    (rrf / weighted / union / intersection; extensible via ``register_combine_strategy``).
 
     Args:
         results_list: List of result lists, each containing (payload, score) tuples.
-        strategy: Combination strategy. Options: "rrf", "weighted", "union", "intersection".
+        strategy: Registered combination strategy name.
         k: Number of final results to return.
-        rrf_k: RRF k parameter (for "rrf" strategy).
-        weights: Optional weights for each query (for "weighted" strategy).
-
-    Returns:
-        Combined list of (payload, score) tuples.
-
-    Examples:
-        >>> results1 = [(doc1, 0.9), (doc2, 0.7)]
-        >>> results2 = [(doc2, 0.8), (doc3, 0.6)]
-        >>> combined = combine_retrieval_results([results1, results2], strategy="rrf")
+        rrf_k: RRF k parameter (for "rrf").
+        weights: Optional per-query weights (for "weighted").
     """
     if not results_list:
         return []
-
     if len(results_list) == 1:
         return results_list[0][:k]
-
-    if strategy == "rrf":
-        # Reciprocal Rank Fusion
-        from ..rag.hybrid import reciprocal_rank_fusion
-
-        # RRF expects List[List[Tuple[Any, float]]]
-        combined = reciprocal_rank_fusion(results_list, k=rrf_k, top_n=k)
-        return combined
-
-    elif strategy == "weighted":
-        # Weighted combination
-        if weights is None:
-            weights = [1.0 / len(results_list)] * len(results_list)
-
-        combined_scores: Dict[str, float] = {}
-        payload_lookup: Dict[str, Any] = {}
-
-        for results, weight in zip(results_list, weights):
-            for payload, score in results:
-                # Key by str only for de-dup; the original payload is preserved.
-                key = str(payload)
-                combined_scores[key] = combined_scores.get(key, 0.0) + score * weight
-                payload_lookup.setdefault(key, payload)
-
-        # Sort by combined score, returning the original payloads (not the keys).
-        combined = sorted(
-            ((payload_lookup[key], total) for key, total in combined_scores.items()),
-            key=lambda x: x[1],
-            reverse=True,
+    fn = _COMBINE_REGISTRY.get(strategy)
+    if fn is None:
+        raise ValueError(
+            f"Unknown combination strategy: {strategy}. "
+            f"Registered: {', '.join(list_combine_strategies())}"
         )
-        return combined[:k]
-
-    elif strategy == "union":
-        # Union: include all unique documents, sorted by best score
-        combined_scores: Dict[str, Tuple[Any, float]] = {}
-
-        for results in results_list:
-            for payload, score in results:
-                key = str(payload)
-                if key not in combined_scores or score > combined_scores[key][1]:
-                    combined_scores[key] = (payload, score)
-
-        # Sort by score
-        combined = sorted(combined_scores.values(), key=lambda x: x[1], reverse=True)
-        return combined[:k]
-
-    elif strategy == "intersection":
-        # Intersection: only documents appearing in all queries
-        # Track payloads and their scores across queries
-        payload_scores: Dict[str, List[float]] = {}
-        payload_lookup: Dict[str, Any] = {}
-
-        for results in results_list:
-            for payload, score in results:
-                key = str(payload)  # de-dup key only
-                payload_scores.setdefault(key, []).append(score)
-                payload_lookup.setdefault(key, payload)
-
-        # Keep only payloads that appear in all queries, returning the originals.
-        n_queries = len(results_list)
-        intersection = [
-            (payload_lookup[key], sum(scores) / len(scores))  # average score
-            for key, scores in payload_scores.items()
-            if len(scores) == n_queries
-        ]
-
-        # Sort by average score
-        combined = sorted(intersection, key=lambda x: x[1], reverse=True)
-        return combined[:k]
-
-    else:
-        raise ValueError(f"Unknown combination strategy: {strategy}")
+    return fn(results_list, k=k, rrf_k=rrf_k, weights=weights)
 
 
 def clear_llm_cache():

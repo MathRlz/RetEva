@@ -1,6 +1,6 @@
 """Source stage handlers: dataset_source (graph root) + tts synthesis.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X5). Each handler
+Each handler
 registers itself via ``@register_stage_handler`` at import time.
 """
 
@@ -27,14 +27,53 @@ def _stage_source(s: RunState) -> None:
     }, s)
 
 
+def _ensure_dataset_loaded(s: RunState) -> None:
+    """Load the run's dataset(s) — the load IS a graph action now, owned by the dataset_source
+    node (no pre-graph step). Idempotent: the first dataset_source node to run loads the single
+    + multi-source map + the join gate + the replay slice and sets the progress total; later
+    source nodes (and back-compat callers that pre-seeded ``s.dataset``) find it loaded and no-op.
+
+    ``s.load_info`` is the run's carrier dict (shared by reference with the service wrapper): it
+    passes ``replay_query_ids`` in and the loaded ``dataset`` out (so the wrapper's num_samples
+    needs no pre-graph load)."""
+    if s.dataset is not None:
+        return
+    from ...datasets.runtime import load_runtime_dataset, load_dataset_sources
+
+    info = s.load_info if isinstance(s.load_info, dict) else {}
+    dataset = load_runtime_dataset(s.config)
+    qids = info.get("replay_query_ids")
+    if qids:
+        from ...datasets.runtime import slice_by_query_ids
+        from ...errors import ConfigurationError
+
+        dataset = slice_by_query_ids(dataset, qids)
+        if len(dataset) == 0:
+            raise ConfigurationError(
+                f"replay: no dataset rows match query id(s) "
+                f"{sorted(set(map(str, qids)))}"
+            )
+    s.dataset = dataset
+    # Multi-source: load each `data.datasets[...]` source + the disjoint-join gate (B5) that
+    # disables IR metrics. Moved here verbatim from the pre-graph executor setup.
+    sources, disable_ir, join_warning = load_dataset_sources(s.config)
+    if sources:
+        s.dataset_sources = sources
+        s.disable_ir_metrics = disable_ir
+        s.join_warning = join_warning
+    s.total = len(dataset)
+    info["dataset"] = dataset
+    logger.info("Dataset size: %d", s.total)
+
+
 def _stage_dataset_source(s: RunState) -> None:
-    """Graph root: the dataset's source artifacts enter the DAG here. Loading + TTS
-    happen in prepare_dataset before the graph (lifecycle reasons), so this validates
-    the dataset is present + non-empty and logs its size; downstream nodes read it.
+    """Graph root: load the dataset(s) (in-graph now) + surface their source artifacts into the
+    DAG. ``_ensure_dataset_loaded`` does the (idempotent) load; this then publishes the columns.
 
     Multi-dataset (B1): when the graph has several dataset_source nodes, each selects its source
     via ``params.dataset`` → ``s.dataset_sources[id]``; single-source falls back to ``s.dataset``.
     """
+    _ensure_dataset_loaded(s)
     dataset = _node_dataset(s)
     if dataset is None:
         raise ValueError("dataset_source: no dataset on the execution context")

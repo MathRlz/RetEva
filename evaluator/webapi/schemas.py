@@ -12,6 +12,18 @@ class EvaluationJobRequest(BaseModel):
     auto_devices: bool = Field(True, description="Auto-configure device assignments based on hardware")
 
 
+class GraphRunRequest(BaseModel):
+    """Payload to run a graph built in the visual builder.
+
+    ``spec`` is the canvas export: ``{mode, nodes:[{id,type,params}], edges:[{from,to}],
+    branches?, llm?}``. It is translated to a config and submitted as a normal job.
+    """
+
+    spec: Dict[str, Any] = Field(default_factory=dict, description="Builder canvas spec")
+    experiment_name: str = Field("builder_run", description="Name for the run")
+    auto_devices: bool = Field(True, description="Auto-configure device assignments")
+
+
 class MatrixJobRequest(BaseModel):
     """Payload for matrix evaluation job creation."""
 

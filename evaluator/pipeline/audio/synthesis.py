@@ -1,13 +1,11 @@
 """Audio synthesis from text using TTS models."""
 
-from typing import Optional, List
+from typing import Optional
 import numpy as np
 import hashlib
 import os
 from pathlib import Path
-from tqdm import tqdm
-from ...utils.progress import progress_disabled
-from ...logging_config import TimingContext, get_logger
+from ...logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -147,41 +145,6 @@ class AudioSynthesizer:
         except (ValueError, RuntimeError) as e:
             logger.warning("Audio resampling failed (%d->%d): %s", source_sr, target_sr, e)
             return audio
-
-    def synthesize_batch(
-        self, texts: List[str], output_dir: Optional[str] = None
-    ) -> List[np.ndarray]:
-        """
-        Batch synthesis with progress tracking.
-
-        Args:
-            texts: List of texts to synthesize.
-            output_dir: Optional directory to save audio files.
-
-        Returns:
-            List of audio arrays.
-        """
-        results = []
-        total = len(texts)
-
-        logger.info("Synthesizing %d texts...", total)
-
-        with TimingContext(f"TTS batch synthesis ({total} texts)"):
-            for i, text in tqdm(
-                enumerate(texts), total=total, desc="TTS synthesis", unit="clip",
-                disable=progress_disabled(),
-            ):
-                output_path = None
-                if output_dir:
-                    os.makedirs(output_dir, exist_ok=True)
-                    output_path = os.path.join(output_dir, f"synth_{i:05d}.wav")
-
-                audio = self.synthesize(text, output_path)
-                results.append(audio)
-
-        logger.info("Batch synthesis complete: %d texts", total)
-        self.log_cache_stats()
-        return results
 
     def log_cache_stats(self) -> None:
         """Log cache hit/miss summary."""

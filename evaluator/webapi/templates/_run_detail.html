@@ -16,7 +16,44 @@
     <span>· {{ r.pipeline_mode }}</span>
     {% if r.duration_seconds is number %}<span>· {{ '%.1f'|format(r.duration_seconds) }}s</span>{% endif %}
     {% if r.created_at %}<span>· {{ r.created_at }}</span>{% endif %}
+    {% if r.config %}<span>· <a href="/ui/runs/{{ r.run_id }}/config.yaml">⤓ config.yaml</a></span>{% endif %}
   </div>
+
+  {# --- Provenance / cost (T3/T8): cache reuse, LLM cost, model identity, stage timing.
+       Best-effort — a cache-disabled, full-free run leaves most of it absent. --- #}
+  {% set prov = report.get('provenance') or {} %}
+  {% if prov %}
+  <details style="margin-top:8px">
+    <summary class="muted">Provenance &amp; cost</summary>
+    {% set cost = prov.get('cost') or {} %}
+    {% if cost %}
+    <div style="margin:4px 0">
+      {% for k, v in cost.items() %}<span class="chip">{{ k }}:
+        {{ '%.4f'|format(v) if v is number else v }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% set cache = prov.get('cache_stats') or {} %}
+    {% if cache %}
+    <div class="muted" style="font-size:12px;margin:4px 0">cache:
+      {% for stage, st in cache.items() %}<span class="chip">{{ stage }}:
+        {{ st.get('hits', 0) }}h/{{ st.get('misses', 0) }}m</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% set models = (prov.get('models') or {}).get('resolved') or {} %}
+    {% if models %}
+    <div class="muted" style="font-size:12px;margin:4px 0">models:
+      {% for role, nm in models.items() %}<span class="chip">{{ role }}: {{ nm }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% set timing = prov.get('timing') or {} %}
+    {% if timing %}
+    <div class="muted" style="font-size:12px;margin:4px 0">stage time (s):
+      {% for stage, t in timing.items() %}<span class="chip">{{ stage }}:
+        {{ '%.2f'|format(t) if t is number else t }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </details>
+  {% endif %}
 
   {# --- Metric chips, with bootstrap CI when present (R4) --- #}
   <div>

@@ -1,7 +1,6 @@
 """Run state + execution-context dataclasses for the DAG executor.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X1). Holds the
-mutable ``RunState`` threaded through stage handlers plus the two input bundles
+Holds the mutable ``RunState`` threaded through stage handlers plus the two input bundles
 (``EvaluationContext`` runtime params, ``RunFeatures`` default-off knobs).
 """
 

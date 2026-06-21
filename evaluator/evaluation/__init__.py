@@ -18,7 +18,6 @@ from .helpers import (
     collate_fn,
     asr_collate_fn,
 )
-from ..metrics import compute_ir_metrics, log_ir_metrics
 
 from .executor import run_graph, run_from_bundle
 from .results import EvaluationResults
@@ -42,6 +41,4 @@ __all__ = [
     "_build_relevant_from_item",
     "collate_fn",
     "asr_collate_fn",
-    "compute_ir_metrics",
-    "log_ir_metrics",
 ]

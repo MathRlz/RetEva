@@ -1,6 +1,6 @@
 """Sink stage handlers: dataset / leaderboard / tracking output nodes.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X5). Each handler
+Each handler
 registers itself via ``@register_stage_handler`` at import time.
 """
 

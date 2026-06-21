@@ -12,7 +12,7 @@ except ImportError:
     CHROMADB_AVAILABLE = False
 
 from ..vector_store import VectorStore
-from ...constants import MIN_NORM_THRESHOLD
+from ...utils.numeric import l2_normalize
 from ...logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -76,10 +76,7 @@ class ChromaDBVectorStore(VectorStore):
         # Store payloads locally for retrieval
         self._payloads = payloads
 
-        # Normalize vectors for cosine similarity
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        norms = np.maximum(norms, MIN_NORM_THRESHOLD)
-        normalized_vectors = vectors / norms
+        normalized_vectors = l2_normalize(vectors, axis=1)  # cosine similarity
 
         # Clear existing collection data
         try:
@@ -142,10 +139,7 @@ class ChromaDBVectorStore(VectorStore):
         if count == 0:
             return []
 
-        # Normalize query
-        query_norm = np.linalg.norm(query)
-        if query_norm > MIN_NORM_THRESHOLD:
-            query = query / query_norm
+        query = l2_normalize(query)
 
         # Prepare query kwargs
         query_kwargs = {
@@ -200,10 +194,7 @@ class ChromaDBVectorStore(VectorStore):
         Returns:
             List of result lists, one per query.
         """
-        # Normalize queries
-        norms = np.linalg.norm(queries, axis=1, keepdims=True)
-        norms = np.maximum(norms, MIN_NORM_THRESHOLD)
-        normalized_queries = queries / norms
+        normalized_queries = l2_normalize(queries, axis=1)
 
         # Prepare query kwargs
         query_kwargs = {

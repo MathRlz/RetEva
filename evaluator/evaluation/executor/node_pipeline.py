@@ -1,6 +1,6 @@
-"""Per-node model-override context managers (R1/D3).
+"""Per-node model-override context managers.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X4). When a branch
+When a branch
 node names a model in its params, these swap the relevant pipeline (or reranker config)
 on the run state transiently and restore it on exit, so per-node/per-branch model
 divergence works without disturbing the shared global pipelines.

@@ -1,7 +1,6 @@
 """DAG execution engine: topological dispatch + per-node run + run journal.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X2). Drives what
-runs and in what order from the stage graph, dispatching each node to its registered
+Drives what runs and in what order from the stage graph, dispatching each node to its registered
 handler (serial, or intra-level concurrent when ``parallel_enabled``).
 """
 

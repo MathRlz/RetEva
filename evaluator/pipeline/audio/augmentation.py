@@ -7,7 +7,7 @@ speed perturbation, pitch shifting, and codec simulation.
 
 import numpy as np
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -238,96 +238,3 @@ class AudioAugmenter:
 
         logger.debug(f"Applied volume change: {volume_factor:.2f}x")
         return audio * volume_factor
-
-
-def augment_batch(
-    audio_list: List[np.ndarray],
-    sampling_rates: List[int],
-    config,
-    n_variants_per_sample: int = 1,
-    *,
-    base_seed: Optional[int] = None,
-    query_ids: Optional[List[str]] = None,
-) -> Tuple[List[np.ndarray], List[int]]:
-    """
-    Augment a batch of audio samples.
-
-    Args:
-        audio_list: List of audio waveforms.
-        sampling_rates: List of sample rates (one per audio).
-        config: AudioAugmentationConfig instance.
-        n_variants_per_sample: Number of variants to create per sample.
-        base_seed: Run seed; with ``query_ids`` (aligned to ``audio_list``) makes every
-            variant deterministic per item (A10/S5).
-
-    Returns:
-        Tuple of (augmented_audio_list, augmented_sampling_rates).
-    """
-    if not config.enabled:
-        return audio_list, sampling_rates
-
-    augmenter = AudioAugmenter(config)
-    augmented_audio = []
-    augmented_srs = []
-
-    for idx, (audio, sr) in enumerate(zip(audio_list, sampling_rates)):
-        qid = query_ids[idx] if query_ids is not None and idx < len(query_ids) else None
-        # Create variants
-        variants = augmenter.create_variants(
-            audio, sr, n_variants_per_sample, base_seed=base_seed, query_id=qid
-        )
-
-        # Add original + variants
-        augmented_audio.append(audio)  # Original
-        augmented_srs.append(sr)
-
-        for variant in variants:
-            augmented_audio.append(variant)
-            augmented_srs.append(sr)
-
-    logger.info(
-        f"Augmented {len(audio_list)} samples to "
-        f"{len(augmented_audio)} samples "
-        f"({n_variants_per_sample} variants per sample)"
-    )
-
-    return augmented_audio, augmented_srs
-
-
-def create_augmentation_config(
-    add_noise: bool = True,
-    snr_db: float = 20.0,
-    speed_perturbation: bool = True,
-    speed_range: Tuple[float, float] = (0.9, 1.1),
-    **kwargs,
-):
-    """
-    Convenience function to create augmentation config.
-
-    Args:
-        add_noise: Enable noise addition.
-        snr_db: Signal-to-noise ratio in dB.
-        speed_perturbation: Enable speed perturbation.
-        speed_range: Speed multiplier range.
-        **kwargs: Additional config parameters.
-
-    Returns:
-        AudioAugmentationConfig instance.
-
-    Examples:
-        >>> config = create_augmentation_config(
-        ...     add_noise=True,
-        ...     snr_db=15.0,
-        ...     speed_perturbation=True
-        ... )
-    """
-    from evaluator.config import AudioAugmentationConfig
-
-    return AudioAugmentationConfig(
-        enabled=True,
-        add_noise=add_noise,
-        snr_db=snr_db,
-        speed_perturbation=speed_perturbation,
-        speed_range=speed_range,
-        **kwargs,
-    )

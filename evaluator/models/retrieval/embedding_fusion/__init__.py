@@ -11,30 +11,15 @@ from sklearn.random_projection import GaussianRandomProjection
 
 from ....logging_config import get_logger
 from ....config import EmbeddingFusionConfig
+from ....utils.numeric import l2_normalize
 
 logger = get_logger(__name__)
 
 
 def normalize_embeddings(embeddings: np.ndarray, axis: int = -1) -> np.ndarray:
-    """L2-normalize embeddings along specified axis.
-
-    Args:
-        embeddings: Array of embeddings to normalize, shape (n_samples, dim) or (dim,).
-        axis: Axis along which to normalize. Default: -1 (last axis).
-
-    Returns:
-        Normalized embeddings with the same shape as input.
-
-    Examples:
-        >>> emb = np.array([[1.0, 2.0, 2.0], [3.0, 4.0, 0.0]])
-        >>> normed = normalize_embeddings(emb)
-        >>> np.allclose(np.linalg.norm(normed, axis=1), 1.0)
-        True
-    """
-    norms = np.linalg.norm(embeddings, axis=axis, keepdims=True)
-    # Avoid division by zero
-    norms = np.where(norms == 0, 1, norms)
-    return embeddings / norms
+    """L2-normalize embeddings — the canonical :func:`utils.numeric.l2_normalize`, so the fused
+    query side and the vector-store corpus side normalize by the exact same rule."""
+    return l2_normalize(embeddings, axis)
 
 
 def reduce_dimensions(

@@ -7,7 +7,6 @@ making it easy to run experiments with optimized configurations.
 from typing import Dict, Any
 
 from .embedding_fusion import EmbeddingFusionConfig
-from .evaluation import EvaluationConfig
 from .judge import JudgeConfig
 from .query_optimization import QueryOptimizationConfig
 from .vector_db import VectorDBConfig
@@ -129,17 +128,6 @@ HYBRID_RRF = {
 }
 
 # ===========================
-# Advanced RAG Presets
-# ===========================
-
-ADVANCED_RAG_DIVERSITY = {
-    "use_mmr": True,
-    "mmr_lambda": 0.6,
-    "diversity_penalty": 0.3,
-}
-
-
-# ===========================
 # Full Stack Presets
 # ===========================
 
@@ -180,7 +168,6 @@ FULL_RAG_ADVANCED = {
         judge_aspects=["relevance", "accuracy", "completeness"],
         score_aggregation="weighted",
         aspect_weights={"relevance": 0.5, "accuracy": 0.3, "completeness": 0.2},
-        chain_of_thought=True,
     ),
 }
 
@@ -223,8 +210,6 @@ QUALITY_FOCUSED = {
             "completeness": 0.2,
             "clarity": 0.1
         },
-        output_format="score_with_reasoning",
-        chain_of_thought=True,
     ),
 }
 
@@ -315,28 +300,3 @@ def list_presets() -> Dict[str, str]:
     }
 
     return descriptions
-
-
-def apply_preset(config: EvaluationConfig, preset_name: str) -> EvaluationConfig:
-    """Apply a preset to an existing configuration.
-
-    Args:
-        config: Base configuration to modify.
-        preset_name: Name of preset to apply.
-
-    Returns:
-        New configuration with preset applied.
-
-    Examples:
-        >>> config = EvaluationConfig()
-        >>> config = apply_preset(config, "hybrid_balanced")
-    """
-    from dataclasses import replace
-    from .evaluation import _FEATURE_SUBCONFIGS
-
-    preset = dict(get_preset(preset_name))
-    # Feature sub-configs now live under config.features; route them there
-    # instead of passing them as (no-longer-existent) top-level fields.
-    feature_overrides = {k: preset.pop(k) for k in list(preset) if k in _FEATURE_SUBCONFIGS}
-    new_features = replace(config.features, **feature_overrides) if feature_overrides else config.features
-    return replace(config, features=new_features, **preset)

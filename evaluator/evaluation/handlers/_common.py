@@ -1,8 +1,7 @@
 """Shared logging banner + formatting constants for stage handlers.
 
-Extracted from the former ``evaluation/phased.py`` (Phase 1, X6) so the handler
-submodules and the ``phased`` shim share one definition without importing each other
-(avoids a circular import).
+A separate module so the handler submodules share one definition without importing each
+other (avoids a circular import).
 """
 
 from __future__ import annotations

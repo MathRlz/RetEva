@@ -204,14 +204,20 @@ class ModelRegistry:
         schema: Dict[str, Any] = {}
         sizes = self.get_sizes(model_type)
         choices_map = getattr(params_cls, "CHOICES", {}) or {}
+        # Optional per-field help the model author declares alongside CHOICES, e.g.
+        # ``DESCRIPTIONS: ClassVar[Dict[str, str]] = {"pooling": "how frames are pooled …"}``.
+        # The builder renders it as a tooltip; the webapi layers a shared glossary as fallback.
+        descriptions = getattr(params_cls, "DESCRIPTIONS", {}) or {}
         for f in dc_fields(params_cls):
-            if f.name in ("SIZES", "CHOICES"):
+            if f.name in ("SIZES", "CHOICES", "DESCRIPTIONS"):
                 continue
             entry: Dict[str, Any] = {"default": f.default}
             if f.name == "size" and sizes:
                 entry["choices"] = sorted(sizes.keys())
             elif f.name in choices_map:
                 entry["choices"] = list(choices_map[f.name])
+            if f.name in descriptions:
+                entry["help"] = descriptions[f.name]
             schema[f.name] = entry
         return schema
 

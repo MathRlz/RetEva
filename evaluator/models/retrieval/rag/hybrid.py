@@ -1,13 +1,12 @@
 """Hybrid retrieval combining dense and sparse methods."""
 
-from typing import Any, Dict, List, Tuple, Optional, TypeVar
+from typing import Any, Dict, List, Tuple, Optional
 import numpy as np
 
 from ....logging_config import get_logger
+from ..scoring import min_max_norm, payload_key
 
 logger = get_logger(__name__)
-
-K = TypeVar('K')
 
 
 def reciprocal_rank_fusion(
@@ -36,7 +35,7 @@ def reciprocal_rank_fusion(
 
     for ranking in rankings:
         for rank, (item, _score) in enumerate(ranking, start=1):
-            item_key = _get_item_key(item)
+            item_key = payload_key(item)
             rrf_scores[item_key] = rrf_scores.get(item_key, 0.0) + 1.0 / (k + rank)
             item_lookup[item_key] = item
 
@@ -47,27 +46,6 @@ def reciprocal_rank_fusion(
         sorted_items = sorted_items[:top_n]
 
     return [(item_lookup[key], score) for key, score in sorted_items]
-
-
-def _get_item_key(item: Any) -> str:
-    """Extract a hashable key from an item."""
-    if isinstance(item, dict):
-        if item.get("doc_id") is not None:
-            return str(item["doc_id"])
-        if item.get("text") is not None:
-            return str(item["text"])
-    return str(item)
-
-
-def _min_max_normalize(scores: Dict[K, float]) -> Dict[K, float]:
-    """Normalize scores to [0, 1] range using min-max normalization."""
-    if not scores:
-        return {}
-    vals = list(scores.values())
-    mn, mx = min(vals), max(vals)
-    if mx - mn < 1e-9:
-        return {k: 1.0 for k in scores}
-    return {k: (v - mn) / (mx - mn) for k, v in scores.items()}
 
 
 class HybridRetriever:
@@ -158,19 +136,19 @@ class HybridRetriever:
     ) -> List[Tuple[Any, float]]:
         """Fuse results using weighted linear combination."""
         # Build score dictionaries
-        dense_scores = {_get_item_key(p): float(s) for p, s in dense_results}
-        sparse_scores = {_get_item_key(p): float(s) for p, s in sparse_results}
+        dense_scores = {payload_key(p): float(s) for p, s in dense_results}
+        sparse_scores = {payload_key(p): float(s) for p, s in sparse_results}
 
         # Normalize scores
-        dense_norm = _min_max_normalize(dense_scores)
-        sparse_norm = _min_max_normalize(sparse_scores)
+        dense_norm = min_max_norm(dense_scores)
+        sparse_norm = min_max_norm(sparse_scores)
 
         # Build payload lookup
         payload_by_key: Dict[str, Any] = {}
         for payload, _ in dense_results:
-            payload_by_key[_get_item_key(payload)] = payload
+            payload_by_key[payload_key(payload)] = payload
         for payload, _ in sparse_results:
-            payload_by_key[_get_item_key(payload)] = payload
+            payload_by_key[payload_key(payload)] = payload
 
         # Combine scores
         all_keys = set(dense_norm.keys()) | set(sparse_norm.keys())

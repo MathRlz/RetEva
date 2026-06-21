@@ -15,7 +15,16 @@ from evaluator.config.model_fields import (
     MODEL_FAMILY_FIELDS,
     MODEL_FIELD_FAMILY as _MODEL_FIELD_FAMILY,
 )
-from evaluator.config.types import DatasetType, VectorDBType
+from evaluator.config.types import (
+    DatasetType,
+    VectorDBType,
+    RETRIEVAL_MODES,
+    RERANKER_MODES,
+    SERVICE_STARTUP_MODES,
+    SERVICE_OFFLOAD_POLICIES,
+    DATASET_SOURCES,
+)
+from evaluator.models.retrieval import list_fusions
 from evaluator.datasets import (
     list_known_dataset_names,
     resolve_dataset_profile,
@@ -35,6 +44,7 @@ from evaluator.pipeline.introspection import (
     effective_outputs as _effective_outputs,
 )
 from evaluator.services import ModelServiceProvider
+from evaluator.webapi.field_help import FIELD_HELP
 from evaluator.webapi.utils import with_provider
 
 # Form → validated-config half (moved to form_config.py); re-exported for back-compat.
@@ -44,6 +54,7 @@ from evaluator.webapi.form_config import (  # noqa: F401  (re-export surface)
     _deep_merge,
     _form_to_config,
     _prepared_config_or_error,
+    graph_spec_to_config_dict,
     load_config,
     prepare_run_config,
 )
@@ -110,19 +121,20 @@ def create_config_options(
         "pipeline_modes": list(GRAPH_TEMPLATES),
         "graph_templates": list_graph_templates(),
         "dataset_types": [dataset_type.value for dataset_type in DatasetType],
-        "dataset_sources": ["local", "huggingface", "custom"],
+        "dataset_sources": list(DATASET_SOURCES),
         "dataset_names": list_known_dataset_names(),
         "vector_db_types": [db.value for db in VectorDBType],
-        "retrieval_modes": ["dense", "sparse", "hybrid"],
-        "hybrid_fusion_methods": ["weighted", "rrf", "max_score"],
-        "reranker_modes": ["none", "token_overlap", "cross_encoder"],
+        "retrieval_modes": list(RETRIEVAL_MODES),
+        "hybrid_fusion_methods": list_fusions(),
+        "reranker_modes": list(RERANKER_MODES),
         "service_runtime": {
-            "startup_mode": ["lazy", "eager"],
-            "offload_policy": ["on_finish", "never", "on_finish_soft_cpu"],
+            "startup_mode": list(SERVICE_STARTUP_MODES),
+            "offload_policy": list(SERVICE_OFFLOAD_POLICIES),
         },
         "tts_providers": sorted(
             {entry["type"] for entry in normalized_models.get("tts", [])}
         ),
+        "field_help": dict(FIELD_HELP),
         "models": normalized_models,
         "defaults": nested_config(defaults),
     }
@@ -164,69 +176,254 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     return info
 
 
+def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
+    """The rich preview node card (label/category/domain/ports/bindings/inspect) the read-only
+    DAG view + the builder seed render from."""
+    return {
+        "id": node.id,
+        "stage": node.stage,
+        # friendly operator label for the node card (display.py)
+        "label": display_label(node.stage, node.params),
+        # declared class — the DAG colors nodes by `category`, groups by `domain`
+        # (resolve callable operator category/domain for this instance's fields)
+        "category": node_category(node.stage, node.params),
+        "domain": node_domain(node.stage, node.params),
+        "depends_on": list(node.depends_on),
+        # resolved data bindings (artifact → producer) — the preview draws
+        # these as edges, same shape as /api/graph/template (B2)
+        "bindings": [list(b) for b in node.bindings],
+        "inputs": list(_effective_inputs(node.stage, node.params)),
+        # per-instance outputs: dataset_source honors role + column schema
+        "outputs": list(_effective_outputs(node.stage, node.params)),
+        "optional_inputs": list(
+            display_artifact_names(
+                _resolve(get_stage_node_def(node.stage).optional_inputs, node.params)
+            )
+        ),
+        # field-aware form contract (model family + the op-specific param switches)
+        # so the builder seed renders THIS instance, not the operator's default tile
+        # (corpus_embedding ≠ text_embedding on the canvas).
+        "model_field": node_model_field(node.stage, node.params),
+        "family": _node_family(
+            node_model_field(node.stage, node.params), node.stage, node.params
+        ),
+        "input_ports": _input_ports(node.stage, node.params),
+        "node_params": _node_param_specs(get_stage_node_def(node.stage), node.params),
+        # declared column schema [{name, artifact, type}] — what the diagram
+        # shows on dataset nodes so an experiment reads from its DAG
+        "columns": dataset_columns(node.params),
+        "inspect": _node_inspect(config, node),
+    }
+
+
 def graph_preview(config: EvaluationConfig) -> Dict[str, Any]:
     profile = resolve_dataset_profile(
         config.data.dataset_name, config.data.dataset_type
     )
     graph = build_graph_for_config(config)
+    payload = graph_render_payload(graph, lambda node: _preview_node(config, node))
+    payload["dataset_profile"] = {
+        "name": profile.name,
+        "dataset_type": str(profile.dataset_type),
+        "requires_audio": profile.requires_audio,
+        "requires_text": profile.requires_text,
+        "supports_generation": profile.supports_generation,
+        "evaluation_mode": profile.evaluation_mode,
+        "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
+        "pipeline_mode_supported": profile.supports_pipeline_mode(
+            str(config.graph_template)
+        ),
+    }
+    return payload
+
+
+# Dataset node-keys that *locate* the data — the inverse of _synthesize_dataset_entry pulls these
+# off config.data onto the dataset_source node so the canvas carries a runnable source.
+_DATASET_LOCATION_KEYS = (
+    "questions", "corpus", "prepared_dir", "path", "audio_dir", "transcripts",
+    "hf_dataset", "hf_subset", "hf_split", "type", "source",
+)
+# Per-run knobs — carried through the round-trip only when set to a *non-default* value, so a
+# loaded config keeps its trace_limit/batch_size/split without cluttering the canvas with defaults.
+_DATASET_RUN_KEYS = ("trace_limit", "batch_size", "split", "max_samples")
+_DATASET_NODE_KEYS = (*_DATASET_LOCATION_KEYS, *_DATASET_RUN_KEYS)
+
+
+def _dataset_source_params(config: EvaluationConfig) -> Dict[str, Any]:
+    """The dataset_source node params for a single-source config: ``{dataset, <location>, <run
+    knobs that differ from default>}`` read off ``config.data``. Empty for a multi-source
+    ``data.datasets`` map (those nodes already reference a map entry by role)."""
+    from evaluator.config.graph_config import _DATASET_FIELDS
+
+    data = config.data
+    name = getattr(data, "dataset_name", None)
+    if not name or getattr(data, "datasets", None):
+        return {}
+    defaults = type(data)()
+    params: Dict[str, Any] = {"dataset": name}
+    for node_key in _DATASET_NODE_KEYS:
+        cfg_field = _DATASET_FIELDS[node_key]
+        value = getattr(data, cfg_field, None)
+        if value in (None, "", [], {}):
+            continue
+        # a run knob at its default carries no information — skip it to keep the canvas clean
+        if node_key in _DATASET_RUN_KEYS and value == getattr(defaults, cfg_field, None):
+            continue
+        params[node_key] = value
+    return params
+
+
+def lift_single_source_dataset(nodes: list) -> Dict[str, Any]:
+    """If a graph has exactly one ``dataset_source`` naming a registered dataset, lift its dataset
+    + settings to a node-centric top-level ``dataset:`` block and strip them from the node (leaving
+    it structural). Returns the block (``{}`` when not applicable). Mutates ``nodes`` in place — so
+    a single-source canvas exports clean and round-trips idempotently (a bare dataset_source wires
+    its columns from the top-level block). Multi-source graphs keep their per-node ``dataset``."""
+    from evaluator.pipeline.graph.operators import node_kind
+
+    sources = [
+        n for n in nodes
+        if isinstance(n, dict)
+        and node_kind(n.get("type"), n.get("params") or {}) == "dataset_source"
+    ]
+    if len(sources) != 1:
+        return {}
+    params = sources[0].get("params") or {}
+    ds_id = params.get("dataset")
+    if not ds_id:
+        return {}
+    block = {"id": ds_id}
+    for key in _DATASET_NODE_KEYS:
+        if params.get(key) not in (None, "", [], {}):
+            block[key] = params[key]
+    sources[0]["params"] = {
+        k: v for k, v in params.items()
+        if k not in _DATASET_NODE_KEYS and k not in ("dataset", "fields")
+    }
+    return block
+
+
+def minimal_edges(nodes: list, edges: list) -> list:
+    """Drop edges the artifact auto-wiring would recreate anyway, keeping only genuinely-extra
+    ordering deps. ``build_graph_from_spec`` auto-wires from artifacts and treats ``edges`` as
+    *additional* deps, so exporting every rendered binding as an explicit edge makes them
+    accumulate across round-trips. Returning only the non-auto-wired edges makes the export
+    stable (and minimal). ``edges`` is the ``[{from,to}]`` form."""
+    from evaluator.pipeline import build_graph_from_spec
+
+    try:
+        auto = build_graph_from_spec(nodes, mode="custom")
+    except Exception:  # noqa: BLE001 — if it can't auto-wire, keep edges as-is (caller validates)
+        return list(edges)
+    auto_deps = {(dep, n.id) for n in auto.nodes for dep in n.depends_on}
+    return [
+        e for e in edges
+        if isinstance(e, dict) and (e.get("from"), e.get("to")) not in auto_deps
+    ]
+
+
+def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
+    """Serialize a config's DAG into the builder canvas seed (the ``/api/graph/template``
+    shape: ``{mode, levels, nodes:[{id, type, params, bindings, …form}]}``) — but with each
+    node's *configured* model/dataset/settings folded into its params.
+
+    This is the inverse of the builder's ``exportSpec`` → :func:`graph_config.to_legacy_dict`
+    fold (which lifts graph-node params into ``config.model`` / ``vector_db`` / ``data``): we
+    push the resolved per-node config back onto the node so opening a YAML config shows the real
+    experiment, editable, and re-running it from the canvas reproduces the same config.
+
+    A branched config renders its **base** graph (not the CSE-expanded ``@branch`` DAG) and passes
+    the branch definitions through, so the Branches panel re-hydrates — the same shape as a saved
+    graph — instead of dropping onto the canvas as a tangle of expanded nodes.
+    """
+    import copy
+
+    from evaluator.pipeline.graph.operators import node_kind
+
+    override = getattr(config, "graph_override", None)
+    branches = override.get("branches") if isinstance(override, dict) else None
+    # Build the base (un-expanded) DAG for the canvas; keep `config` for the per-node model/
+    # dataset fold (its model/data blocks are unchanged by branch expansion).
+    base_config = config
+    if branches:
+        base_config = copy.deepcopy(config)
+        base_config.graph_override = {
+            k: v for k, v in override.items() if k != "branches"
+        }
+    graph = build_graph_for_config(base_config)
+    dataset_params = _dataset_source_params(config)
+
+    def _render(node):
+        params = dict(node.params or {})
+        # Fold the resolved model/retrieval settings (config.model / vector_db) onto the node;
+        # setdefault so an explicit per-node graph-override param still wins.
+        for key, value in _node_inspect(config, node).items():
+            params.setdefault(key, value)
+        # A single-source dataset lives in config.data, not on the node — push it onto the
+        # dataset_source so the canvas carries a runnable source.
+        if dataset_params and node_kind(node.stage, node.params) == "dataset_source":
+            for key, value in dataset_params.items():
+                params.setdefault(key, value)
+        return render_node(node, params)
+
+    payload = graph_render_payload(graph, _render)
+    if branches:
+        payload["branches"] = branches
+    return payload
+
+
+def graph_render_payload(graph: Any, node_fn) -> Dict[str, Any]:
+    """The common ``{mode, levels, nodes}`` envelope every graph render/preview payload shares:
+    the graph mode + topological levels (layout) + one ``node_fn(node)`` per node. Callers supply
+    the node shape they need (rich preview / canvas render / minimal build view) and tack any
+    extras (dataset_profile, branches, llm, warnings) onto the result."""
     return {
         "mode": graph.mode,
-        "nodes": [
-            {
-                "id": node.id,
-                "stage": node.stage,
-                # friendly operator label for the node card (display.py)
-                "label": display_label(node.stage, node.params),
-                # declared class — the DAG colors nodes by `category`, groups by `domain`
-                # (resolve callable operator category/domain for this instance's fields)
-                "category": node_category(node.stage, node.params),
-                "domain": node_domain(node.stage, node.params),
-                "depends_on": list(node.depends_on),
-                # resolved data bindings (artifact → producer) — the preview draws
-                # these as edges, same shape as /api/graph/template (B2)
-                "bindings": [list(b) for b in node.bindings],
-                "inputs": list(_effective_inputs(node.stage, node.params)),
-                # per-instance outputs: dataset_source honors role + column schema
-                "outputs": list(_effective_outputs(node.stage, node.params)),
-                "optional_inputs": list(
-                    display_artifact_names(
-                        _resolve(
-                            get_stage_node_def(node.stage).optional_inputs, node.params
-                        )
-                    )
-                ),
-                # field-aware form contract (model family + the op-specific param switches)
-                # so the builder seed renders THIS instance, not the operator's default tile
-                # (corpus_embedding ≠ text_embedding on the canvas).
-                "model_field": node_model_field(node.stage, node.params),
-                "family": _node_family(
-                    node_model_field(node.stage, node.params), node.stage, node.params
-                ),
-                "input_ports": _input_ports(node.stage, node.params),
-                "node_params": _node_param_specs(
-                    get_stage_node_def(node.stage), node.params
-                ),
-                # declared column schema [{name, artifact, type}] — what the diagram
-                # shows on dataset nodes so an experiment reads from its DAG
-                "columns": dataset_columns(node.params),
-                "inspect": _node_inspect(config, node),
-            }
-            for node in graph.nodes
-        ],
-        "levels": [[node.id for node in level] for level in graph.topological_levels()],
-        "dataset_profile": {
-            "name": profile.name,
-            "dataset_type": str(profile.dataset_type),
-            "requires_audio": profile.requires_audio,
-            "requires_text": profile.requires_text,
-            "supports_generation": profile.supports_generation,
-            "evaluation_mode": profile.evaluation_mode,
-            "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
-            "pipeline_mode_supported": profile.supports_pipeline_mode(
-                str(config.graph_template)
-            ),
-        },
+        "levels": [[n.id for n in level] for level in graph.topological_levels()],
+        "nodes": [node_fn(node) for node in graph.nodes],
     }
+
+
+def render_node(node: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """One node in a canvas render payload: id + type + params + resolved bindings + the
+    field-aware form contract (ports/label/family/switches) — the shape ``DagView.drawGraph``
+    consumes, identical to ``/api/graph/template``."""
+    return {
+        "id": node.id,
+        "type": node.stage,
+        "params": params,
+        "bindings": [list(b) for b in node.bindings],
+        **resolve_node_form(node.stage, dict(node.params or {})),
+    }
+
+
+def spec_to_render_payload(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a canvas render payload (``{mode, levels, nodes}``) from a saved builder spec
+    (``{mode, nodes:[{id,type,params}], edges}``) — so a stored graph re-renders onto the
+    canvas. The DAG is rebuilt (``build_graph_from_spec``) to resolve bindings + levels, but
+    each node keeps the *saved* params (models/dataset the user set)."""
+    from evaluator.pipeline import build_graph_from_spec
+
+    spec_nodes = [n for n in (spec.get("nodes") or []) if isinstance(n, dict)]
+    edges: Dict[str, list] = {}
+    for edge in spec.get("edges") or []:
+        if isinstance(edge, dict) and edge.get("from") and edge.get("to"):
+            edges.setdefault(edge["to"], []).append(edge["from"])
+    graph = build_graph_from_spec(
+        spec_nodes, mode=spec.get("mode") or "custom", edges=edges or None
+    )
+    params_by_id = {str(n.get("id")): (n.get("params") or {}) for n in spec_nodes}
+    payload = graph_render_payload(
+        graph,
+        lambda node: render_node(node, params_by_id.get(node.id, dict(node.params or {}))),
+    )
+    # Pass the variant set + global LLM through verbatim so a saved graph re-hydrates its
+    # Branches / LLM panels on load (the DAG above is the *base*; branches expand at run time).
+    if spec.get("branches"):
+        payload["branches"] = spec["branches"]
+    if spec.get("llm"):
+        payload["llm"] = spec["llm"]
+    return payload
 
 
 # model_field config path → registry family the builder fetches model choices from
@@ -325,12 +522,23 @@ def _node_param_specs(node_def, params=None) -> list:
             entry["show_if"] = dict(meta["show_if"])
         if key in discriminators:
             entry["rerenders"] = True
+        _attach_help(entry, meta.get("help"))
         specs.append(entry)
     seen = {s["key"] for s in specs}
     for key in node_def.param_defaults:
         if key not in seen:
-            specs.append({"key": key, "kind": "text"})
+            specs.append(_attach_help({"key": key, "kind": "text"}))
     return specs
+
+
+def _attach_help(entry: Dict[str, Any], declared: str | None = None) -> Dict[str, Any]:
+    """Set a field's ``help`` tooltip: an explicit ``param_spec`` ``help`` wins, else the shared
+    ``FIELD_HELP`` glossary (keyed by the param name). No key → no tooltip. (Single help source,
+    mirroring the config form — so the builder param panel explains the same fields.)"""
+    help_text = declared or FIELD_HELP.get(entry["key"])
+    if help_text:
+        entry["help"] = help_text
+    return entry
 
 
 def node_catalogue() -> Dict[str, Any]:

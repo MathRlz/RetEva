@@ -18,11 +18,6 @@ from ..devices.memory import get_memory_manager
 from ..logging_config import get_logger, TimingContext
 from ..models.retrieval.strategy import RetrievalStrategyConfig
 from ..models.retrieval.fusion_registry import fuse_hybrid_results
-from ..models.retrieval.contracts import (
-    ScoredRetrievalResult,
-    normalize_search_results,
-    normalize_batch_search_results,
-)
 from ..models.retrieval.rag.strategies import DistanceMetric
 from ..models.retrieval.refine import apply_mmr, apply_threshold, rerank_results
 from ..models.retrieval.sparse import SparseBM25Index
@@ -183,14 +178,6 @@ class RetrievalPipeline:
                 "search() does not support reranking. Use search_batch(..., query_texts=...)"
             )
         return self.vector_store.search(query_embedding, k)
-
-    def search_records(
-        self,
-        query_embedding: np.ndarray,
-        k: int = 10,
-    ) -> List[ScoredRetrievalResult]:
-        """Typed retrieval output contract for single-query dense search."""
-        return normalize_search_results(self.search(query_embedding, k))
 
     def _rerank(
         self, query_text: str, results: List[Tuple[Any, float]], k: int
@@ -428,17 +415,6 @@ class RetrievalPipeline:
         candidates = self.retrieve_candidates(query_embeddings, k, query_texts)
         return self.refine_candidates(candidates, query_embeddings, k, query_texts)
 
-    def search_batch_records(
-        self,
-        query_embeddings: np.ndarray,
-        k: int = 10,
-        query_texts: Optional[List[str]] = None,
-    ) -> List[List[ScoredRetrievalResult]]:
-        """Typed retrieval output contract for batch search."""
-        return normalize_batch_search_results(
-            self.search_batch(query_embeddings, k, query_texts=query_texts)
-        )
-
     def save(self, path: str) -> None:
         """Save the index to disk."""
         with TimingContext(f"Saving vector store to {path}", logger):
@@ -463,7 +439,3 @@ class RetrievalPipeline:
                 else 0
             )
         }
-
-    def reset_cache_stats(self) -> None:
-        """Reset cache statistics (no-op for retrieval pipeline)."""
-        pass

@@ -486,45 +486,9 @@ class LLMModelCatalog:
         return None
 
     @classmethod
-    def get_models_by_domain(cls, domain: ModelDomain) -> List[ModelInfo]:
-        """Get models filtered by domain."""
-        return [m for m in cls.MODELS if m.domain == domain]
-
-    @classmethod
-    def get_models_by_size(cls, size: ModelSize) -> List[ModelInfo]:
-        """Get models filtered by size."""
-        return [m for m in cls.MODELS if m.size == size]
-
-    @classmethod
-    def get_recommended_for_task(cls, task: str) -> List[ModelInfo]:
-        """
-        Get models recommended for a specific task.
-
-        Args:
-            task: Task name (e.g., "judge", "query_rewriting", "medical")
-
-        Returns:
-            List of recommended models
-        """
-        return [m for m in cls.MODELS if task in m.recommended_for]
-
-    @classmethod
-    def get_models_within_ram(cls, max_ram_gb: int) -> List[ModelInfo]:
-        """Get models that fit within specified RAM."""
-        return [m for m in cls.MODELS if m.min_ram_gb <= max_ram_gb]
-
-    @classmethod
     def get_default_model(cls) -> ModelInfo:
         """Get the default recommended model."""
         return cls.get_model("mistral-7b-instruct")
-
-    @classmethod
-    def get_default_medical_model(cls) -> ModelInfo:
-        """Get the default recommended model for medical domain."""
-        medical = cls.get_model("meditron-7b")
-        if medical:
-            return medical
-        return cls.get_default_model()
 
     @classmethod
     def to_dict_list(cls) -> List[Dict]:

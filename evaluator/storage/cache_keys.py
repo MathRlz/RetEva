@@ -283,31 +283,3 @@ def vector_db_manifest_key(
         retrieval_fp,
         preprocessing_fp or "",
     )
-
-
-def unique_texts_key(dataset_name: str, dataset_size: int) -> str:
-    """
-    Generate cache key for unique texts list.
-
-    Args:
-        dataset_name: Name of the dataset
-        dataset_size: Total number of samples in dataset
-
-    Returns:
-        Cache key string
-
-    Example:
-        >>> unique_texts_key("pubmed", 5000)
-        'e4da3b7fbbce2345d7772b0674a318d5'
-    """
-    return _compute_hash(dataset_name, dataset_size)
-
-
-def unique_texts_manifest_key(
-    *,
-    dataset_fp: str,
-    preprocessing_fp: Optional[str] = None,
-    schema_version: str = CACHE_SCHEMA_VERSION,
-) -> str:
-    """Generate canonical unique-text cache key from manifest fingerprints."""
-    return _compute_hash(schema_version, dataset_fp, preprocessing_fp or "")

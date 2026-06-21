@@ -264,6 +264,37 @@ def _relevant_doc_ids(dataset: Any) -> set:
     return out
 
 
+def load_dataset_sources(config: Any):
+    """Load a multi-dataset runtime (B1): each `data.datasets[...]` source so per-node
+    dataset_source handlers can pick theirs, plus the cross-source join gate (B5 — disjoint
+    questions↔corpus doc-id namespaces disable the IR metrics).
+
+    Returns ``(dataset_sources, disable_ir_metrics, join_warning)``; the empty default in
+    single-source mode (no `datasets:` map) leaves the run unchanged. Called by the in-graph
+    dataset_source loader (`handlers/source.py`)."""
+    dataset_sources: "Dict[str, QueryDataset]" = {}
+    disable_ir_metrics, join_warning = False, ""
+    if config is None or not getattr(getattr(config, "data", None), "datasets", None):
+        return dataset_sources, disable_ir_metrics, join_warning
+
+    dataset_sources = load_runtime_datasets(config)
+    cfg_sources = getattr(config.data, "datasets", {}) or {}
+    q_id = next(
+        (s for s, e in cfg_sources.items() if (e or {}).get("role") in ("questions", "both")),
+        None,
+    )
+    c_id = next(
+        (s for s, e in cfg_sources.items() if (e or {}).get("role") in ("corpus", "both")),
+        None,
+    )
+    if q_id and c_id and q_id != c_id and {q_id, c_id} <= set(dataset_sources):
+        join = validate_dataset_join(dataset_sources[q_id], dataset_sources[c_id])
+        if join["disjoint"]:
+            disable_ir_metrics, join_warning = True, join["warning"]
+            logger.warning("dataset join: %s", join_warning)
+    return dataset_sources, disable_ir_metrics, join_warning
+
+
 def validate_dataset_join(
     questions_dataset: Any, corpus_dataset: Any
 ) -> "Dict[str, Any]":

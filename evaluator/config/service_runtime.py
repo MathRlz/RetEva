@@ -17,8 +17,9 @@ class ServiceRuntimeConfig:
     soft_offload_ttl_s: Optional[float] = None  # evict a warm model older than this (s)
 
     def __post_init__(self) -> None:
-        valid_startup = {"lazy", "eager"}
-        valid_offload = {"on_finish", "never", "on_finish_soft_cpu"}
+        from .types import SERVICE_STARTUP_MODES as valid_startup
+        from .types import SERVICE_OFFLOAD_POLICIES as valid_offload
+
         if self.startup_mode not in valid_startup:
             raise ValueError(
                 f"Invalid service startup_mode: '{self.startup_mode}'. "

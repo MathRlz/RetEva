@@ -241,141 +241,6 @@ class ModelServiceProvider:
             f"reranker:{model_type}@{device}",
         )
 
-    def move_asr_model(
-        self,
-        model_type: str,
-        model_name: Optional[str],
-        adapter_path: Optional[str],
-        current_device: str,
-        target_device: str,
-    ):
-        common = dict(model_type=model_type, model_name=model_name, adapter_path=adapter_path)
-        old_key = self._key_for("asr", **common, device=current_device)
-        new_key = self._key_for("asr", **common, device=target_device)
-        return self._move_service(
-            self._asr_services, old_key, new_key, target_device, "ASR"
-        )
-
-    def move_text_embedding_model(
-        self,
-        model_type: str,
-        model_name: Optional[str],
-        current_device: str,
-        target_device: str,
-    ):
-        common = dict(model_type=model_type, model_name=model_name)
-        old_key = self._key_for("text", **common, device=current_device)
-        new_key = self._key_for("text", **common, device=target_device)
-        return self._move_service(
-            self._text_services,
-            old_key,
-            new_key,
-            target_device,
-            "TextEmbedding",
-        )
-
-    def move_audio_embedding_model(
-        self,
-        model_type: str,
-        model_name: Optional[str],
-        model_path: Optional[str],
-        emb_dim: int,
-        dropout: float,
-        current_device: str,
-        target_device: str,
-    ):
-        common = dict(
-            model_type=model_type, model_name=model_name, model_path=model_path,
-            emb_dim=emb_dim, dropout=dropout,
-        )
-        old_key = self._key_for("audio", **common, device=current_device)
-        new_key = self._key_for("audio", **common, device=target_device)
-        return self._move_service(
-            self._audio_services,
-            old_key,
-            new_key,
-            target_device,
-            "AudioEmbedding",
-        )
-
-    def move_reranker(
-        self,
-        model_type: str = "cross_encoder",
-        model_name: Optional[str] = None,
-        current_device: Optional[str] = None,
-        target_device: Optional[str] = None,
-        batch_size: int = 32,
-        max_length: int = 512,
-    ):
-        if target_device is None:
-            raise ValueError("target_device must be provided to move reranker.")
-        common = dict(
-            model_type=model_type, model_name=model_name,
-            batch_size=batch_size, max_length=max_length,
-        )
-        old_key = self._key_for("reranker", **common, device=current_device)
-        new_key = self._key_for("reranker", **common, device=target_device)
-        return self._move_service(
-            self._reranker_services,
-            old_key,
-            new_key,
-            target_device,
-            "Reranker",
-        )
-
-    def release_asr_model(
-        self,
-        model_type: str,
-        model_name: Optional[str],
-        adapter_path: Optional[str],
-        device: str,
-    ) -> None:
-        key = self._key_for(
-            "asr", model_type=model_type, model_name=model_name,
-            adapter_path=adapter_path, device=device,
-        )
-        self._release_service(self._asr_services, key)
-
-    def release_text_embedding_model(
-        self,
-        model_type: str,
-        model_name: Optional[str],
-        device: str,
-    ) -> None:
-        key = self._key_for(
-            "text", model_type=model_type, model_name=model_name, device=device,
-        )
-        self._release_service(self._text_services, key)
-
-    def release_audio_embedding_model(
-        self,
-        model_type: str,
-        model_name: Optional[str],
-        model_path: Optional[str],
-        emb_dim: int,
-        dropout: float,
-        device: str,
-    ) -> None:
-        key = self._key_for(
-            "audio", model_type=model_type, model_name=model_name, model_path=model_path,
-            emb_dim=emb_dim, dropout=dropout, device=device,
-        )
-        self._release_service(self._audio_services, key)
-
-    def release_reranker(
-        self,
-        model_type: str = "cross_encoder",
-        model_name: Optional[str] = None,
-        device: Optional[str] = None,
-        batch_size: int = 32,
-        max_length: int = 512,
-    ) -> None:
-        key = self._key_for(
-            "reranker", model_type=model_type, model_name=model_name, device=device,
-            batch_size=batch_size, max_length=max_length,
-        )
-        self._release_service(self._reranker_services, key)
-
     def release_model_instance(self, model: object, *, soft_cpu: bool = False) -> bool:
         for bucket in (
             self._asr_services,
@@ -483,21 +348,6 @@ class ModelServiceProvider:
 
         return normalized
 
-    def get_tts_model(self, config):
-        """Get or create TTS service instance from AudioSynthesisConfig."""
-        key: TTSKey = (
-            (config.provider or "piper").lower(),
-            config.voice or "",
-            config.language or "en",
-            int(config.sample_rate),
-        )
-        return self._get_or_create(
-            self._tts_services,
-            key,
-            lambda: self._create_tts_backend(config),
-            f"tts:{key[0]}",
-        )
-
     def get_llm_server(self, config):
         """Get or create local LLM server service from LLMServerConfig."""
         key: LLMServerKey = (
@@ -516,28 +366,6 @@ class ModelServiceProvider:
             )
             self._llm_server_services[key] = service
         return service.get()
-
-    def release_llm_server(self, config, *, owned_only: bool = True) -> None:
-        key: LLMServerKey = (
-            config.backend,
-            config.host,
-            int(config.port),
-            config.model,
-            int(config.gpu_layers),
-        )
-        service = self._llm_server_services.pop(key, None)
-        if service is not None:
-            service.stop(owned_only=owned_only)
-            logger.info("provider.release key=%s", key)
-
-    def release_tts_model(self, config) -> None:
-        key: TTSKey = (
-            (config.provider or "piper").lower(),
-            config.voice or "",
-            config.language or "en",
-            int(config.sample_rate),
-        )
-        self._release_service(self._tts_services, key)
 
     @staticmethod
     def _create_tts_backend(config):
@@ -574,32 +402,6 @@ class ModelServiceProvider:
                 f"for model '{config.model}'"
             )
         return server
-
-    @staticmethod
-    def _release_service(
-        bucket: MutableMapping[Any, FactoryModelService[Any]],
-        key: Any,
-    ) -> None:
-        service = bucket.pop(key, None)
-        if service is not None:
-            service.stop()
-            logger.info("provider.release key=%s", key)
-
-    @staticmethod
-    def _move_service(
-        bucket: MutableMapping[Any, FactoryModelService[Any]],
-        old_key: Any,
-        new_key: Any,
-        target_device: str,
-        label: str,
-    ):
-        service = bucket.pop(old_key, None)
-        if service is None:
-            raise KeyError(f"{label} service not found for key={old_key}")
-        service.move_to_device(target_device)
-        bucket[new_key] = service
-        logger.info("provider.move label=%s from=%s to=%s", label, old_key, new_key)
-        return service.get()
 
     def shutdown(self, offload: bool = True) -> None:
         logger.info("provider.shutdown offload=%s", offload)

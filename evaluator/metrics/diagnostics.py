@@ -1,7 +1,6 @@
 """Diagnostic retrieval/ASR metrics extracted from the evaluation loop.
 
-These are the per-run analysis metrics that were previously computed inline in
-``evaluation/phased.py``. Each function here is pure: it takes already-collected
+These are the per-run analysis metrics. Each function here is pure: it takes already-collected
 per-query data and returns a plain dict/scalar, so it can be unit-tested in
 isolation and reused by any evaluation engine.
 

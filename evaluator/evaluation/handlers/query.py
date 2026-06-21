@@ -1,6 +1,6 @@
 """Query-side stage handlers: correction, augmentation, LLM optimization.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X7). Each handler
+Each handler
 registers itself via ``@register_stage_handler`` at import time.
 """
 
@@ -27,9 +27,8 @@ logger = get_logger(__name__)
 
 
 def _augment_one_text(id_text, *, augmenter, base_seed, node_id):
-    """One ``(id, text)`` → its deterministically-perturbed text. Module-level + picklable so it is
-    the per-item unit for the 4b ``parallel_map`` (sync default → byte-identical to the serial
-    comprehension; thread/process parallelize a heavy custom augmenter)."""
+    """One ``(id, text)`` → its deterministically-perturbed text. Top-level + picklable for the
+    process backend."""
     from ..provenance import item_seed
 
     qid, text = id_text
@@ -88,28 +87,20 @@ def _stage_query_correction(s: "RunState") -> None:
     cfg = _node_correction_config(s)
     if cfg is None or not getattr(cfg, "enabled", False):
         return
-    import functools
-
     from ..query_correction import (
         correct_one_text,
         resolve_correction_client,
         correction_diff,
     )
-    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+    from ..executor.cpu_parallel import run_per_item
     from ..item_set import ItemSet
 
     items = s.input_items("query_text")
     texts = list(items.values) if items is not None else list(s.input("query_text"))
-    # Per-item correction through the 4b parallel_map (sync default → byte-identical to the batch
-    # call). The llm method's client is built once and shared across items; the process backend
-    # can't pickle a live client, so llm correction runs sync/thread (it's I/O-bound anyway).
+    # The llm client is built once and shared across items; the process backend can't pickle a
+    # live client, so llm correction runs sync/thread.
     client = resolve_correction_client(cfg)
-    backend, workers = resolve_cpu_backend(s.config)
-    corrected = parallel_map(
-        functools.partial(correct_one_text, config=cfg, client=client),
-        texts,
-        backend=backend, workers=workers,
-    )
+    corrected = run_per_item(s, correct_one_text, texts, config=cfg, client=client)
     n_changed = sum(1 for a, b in zip(texts, corrected) if a != b)
     # Publish the corrected text under a DISTINCT name (no query_text mutation); downstream
     # reads it via QUERY_TEXT_CHAIN. Per-item identity rides the incoming ItemSet (M1d-2).
@@ -161,22 +152,16 @@ def _stage_augmenter(s: "RunState") -> None:
         if not isinstance(corpus_items, ItemSet):
             logger.warning("augmenter '%s' (docs axis): no corpus on the bus", node_id)
             return
-        import functools
-
-        from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+        from ..executor.cpu_parallel import run_per_item
 
         perturbed = [
             dict(d) if isinstance(d, dict) else {"text": str(d)}
             for d in corpus_items.values
         ]
         old_texts = [str(d.get("text", "")) for d in perturbed]
-        backend, workers = resolve_cpu_backend(s.config)
-        new_texts = parallel_map(
-            functools.partial(
-                _augment_one_text, augmenter=augmenter, base_seed=base_seed, node_id=node_id
-            ),
-            list(zip(corpus_items.ids, old_texts)),
-            backend=backend, workers=workers,
+        new_texts = run_per_item(
+            s, _augment_one_text, list(zip(corpus_items.ids, old_texts)),
+            augmenter=augmenter, base_seed=base_seed, node_id=node_id,
         )
         n_changed = sum(1 for o, n in zip(old_texts, new_texts) if o != n)
         for d, new_text in zip(perturbed, new_texts):
@@ -197,17 +182,11 @@ def _stage_augmenter(s: "RunState") -> None:
         texts = list(s.input("query_text"))
         ids = [str(i) for i in range(len(texts))]
 
-    import functools
+    from ..executor.cpu_parallel import run_per_item
 
-    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
-
-    backend, workers = resolve_cpu_backend(s.config)
-    augmented = parallel_map(
-        functools.partial(
-            _augment_one_text, augmenter=augmenter, base_seed=base_seed, node_id=node_id
-        ),
-        list(zip(ids, texts)),
-        backend=backend, workers=workers,
+    augmented = run_per_item(
+        s, _augment_one_text, list(zip(ids, texts)),
+        augmenter=augmenter, base_seed=base_seed, node_id=node_id,
     )
     n_changed = sum(1 for a, b in zip(texts, augmented) if a != b)
     # Distinct output (no query_text mutation); downstream reads QUERY_TEXT_CHAIN.
@@ -250,19 +229,11 @@ def _stage_query_optimization(s: "RunState") -> None:
         else [str(i) for i in range(len(texts))]
     )
     s.cb("phase_1_5_query_opt", 0, s.total, f"Phase 1.5: Query optimization ({cfg.method})")
-    # Per-item optimization through the 4b parallel_map (sync default → byte-identical to the serial
-    # loop; rewrite/HyDE are I/O-bound LLM calls, so thread is the right backend). The per-item unit
-    # falls back to the original query on failure.
-    import functools
+    # rewrite/HyDE are I/O-bound LLM calls (thread is the right backend); the per-item unit falls
+    # back to the original query on failure.
+    from ..executor.cpu_parallel import run_per_item
 
-    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
-
-    backend, workers = resolve_cpu_backend(s.config)
-    optimized = parallel_map(
-        functools.partial(_optimize_one_text, fn=fn, cfg=cfg),
-        texts,
-        backend=backend, workers=workers,
-    )
+    optimized = run_per_item(s, _optimize_one_text, texts, fn=fn, cfg=cfg)
     from .asr import _publish_keyed_or_plain
 
     _publish_keyed_or_plain(s, "optimized_query_text", optimized, ids)

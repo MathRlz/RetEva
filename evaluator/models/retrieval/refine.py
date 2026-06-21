@@ -72,7 +72,9 @@ def rerank_results(
         merged.sort(key=lambda x: x[1], reverse=True)
         return merged[:k]
 
-    if reranking.mode not in {"none", "token_overlap", "cross_encoder"}:
+    from ...config.types import RERANKER_MODES
+
+    if reranking.mode not in RERANKER_MODES:
         raise ValueError(f"Unsupported reranker_mode: {reranking.mode}")
 
     return results[:k]

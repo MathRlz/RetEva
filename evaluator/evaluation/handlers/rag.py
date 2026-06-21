@@ -1,6 +1,6 @@
 """RAG stage handlers: answer generation + finalize (LLM judge, traces, latency).
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X7). Each handler
+Each handler
 registers itself via ``@register_stage_handler`` at import time.
 """
 
@@ -93,7 +93,15 @@ def _build_query_traces(
     traces = []
     for i in progress_iter(range(limit), "Building query traces", total=limit, unit="query"):
         retrieved = [
-            {"doc_key": _payload_to_key(payload), "score": float(score)}
+            {
+                "doc_key": _payload_to_key(payload),
+                "score": float(score),
+                # doc text for the LLM judge (falls back to the key when absent)
+                "text": (
+                    payload.get("text", payload.get("content", ""))
+                    if isinstance(payload, dict) else ""
+                ),
+            }
             for payload, score in results_with_scores[i]
         ]
         query_id = query_ids[i] if i < len(query_ids) else str(i)
@@ -151,12 +159,12 @@ def _run_judge(
         getattr(cfg, "model", "unknown"),
         getattr(cfg, "max_cases", -1),
     )
-    judge_results = run_llm_judging(results["query_traces"], cfg, judge_mode=judge_mode)
+    judge_results = run_llm_judging(results["query_traces"], cfg)
     results["llm_judge"] = judge_results
 
-    # Judge calibration: correlate per-query judge score with IR metrics.
+    # Judge calibration: correlate per-query judge overall score with IR metrics.
     judge_scores = [
-        d.get("judge", {}).get("score", float("nan"))
+        d.get("judge", {}).get("overall", float("nan"))
         for d in judge_results.get("details", [])
     ]
     calibration = judge_calibration(
@@ -261,7 +269,33 @@ def _stage_answer_judge(s: RunState) -> None:
         return
     _, retrieved_keys, _ids = _retrieved_from_bus(s)
     _run_judge(s, s.results, s.metrics_all_relevant, s.per_query_recall5, retrieved_keys)
-    s.put_artifact("judge_scores", {"judged": "llm_judge" in s.results})
+    details = (s.results.get("llm_judge") or {}).get("details") or []
+    _publish_judge_scores(s, details)
+
+
+def _publish_judge_scores(s: RunState, details: list) -> None:
+    """Publish the per-query judge outputs as keyed ItemSets so the (reference-free) judge
+    metrics score them through the normal path: ``judge_scores`` (overall), ``judge_pass``
+    (1.0/0.0 → judge_pass_rate), and ``judge_aspect_<a>`` for each configured aspect. The
+    finalize node folds these into the report via ``attach_judge_metrics`` (J3)."""
+    from ..item_set import ItemSet
+
+    ids = [str(d["query_id"]) for d in details]
+    s.put_items("judge_scores", ItemSet(ids, [d["judge"]["overall"] for d in details]))
+    s.put_items(
+        "judge_pass",
+        ItemSet(ids, [1.0 if d["judge"]["verdict"] == "PASS" else 0.0 for d in details]),
+    )
+    for aspect in s.judge_config.judge_aspects:
+        pairs = [
+            (str(d["query_id"]), d["judge"]["aspect_scores"][aspect])
+            for d in details if aspect in d["judge"]["aspect_scores"]
+        ]
+        if pairs:
+            s.put_items(
+                f"judge_aspect_{aspect}",
+                ItemSet([p[0] for p in pairs], [p[1] for p in pairs]),
+            )
 
 
 def _stage_finalize(s: RunState) -> None:
@@ -269,6 +303,11 @@ def _stage_finalize(s: RunState) -> None:
     explicit build_query_traces node; the LLM judge to answer_judge."""
     s.stage_times["total_s"] = time.perf_counter() - s.t_total
     s.results["latency"] = s.stage_times
+    # Judge metrics (J3): the judge node is downstream of the report assembler, so its per-query
+    # scores are merged into the report here, at the terminal node, via the metric registry.
+    from .metrics import attach_judge_metrics
+
+    attach_judge_metrics(s)
     _attach_traces_to_report(s)
     logger.info(
         "Stage latency — asr=%.1fs embed=%.1fs retrieve=%.1fs total=%.1fs",

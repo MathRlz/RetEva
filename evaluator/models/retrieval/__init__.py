@@ -23,7 +23,12 @@ from .rag.strategies import (
     threshold_filter,
     threshold_filter_with_fallback,
 )
-from .fusion_registry import FUSION_REGISTRY, fuse_hybrid_results
+from .fusion_registry import (
+    FUSION_REGISTRY,
+    fuse_hybrid_results,
+    register_fusion,
+    list_fusions,
+)
 
 __all__ = [
     "BM25Retriever",
@@ -48,4 +53,6 @@ __all__ = [
     "threshold_filter_with_fallback",
     "FUSION_REGISTRY",
     "fuse_hybrid_results",
+    "register_fusion",
+    "list_fusions",
 ]

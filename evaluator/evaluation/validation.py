@@ -13,7 +13,7 @@ callers; replaced wholesale.)
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..errors import ConfigurationError
 from ..logging_config import get_logger
@@ -41,6 +41,8 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     # so they are visible to the graph build + registries (§5). Idempotent, best-effort.
     discover_all_plugins()
 
+    logger.info("Validating configuration, please wait…")
+
     run_seed = getattr(getattr(config, "audio_synthesis", None), "seed", None)
     flags = set_global_determinism(run_seed)
     logger.info("determinism: %s", flags)
@@ -56,8 +58,71 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     except Exception:
         graph = None  # graph errors surface in their own validation path
     if graph is not None:
+        validate_models(config, graph)
         validate_graph_embedding_spaces(graph, config)
     return flags
+
+
+def validate_models(config: Any, graph: Any) -> None:
+    """Fail fast — before any model loads — if the graph references a model type that isn't
+    registered, or an adapter path that doesn't exist.
+
+    Validates exactly the models the graph will build: ``config.model.*`` plus any per-node
+    overrides (a graph node's ``model``/``adapter`` params), keyed to the right family registry
+    via :func:`node_model_field`. An unused default family (e.g. the default ASR type on a pure
+    audio_emb run) is never checked, since no node references it. Collects every problem and raises
+    a single :class:`ConfigurationError` listing them all (with the available types)."""
+    import os
+
+    from ..models.registry import (
+        asr_registry,
+        text_embedding_registry,
+        audio_embedding_registry,
+    )
+    from ..pipeline.graph.registry import node_model_field
+
+    model = getattr(config, "model", None)
+    if model is None:
+        return
+
+    # node_model_field(...) -> (type attr on config.model, adapter attr, the family registry)
+    field_specs = {
+        "model.asr_model_type": ("asr_model_type", "asr_adapter_path", asr_registry),
+        "model.text_emb_model_type": (
+            "text_emb_model_type", "text_emb_adapter_path", text_embedding_registry,
+        ),
+        "model.audio_emb_model_type": (
+            "audio_emb_model_type", "audio_emb_adapter_path", audio_embedding_registry,
+        ),
+    }
+    problems: list = []
+    seen: set = set()
+    for node in graph.nodes:
+        spec = field_specs.get(node_model_field(node.stage, node.params))
+        if spec is None:
+            continue
+        type_attr, adapter_attr, registry = spec
+        params = node.params or {}
+        # per-node override (graph-first) wins over config.model.*
+        mtype = params.get("model") or getattr(model, type_attr, None)
+        if mtype is not None and ("type", type_attr, str(mtype)) not in seen:
+            seen.add(("type", type_attr, str(mtype)))
+            if not registry.is_registered(str(mtype)):
+                problems.append(
+                    f"{type_attr}={mtype!r} is not a registered {registry.name} model "
+                    f"(available: {', '.join(registry.list_types())})"
+                )
+        adapter = params.get("adapter") or getattr(model, adapter_attr, None)
+        if adapter and ("adapter", str(adapter)) not in seen:
+            seen.add(("adapter", str(adapter)))
+            if not os.path.exists(adapter):
+                problems.append(f"{adapter_attr} not found: {adapter}")
+
+    if problems:
+        raise ConfigurationError(
+            "Configuration references model(s) that can't be resolved:\n  - "
+            + "\n  - ".join(problems)
+        )
 
 
 # ── Embedding-space typing (architecture A2 / §4.1 P1) ────────────────
@@ -231,20 +296,18 @@ def _producer_space(
     return None
 
 
-def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
-    """Per-node V[s] check: reject a dense/hybrid retrieval whose bound query-vector
-    producer and index chain live in different embedding spaces (§4.1 P1).
+def check_embedding_spaces(graph: Any, config: Any) -> List[str]:
+    """Non-raising form of :func:`validate_graph_embedding_spaces`: collect *all*
+    embedding-space mismatch messages (empty list = clean) instead of raising on the first.
 
-    Catches what the config-level check cannot: explicit graphs whose per-node
-    ``params.model`` overrides diverge (e.g. ``corpus_embedding {model: labse}`` +
-    ``text_embedding {model: jina_v4}``) and dataset vector columns whose declared
-    ``embedding_space`` differs from the query embedder. Unresolvable spaces (fusion,
-    no model info) stay unchecked — this is a trap-closer, not a prover.
+    Feeds the builder UI, which warns on a mismatch at edit time rather than only failing at
+    run time. Same per-node V[s] check; unresolvable spaces (fusion, no model info) stay
+    unchecked — a trap-closer, not a prover.
     """
     vdb = getattr(config, "vector_db", None)
     retrieval_mode = str(getattr(vdb, "retrieval_mode", "dense")) if vdb else "dense"
     if retrieval_mode not in _VECTOR_MODES:
-        return
+        return []
     by_id = {n.id: n for n in graph.nodes}
     # Query-vector streams in one_of priority order (mirrors the retrieval input). The
     # effective stream is the highest-priority bound producer; fused has no resolvable
@@ -257,6 +320,7 @@ def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
     )
     from ..pipeline.graph.operators import node_kind
 
+    issues: List[str] = []
     for node in graph.nodes:
         if node_kind(node.stage, node.params) != "retrieval":
             continue
@@ -272,7 +336,7 @@ def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
         q_space = _producer_space(q_producer, q_artifact, by_id, config)
         i_space = _producer_space(index_producers[-1], "vector_index", by_id, config)
         if not spaces_compatible(q_space, i_space):
-            raise ConfigurationError(
+            issues.append(
                 f"Embedding-space mismatch at retrieval node '{node.id}': query "
                 f"vectors from '{q_producer}' are in space '{q_space}' but "
                 f"the index from '{index_producers[-1]}' holds space '{i_space}'. "
@@ -280,3 +344,19 @@ def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
                 f"Align the embedder models (or their registry `embedding_space` "
                 f"metadata), or switch to sparse retrieval."
             )
+    return issues
+
+
+def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
+    """Per-node V[s] check: reject a dense/hybrid retrieval whose bound query-vector
+    producer and index chain live in different embedding spaces (§4.1 P1).
+
+    Catches what the config-level check cannot: explicit graphs whose per-node
+    ``params.model`` overrides diverge (e.g. ``corpus_embedding {model: labse}`` +
+    ``text_embedding {model: jina_v4}``) and dataset vector columns whose declared
+    ``embedding_space`` differs from the query embedder. Unresolvable spaces (fusion,
+    no model info) stay unchecked — this is a trap-closer, not a prover.
+    """
+    issues = check_embedding_spaces(graph, config)
+    if issues:
+        raise ConfigurationError(issues[0])

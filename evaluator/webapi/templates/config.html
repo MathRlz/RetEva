@@ -6,4 +6,18 @@
     {% include "_config_form.html" %}
   </div>
 </div>
+<script>
+// Field-level validation feedback: when a validate/run error lands in #output, clear any prior
+// highlight and mark the input the error names (data-field) so the offending field is obvious.
+document.body.addEventListener('htmx:afterSwap', (e) => {
+  if (!e.target || e.target.id !== 'output') return;
+  document.querySelectorAll('#config-form .invalid')
+    .forEach(el => el.classList.remove('invalid'));
+  const box = e.target.querySelector('[data-field]');
+  if (!box) return;
+  const el = document.querySelector(
+    `#config-form [name="${box.getAttribute('data-field')}"]`);
+  if (el) { el.classList.add('invalid'); el.focus(); }
+});
+</script>
 {% endblock %}

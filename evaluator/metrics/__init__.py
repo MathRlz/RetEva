@@ -5,7 +5,6 @@ and speech recognition accuracy.
 
 Main Components:
     - ir: Information retrieval metrics (MRR, nDCG, Recall@k, etc.)
-    - ir_vectorized: Vectorized implementations for batch processing
     - stt: Speech-to-text metrics (WER, CER, etc.)
 
 Usage:
@@ -30,25 +29,11 @@ from .ir import (
     average_precision,
 )
 
-# Import vectorized IR metrics
-from .ir_vectorized import (
-    compute_metrics_batch,
-    VectorizedIRMetrics,
-)
-
 # Import STT metrics
 from .stt import (
     word_error_rate,
     character_error_rate,
-    term_weighted_wer,
 )
-
-from .ir_aggregate import (
-    compute_ir_metrics,
-    log_ir_metrics,
-)
-
-from .selection import select_metrics_for_dataset_type
 
 from .diagnostics import (
     first_relevant_rank_distribution,
@@ -67,16 +52,9 @@ __all__ = [
     "dcg_at_k",
     "ndcg_at_k",
     "average_precision",
-    # Vectorized IR metrics
-    "compute_metrics_batch",
-    "VectorizedIRMetrics",
     # STT metrics
     "word_error_rate",
     "character_error_rate",
-    "term_weighted_wer",
-    # Aggregate helpers
-    "compute_ir_metrics",
-    "log_ir_metrics",
     # Diagnostic metrics
     "first_relevant_rank_distribution",
     "wer_recall_correlation",
@@ -84,6 +62,4 @@ __all__ = [
     "embedding_alignment",
     "per_speaker_breakdown",
     "judge_calibration",
-    # Metric selection
-    "select_metrics_for_dataset_type",
 ]

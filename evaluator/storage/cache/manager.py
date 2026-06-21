@@ -12,8 +12,6 @@ from ..cache_keys import (
     embedding_key,
     transcription_key,
     audio_embedding_key,
-    unique_texts_key,
-    unique_texts_manifest_key,
 )
 from .eviction import EvictionMixin
 from .io import IoMixin
@@ -203,17 +201,6 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
             return [None] * len(texts)
         return [self.get_embedding(text, model_name, model_version) for text in texts]
 
-    def set_embeddings_batch(
-        self,
-        texts: List[str],
-        model_name: str,
-        embeddings: np.ndarray,
-        model_version: Optional[str] = None,
-    ):
-        """Cache embeddings for a batch of texts."""
-        for text, embedding in zip(texts, embeddings):
-            self.set_embedding(text, model_name, embedding, model_version)
-
     def get_audio_embedding(
         self, audio_hash: str, model_name: str, model_version: Optional[str] = None
     ) -> Optional[np.ndarray]:
@@ -332,85 +319,6 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
             cache_key=cache_key,
             artifact_path=path,
             stage="synthesis",
-        )
-
-    def get_unique_texts(
-        self,
-        dataset_name: Optional[str] = None,
-        dataset_size: Optional[int] = None,
-        *,
-        dataset_fingerprint: Optional[str] = None,
-        preprocessing_fingerprint: Optional[str] = None,
-    ) -> Optional[List[str]]:
-        """Retrieve cached unique texts for a dataset."""
-        if dataset_fingerprint is not None:
-            cache_key = unique_texts_manifest_key(
-                dataset_fp=dataset_fingerprint,
-                preprocessing_fp=preprocessing_fingerprint,
-            )
-        elif dataset_name is not None and dataset_size is not None:
-            cache_key = unique_texts_key(dataset_name, dataset_size)
-        else:
-            raise ValueError(
-                "Provide either dataset_fingerprint or both dataset_name and dataset_size"
-            )
-        manifest_key = f"unique_texts_{cache_key}"
-        payload = self._load_json_cache("vector_db", manifest_key, ".json")
-        if payload is None:
-            return None
-        return payload.get("unique_texts")
-
-    def set_unique_texts(
-        self,
-        dataset_name: Optional[str] = None,
-        dataset_size: Optional[int] = None,
-        unique_texts: Optional[List[str]] = None,
-        *,
-        dataset_fingerprint: Optional[str] = None,
-        preprocessing_fingerprint: Optional[str] = None,
-    ):
-        """Cache unique texts for a dataset."""
-        if not self.enabled:
-            return
-
-        if unique_texts is None:
-            raise ValueError("unique_texts must be provided")
-
-        if dataset_fingerprint is not None:
-            cache_key = unique_texts_manifest_key(
-                dataset_fp=dataset_fingerprint,
-                preprocessing_fp=preprocessing_fingerprint,
-            )
-            metadata: Dict[str, Any] = {
-                "dataset_fingerprint": dataset_fingerprint,
-                "preprocessing_fingerprint": preprocessing_fingerprint,
-            }
-        elif dataset_name is not None and dataset_size is not None:
-            cache_key = unique_texts_key(dataset_name, dataset_size)
-            metadata = {
-                "dataset_name": dataset_name,
-                "dataset_size": dataset_size,
-            }
-        else:
-            raise ValueError(
-                "Provide either dataset_fingerprint or both dataset_name and dataset_size"
-            )
-
-        payload = {
-            **metadata,
-            "unique_texts": unique_texts,
-            "num_unique": len(unique_texts),
-            "timestamp": datetime.now().isoformat(),
-        }
-        self._save_json_cache(
-            cache_type="vector_db",
-            cache_key=f"unique_texts_{cache_key}",
-            extension=".json",
-            payload=payload,
-            stage="unique_texts",
-            input_hash=dataset_fingerprint or dataset_name,
-            config_hash=preprocessing_fingerprint,
-            indent=2,
         )
 
     def set_checkpoint(self, experiment_id: str, checkpoint_data: Dict[str, Any]):

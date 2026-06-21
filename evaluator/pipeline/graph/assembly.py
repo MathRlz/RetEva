@@ -184,6 +184,14 @@ def assemble_specs(mode: str, f: FeatureSet) -> List[Any]:
         # pre-retrieval rewrite/HyDE (the fan-out methods are the retrieve-core composite)
         if f.query_opt_enabled and f.query_opt_method in ("rewrite", "hyde"):
             items.append((SLOT_QUERY_PREP + 1.0, "query_optimization"))
+    # audio_text fusion: the text-query stream is ASR(audio) → text_embedding, fused with the
+    # audio_embedding stream — real cross-modal query fusion (audio ⊕ its transcription). Transcribe
+    # the (tts-gap-filled) audio query so query_text exists for the text embedder; without ASR that
+    # stream is empty and the fusion silently collapses to audio-only.
+    if mode == "audio_text_retrieval" and (
+        f.embedding_fusion_enabled or f.result_fusion_enabled
+    ):
+        items.append((SLOT_QUERY_HEAD, "asr"))
 
     # the structural retrieve-core block (sub-ordinals preserve its internal order)
     for i, spec in enumerate(_retrieve_core(mode, f)):

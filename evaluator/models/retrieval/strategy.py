@@ -16,10 +16,17 @@ class CoreRetrievalConfig:
     bm25_b: float = 0.75
 
     def validate(self) -> None:
-        if self.mode not in {"dense", "sparse", "hybrid"}:
+        from ...config.types import RETRIEVAL_MODES
+
+        if self.mode not in RETRIEVAL_MODES:
             raise ValueError(f"Unsupported retrieval mode: {self.mode}")
-        if self.hybrid_fusion_method not in {"weighted", "rrf", "max_score"}:
-            raise ValueError(f"Unsupported hybrid fusion method: {self.hybrid_fusion_method}")
+        from .fusion_registry import list_fusions
+
+        if self.hybrid_fusion_method not in list_fusions():
+            raise ValueError(
+                f"Unsupported hybrid fusion method: {self.hybrid_fusion_method}. "
+                f"Registered: {', '.join(list_fusions())}"
+            )
         if not 0.0 <= self.hybrid_dense_weight <= 1.0:
             raise ValueError(
                 f"hybrid_dense_weight must be in [0, 1], got {self.hybrid_dense_weight}"
@@ -41,7 +48,9 @@ class RerankingConfig:
     weight: float = 0.5
 
     def validate(self) -> None:
-        if self.mode not in {"none", "token_overlap", "cross_encoder"}:
+        from ...config.types import RERANKER_MODES
+
+        if self.mode not in RERANKER_MODES:
             raise ValueError(f"Unsupported reranker mode: {self.mode}")
         if self.top_k <= 0:
             raise ValueError(f"reranker top_k must be > 0, got {self.top_k}")

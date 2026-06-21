@@ -10,6 +10,7 @@ at the bottom of its own file, after ``register_stage_node`` is defined, so the 
 registration happens whenever ``registry`` is imported.
 """
 
+from ...config.types import RETRIEVAL_MODES, RERANKER_MODES
 from .artifacts import (
     ARTIFACT_ANSWER_SCORES,
     ARTIFACT_AUDIO_QUERY_VECTORS,
@@ -20,6 +21,7 @@ from .artifacts import (
     ARTIFACT_EMBEDDING_ALIGNMENT,
     ARTIFACT_FUSED_QUERY_VECTORS,
     ARTIFACT_GENERATED_ANSWERS,
+    ARTIFACT_JUDGE_PASS,
     ARTIFACT_JUDGE_SCORES,
     ARTIFACT_METRICS,
     ARTIFACT_OPTIMIZED_QUERY_TEXT,
@@ -202,6 +204,25 @@ def _combine_domain(params):
     return "embedding" if (params or {}).get("level") == "set" else "fusion"
 
 
+def _combine_param_spec(params):
+    """Builder form for the combine node. The result-fusion `method` choices come from the fusion
+    registry (`list_fusions`), so a newly-registered strategy appears in the UI automatically."""
+    from ...models.retrieval import list_fusions
+
+    return {
+        "level": {"kind": "select", "choices": ["embedding", "result", "set"],
+                  "default": "embedding"},
+        # result-fusion params (the rank-fusion of two retrieved sets)
+        "hybrid": {"kind": "bool", "default": False, "show_if": {"level": ["result"]}},
+        "method": {"kind": "select", "choices": list_fusions(),
+                   "default": "rrf", "show_if": {"level": ["result"]}},
+        "weight": {"kind": "number", "default": 0.5, "show_if": {"level": ["result"]}},
+        "k": {"kind": "number", "show_if": {"level": ["result"]}},
+        "top_k": {"kind": "number", "show_if": {"level": ["result"]}},
+        "rrf_k": {"kind": "number", "default": 60, "show_if": {"level": ["result"]}},
+    }
+
+
 register_stage_node(
     "combine",
     category="transform",
@@ -209,18 +230,7 @@ register_stage_node(
     inputs=_combine_inputs,
     outputs=_combine_outputs,
     optional_inputs=_combine_optional,
-    param_spec={
-        "level": {"kind": "select", "choices": ["embedding", "result", "set"],
-                  "default": "embedding"},
-        # result-fusion params (the rank-fusion of two retrieved sets)
-        "hybrid": {"kind": "bool", "default": False, "show_if": {"level": ["result"]}},
-        "method": {"kind": "select", "choices": ["rrf", "weighted", "max_score"],
-                   "default": "rrf", "show_if": {"level": ["result"]}},
-        "weight": {"kind": "number", "default": 0.5, "show_if": {"level": ["result"]}},
-        "k": {"kind": "number", "show_if": {"level": ["result"]}},
-        "top_k": {"kind": "number", "show_if": {"level": ["result"]}},
-        "rrf_k": {"kind": "number", "default": 60, "show_if": {"level": ["result"]}},
-    },
+    param_spec=_combine_param_spec,
 )
 
 
@@ -402,16 +412,14 @@ def _search_optional(params):
     return (QUERY_TEXT_CHAIN, ARTIFACT_REFERENCE_TRANSCRIPTION)
 
 
-register_stage_node(
-    "search",
-    category="transform",
-    domain="retrieval",
-    inputs=_search_inputs,
-    outputs=(ARTIFACT_RETRIEVED,),
-    optional_inputs=_search_optional,
-    param_spec={
+def _search_param_spec(params):
+    """Builder form for the search node. The multi-query `combine_strategy` choices come from its
+    registry (`list_combine_strategies`), so a newly-registered strategy appears in the UI."""
+    from ...models.retrieval.query.optimization import list_combine_strategies
+
+    return {
         "k": {"kind": "number", "default": 5},
-        "mode": {"kind": "select", "choices": ["dense", "sparse", "hybrid"],
+        "mode": {"kind": "select", "choices": list(RETRIEVAL_MODES),
                  "default": "dense"},
         "distance": {"kind": "text"},
         "gpu_id": {"kind": "number"},
@@ -424,9 +432,19 @@ register_stage_node(
         # fan-out composite (multi-query / decompose): replaces embed+retrieve.
         "method": {"kind": "select", "choices": ["multi_query", "decompose"]},
         "combine_strategy": {
-            "kind": "select", "choices": ["rrf", "weighted", "union", "intersection"],
+            "kind": "select", "choices": list_combine_strategies(),
             "default": "rrf", "show_if": {"method": ["multi_query", "decompose"]}},
-    },
+    }
+
+
+register_stage_node(
+    "search",
+    category="transform",
+    domain="retrieval",
+    inputs=_search_inputs,
+    outputs=(ARTIFACT_RETRIEVED,),
+    optional_inputs=_search_optional,
+    param_spec=_search_param_spec,
 )
 # Result-level fusion = the `combine` operator with level:result (fuse the RANKED results
 # of two retrievals instead of their embeddings); consumes + produces `retrieved`.
@@ -464,7 +482,7 @@ register_stage_node(
     param_spec={
         "op": {"kind": "select", "choices": ["rerank", "mmr", "threshold"]},
         "mode": {"kind": "select",
-                 "choices": ["none", "token_overlap", "cross_encoder"],
+                 "choices": list(RERANKER_MODES),
                  "show_if": {"op": ["rerank"]}},
         # per-node target depth (shared by the refine chain); rerank keeps the larger
         # fetch_k pool when an mmr node follows.
@@ -494,7 +512,8 @@ _MEASURE = {
                   "outputs": (ARTIFACT_EMBEDDING_ALIGNMENT,), "optional": ()},
     "answer": {"inputs": (ARTIFACT_GENERATED_ANSWERS,), "outputs": (ARTIFACT_ANSWER_SCORES,),
                "optional": (ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS)},
-    "judge": {"inputs": (ARTIFACT_METRICS,), "outputs": (ARTIFACT_JUDGE_SCORES,),
+    "judge": {"inputs": (ARTIFACT_METRICS,),
+              "outputs": (ARTIFACT_JUDGE_SCORES, ARTIFACT_JUDGE_PASS),
               "optional": (ARTIFACT_QUERY_TRACES, ARTIFACT_GENERATED_ANSWERS,
                            ARTIFACT_RETRIEVED)},
     "trace": {"inputs": (), "outputs": (ARTIFACT_QUERY_TRACES,),

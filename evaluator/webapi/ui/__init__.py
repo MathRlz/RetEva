@@ -48,8 +48,13 @@ def build_ui_router(
     jobs: JobManager,
 ) -> APIRouter:
     router = APIRouter()
+    from evaluator.evaluation.results import HEADLINE_METRICS
+
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
     templates.env.globals["asset_version"] = _asset_version
+    # Canonical headline-metric order (single source — see evaluation/results.py), so the
+    # status chips never drift from the console summary / report priority.
+    templates.env.globals["headline_metrics"] = list(HEADLINE_METRICS)
     page = make_page(templates)
 
     register_config_routes(router, page, provider_factory)

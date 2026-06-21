@@ -269,6 +269,14 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
             "large-v3": "openai/whisper-large-v3",
         }
         CHOICES: ClassVar[Dict[str, List[str]]] = {"pooling": POOLING_CHOICES}
+        # Per-field help the builder shows as a tooltip (richer than the generic glossary —
+        # the pooling variants in particular need explaining).
+        DESCRIPTIONS: ClassVar[Dict[str, str]] = {
+            "emb_dim": "Projection-head output dim; should match the text embedder.",
+            "dropout": "Dropout in the attention-pooling + projection head.",
+            "pooling": ("Sequence→vector pooling: attention (learned) · mean · "
+                        "mean_whiten (whitened mean) · mean_abtt (all-but-the-top mean)."),
+        }
 
     def __init__(self,
                  audio_encoder_name: str = "openai/whisper-large",
@@ -497,6 +505,14 @@ class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
             "v2-large": "facebook/seamless-m4t-v2-large",
         }
         CHOICES: ClassVar[Dict[str, List[str]]] = {"pooling": POOLING_CHOICES}
+        # Per-field help the builder shows as a tooltip (richer than the generic glossary —
+        # the pooling variants in particular need explaining).
+        DESCRIPTIONS: ClassVar[Dict[str, str]] = {
+            "emb_dim": "Projection-head output dim; should match the text embedder.",
+            "dropout": "Dropout in the attention-pooling + projection head.",
+            "pooling": ("Sequence→vector pooling: attention (learned) · mean · "
+                        "mean_whiten (whitened mean) · mean_abtt (all-but-the-top mean)."),
+        }
 
     def __init__(self,
                  audio_encoder_name: str = "facebook/seamless-m4t-v2-large",

@@ -16,6 +16,10 @@
         <div class="progress-fill" style="width: {{ pct }}%"></div>
       </div>
       {% if prog and prog.get('message') %}<div class="muted">{{ prog.get('message') }}</div>{% endif %}
+      {% if stale_seconds is number and stale_seconds >= 20 %}
+        <div class="warn" style="font-size:12px">⚠ no progress update for {{ stale_seconds }}s —
+          a long stage, or the run may be stalled</div>
+      {% endif %}
     {% endif %}
 
     {% if status == 'failed' %}<p class="error">{{ job.get('error') }}</p>{% endif %}
@@ -37,8 +41,10 @@
 
     {% if result %}
       <div>
-        {# headline metrics first (when present), then any other numeric keys (incl. per-branch) #}
-        {% set headline = ['MRR','MAP','Recall@1','Recall@5','WER','CER'] %}
+        {# headline metrics first (when present), then any other numeric keys (incl. per-branch).
+           ``headline_metrics`` is a Jinja global from evaluation/results.HEADLINE_METRICS — one
+           canonical order shared with the console summary / report priority. #}
+        {% set headline = headline_metrics %}
         {% for k in headline %}
           {% if result.get(k) is number %}<span class="chip">{{ k }}: {{ '%.4f'|format(result.get(k)) }}</span>{% endif %}
         {% endfor %}

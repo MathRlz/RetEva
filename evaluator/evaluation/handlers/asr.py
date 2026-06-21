@@ -1,6 +1,6 @@
 """ASR stage handler: produce query texts (or oracle bypass) for ASR-based modes.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X6). Registers the
+Registers the
 ``asr`` handler at import time.
 """
 

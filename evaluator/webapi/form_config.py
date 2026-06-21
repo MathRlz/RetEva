@@ -74,6 +74,58 @@ def prepare_run_config(
     return config
 
 
+#: The graph-block keys a builder canvas spec carries (mode/nodes/edges/branches). Anything
+#: else on the spec (e.g. a global ``llm``) is a top-level config block, not a graph key.
+_GRAPH_SPEC_KEYS = ("mode", "nodes", "edges", "branches")
+
+#: Builder nodes that are gated by a config-block ``enabled`` flag (not by graph presence): the
+#: LLM-feature nodes whose handler no-ops when their feature is off. Drawing one in the canvas is
+#: the user's intent to run it, so node presence flips the flag on — the LLM endpoint still rides
+#: the global ``llm`` block. (The metric/transform/structural nodes need no such flag.)
+_FEATURE_BY_NODE_KIND = {
+    "answer_judge": "judge",
+    "answer_gen": "answer_generation",
+}
+
+
+def _enable_feature_blocks(config_dict: Dict[str, Any], nodes: list) -> None:
+    """Set ``<feature>.enabled = True`` for each LLM-feature node present in the canvas, so a
+    judge / answer-gen node the user drew actually runs (it would otherwise silently no-op). A
+    block the spec already carries is respected — only the missing ``enabled`` is filled."""
+    from evaluator.pipeline.graph.operators import node_kind
+
+    present = {node_kind(n.get("type"), n.get("params") or {}) for n in nodes}
+    for kind, feature in _FEATURE_BY_NODE_KIND.items():
+        if kind in present:
+            config_dict.setdefault(feature, {}).setdefault("enabled", True)
+
+
+def graph_spec_to_config_dict(
+    spec: Dict[str, Any], *, experiment_name: str = "builder_run"
+) -> Dict[str, Any]:
+    """Translate a builder canvas spec into a legacy ``EvaluationConfig`` dict.
+
+    The canvas exports ``{mode, nodes:[{id,type,params}], edges:[{from,to}], branches?, llm?}``
+    — a node-centric ``graph`` block plus an optional global ``llm``. We wrap it and run it
+    through :func:`graph_config.to_legacy_dict` (the same translator the YAML loader uses), so
+    a graph built in the UI takes the identical path as a hand-written config. The dataset
+    rides a ``dataset_source`` node whose ``dataset`` param names a registered dataset
+    (``to_legacy_dict`` synthesizes the ``data.datasets`` entry); a graph with no resolvable
+    dataset passes translation but is rejected downstream by :func:`prepare_run_config`.
+    """
+    from evaluator.config.graph_config import to_legacy_dict
+
+    # to_legacy_dict mutates the node dicts it's handed (it strips folded params in place);
+    # deep-copy so the caller's spec is never altered (safe to call twice on the same object).
+    graph = deepcopy({k: spec[k] for k in _GRAPH_SPEC_KEYS if k in spec})
+    config_dict: Dict[str, Any] = {"graph": graph, "experiment_name": experiment_name}
+    if spec.get("llm"):
+        config_dict["llm"] = deepcopy(spec["llm"])
+    # A drawn LLM-feature node (judge / answer-gen) flips its config flag on so it actually runs.
+    _enable_feature_blocks(config_dict, graph.get("nodes") or [])
+    return to_legacy_dict(config_dict)
+
+
 def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
     """Recursively overlay ``overlay`` onto ``base`` (overlay wins; dicts merged)."""
     out = deepcopy(base)
@@ -215,13 +267,58 @@ def _form_to_config(form: Dict[str, str]) -> Dict[str, Any]:
     return merged
 
 
+# Keyword (lower-cased, found anywhere in the error message) → the form field name it points
+# at, so a config error highlights the offending input instead of just printing a raw string.
+# Ordered: first match wins (more-specific phrases before broad ones). Every target MUST be a
+# real ``name="…"`` in _config_form.html — a drift-guard test pins this, so a hint can't point at
+# a field that doesn't exist (e.g. reranker is configured via the model section, not a top-level
+# field, so there's nothing to highlight — no mapping for it).
+_ERROR_FIELD_HINTS = (
+    ("retrieval_mode", "retrieval_mode"),
+    ("retrieval mode", "retrieval_mode"),
+    ("fusion", "retrieval_mode"),
+    ("vector_db", "vector_db_type"),
+    ("vector db", "vector_db_type"),
+    ("batch", "batch_size"),
+    ("trace", "trace_limit"),
+    ("dataset", "dataset_name"),
+)
+
+
+def _field_for_error(message: str):
+    """The form field a config-error message points at (keyword match), or None."""
+    low = message.lower()
+    return next((field for kw, field in _ERROR_FIELD_HINTS if kw in low), None)
+
+
+def _friendly_error_html(exc: Exception) -> str:
+    """A friendlier validation-error fragment: the message + (when the offending field is
+    identifiable) a hint naming it with its glossary help, plus ``data-field`` so the form can
+    highlight the input. Falls back to just the message when no field is recognised."""
+    import html as _html
+
+    from evaluator.webapi.field_help import FIELD_HELP
+
+    message = _html.escape(str(exc))
+    field = _field_for_error(str(exc))
+    hint, attr = "", ""
+    if field:
+        attr = f' data-field="{_html.escape(field)}"'
+        help_text = _html.escape(FIELD_HELP.get(field, ""))
+        hint = (
+            f'<p class="muted" style="font-size:12px">Check the <strong>{field}</strong> '
+            f'field. {help_text}</p>'
+        )
+    return f'<div class="error-box"{attr}><p class="error">⚠ {message}</p>{hint}</div>'
+
+
 def _prepared_config_or_error(form):
     """Build a validated run config from form data.
 
-    Returns ``(config, None)`` on success or ``(None, HTMLResponse)`` with an error
+    Returns ``(config, None)`` on success or ``(None, HTMLResponse)`` with a friendly error
     fragment when the form is invalid — shared by the validate/graph/run routes.
     """
     try:
         return prepare_run_config(_form_to_config(dict(form)), auto_devices=True), None
     except (ConfigurationError, ImportError, ValueError) as exc:
-        return None, HTMLResponse(f'<p class="error">{exc}</p>')
+        return None, HTMLResponse(_friendly_error_html(exc))

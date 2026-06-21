@@ -31,13 +31,23 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
         if not registry.is_registered(model_type):
             raise HTTPException(status_code=404, detail=f"Unknown model type: {model_type}")
 
+        # Layer the shared glossary over the registry's per-field help: a model-author
+        # DESCRIPTIONS entry wins (set in get_params_schema), else FIELD_HELP by field name,
+        # so the builder shows a tooltip on model params just like the node-param switches.
+        from evaluator.webapi.field_help import FIELD_HELP
+
+        params_schema = registry.get_params_schema(model_type)
+        for name, entry in params_schema.items():
+            if "help" not in entry and name in FIELD_HELP:
+                entry["help"] = FIELD_HELP[name]
+
         return {
             "family": family,
             "model_type": model_type,
             "default_name": registry.get_default_name(model_type),
             "sizes": registry.get_sizes(model_type),
             "default_size": registry.get_default_size(model_type),
-            "params_schema": registry.get_params_schema(model_type),
+            "params_schema": params_schema,
         }
 
     @router.get("/api/llm/models", summary="List LLM models for the builder picker")

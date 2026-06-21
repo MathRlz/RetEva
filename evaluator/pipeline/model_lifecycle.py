@@ -14,7 +14,7 @@ The model handle is a lazy service (``start``/``stop``/``move_to_device``/``get`
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence
+from typing import Any
 
 
 @dataclass
@@ -67,30 +67,3 @@ class ServiceModelManager:
         stopper = getattr(spec.service, "stop", None)
         if callable(stopper):
             stopper()
-
-
-def last_use_positions(
-    specs_in_order: Sequence[Optional[ModelSpec]],
-) -> Dict[int, ModelSpec]:
-    """Map each stage position to the spec (if any) that is last used right there.
-
-    ``specs_in_order[i]`` is the :class:`ModelSpec` for the i-th stage (or ``None``). The
-    returned ``{position: spec}`` tells the executor which model to release after running
-    the stage at that position.
-    """
-    last_index: Dict[str, int] = {}
-    spec_by_key: Dict[str, ModelSpec] = {}
-    for i, spec in enumerate(specs_in_order):
-        if spec is not None:
-            last_index[spec.key] = i
-            spec_by_key[spec.key] = spec
-    return {i: spec_by_key[key] for key, i in last_index.items()}
-
-
-def acquire_for(
-    manager: Optional[ServiceModelManager], spec: Optional[ModelSpec]
-) -> Any:
-    """Acquire ``spec`` via ``manager`` if both are present; else return ``None``."""
-    if manager is None or spec is None:
-        return None
-    return manager.acquire(spec)

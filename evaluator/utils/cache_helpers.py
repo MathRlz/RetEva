@@ -178,9 +178,3 @@ class CacheMixin:
             return stats[list(stats.keys())[0]]
 
         return stats
-
-    def reset_cache_stats(self) -> None:
-        """Reset all cache statistics to zero."""
-        for category in self._cache_hits:
-            self._cache_hits[category] = 0
-            self._cache_misses[category] = 0

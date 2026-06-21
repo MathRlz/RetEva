@@ -1,7 +1,6 @@
 """Run entry points: ``run_graph`` + ``run_from_bundle``.
 
-Moved out of the former ``evaluation/phased.py`` (Phase 1, X9). ``run_graph`` is
-the core DAG run loop (build graph → seed run state → execute stage graph → collect
+``run_graph`` is the core DAG run loop (build graph → seed run state → execute stage graph → collect
 results); ``run_from_bundle`` is the config-driven convenience wrapper.
 """
 
@@ -170,13 +169,21 @@ def run_graph(
         [node.id for node in level] for level in stage_graph.topological_levels()
     ]
     node_logger.info("Execution DAG mode=%s levels=%s", mode, stage_levels)
-    logger.info(f"Dataset size: {len(dataset)}, Batch size: {batch_size}, k: {k}")
+    # The dataset is loaded in-graph (the dataset_source node) — on the standard path ``dataset``
+    # is None here and the node sets ``state.total`` when it loads; a pre-loaded dataset (oracle
+    # re-run / direct callers) keeps the count up front.
+    _have_ds = dataset is not None
+    logger.info(
+        "Batch size: %s, k: %s%s",
+        batch_size, k,
+        f", dataset size: {len(dataset)}" if _have_ds else " (dataset loads in-graph)",
+    )
     # Pre-flight (M3): fail a typo'd/unregistered node type before any heavy work.
     validate_graph_handlers(stage_graph)
 
-    _total = len(dataset)
+    _total = len(dataset) if _have_ds else 0
     _cb = progress_callback or (lambda *_: None)
-    _cb("init", 0, _total, f"Starting {mode} evaluation ({_total} samples)")
+    _cb("init", 0, _total, f"Starting {mode} evaluation")
 
     # Seed the run state (M2: setup extracted out of the DAG flow).
     state = _setup_execution_context(
@@ -213,47 +220,6 @@ def run_graph(
     return state.results
 
 
-def _load_multi_dataset_sources(eval_config: Any):
-    """Multi-dataset runtime (B1): load each source of a `datasets:` map so per-node
-    dataset_source handlers can pick theirs, and validate the cross-source join (B5 —
-    disjoint questions↔corpus doc_id namespaces disable the IR metrics).
-
-    Returns ``(dataset_sources, disable_ir_metrics, join_warning)``; the empty default
-    in single-source mode (no config / no map) leaves the run unchanged."""
-    dataset_sources: Dict[str, Any] = {}
-    disable_ir_metrics, join_warning = False, ""
-    if eval_config is None or not getattr(
-        getattr(eval_config, "data", None), "datasets", None
-    ):
-        return dataset_sources, disable_ir_metrics, join_warning
-    from ...datasets import load_runtime_datasets, validate_dataset_join
-
-    dataset_sources = load_runtime_datasets(eval_config)
-    cfg_sources = getattr(eval_config.data, "datasets", {}) or {}
-    q_id = next(
-        (
-            s
-            for s, e in cfg_sources.items()
-            if (e or {}).get("role") in ("questions", "both")
-        ),
-        None,
-    )
-    c_id = next(
-        (
-            s
-            for s, e in cfg_sources.items()
-            if (e or {}).get("role") in ("corpus", "both")
-        ),
-        None,
-    )
-    if q_id and c_id and q_id != c_id and {q_id, c_id} <= set(dataset_sources):
-        join = validate_dataset_join(dataset_sources[q_id], dataset_sources[c_id])
-        if join["disjoint"]:
-            disable_ir_metrics, join_warning = True, join["warning"]
-            logger.warning("dataset join: %s", join_warning)
-    return dataset_sources, disable_ir_metrics, join_warning
-
-
 def _setup_execution_context(
     *,
     context: "EvaluationContext",
@@ -276,9 +242,15 @@ def _setup_execution_context(
     The pipelines + execution params come from ``context`` (D1/F6 — no longer re-listed as
     a dozen individual params); ``features`` is the caller-normalized feature bundle.
     """
-    dataset_sources, disable_ir_metrics, join_warning = _load_multi_dataset_sources(
-        eval_config
-    )
+    # The dataset is loaded in-graph (the dataset_source node) — when ``dataset`` is None here,
+    # that node loads the sources + the join gate. The only callers that still pass a pre-loaded
+    # dataset (the oracle re-run, direct ``run_graph`` callers, tests) get the sources loaded here.
+    if dataset is not None:
+        from ...datasets.runtime import load_dataset_sources
+
+        dataset_sources, disable_ir_metrics, join_warning = load_dataset_sources(eval_config)
+    else:
+        dataset_sources, disable_ir_metrics, join_warning = {}, False, ""
     state = RunState(
         dataset=dataset,
         mode=mode,
@@ -364,7 +336,7 @@ def _finalize_run(cache_manager: Any, experiment_id: Any) -> None:
 
 
 def run_from_bundle(
-    dataset: QueryDataset,
+    dataset: Optional[QueryDataset],
     bundle: "PipelineBundle",
     config: "EvaluationConfig",
     *,
@@ -453,6 +425,11 @@ def run_from_bundle(
         offload_policy="never" if _oracle_will_run else _offload_policy,
         **_run_kwargs,
     )
+
+    # The first run loaded the dataset in-graph (when ``dataset`` was None); reuse the loaded
+    # object for the oracle re-run so it isn't loaded (and replay-sliced) a second time.
+    if dataset is None and isinstance(load_info, dict):
+        dataset = load_info.get("dataset")
 
     if (
         getattr(config, "compute_oracle_baseline", False)

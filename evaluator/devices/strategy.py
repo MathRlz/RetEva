@@ -254,15 +254,3 @@ def create_strategy(name: str, **kwargs) -> AllocationStrategy:
         raise ValueError("ManualStrategy requires 'overrides' argument")
 
     return strategy_class(**kwargs)
-
-    if name not in strategies:
-        available = ", ".join(sorted(strategies.keys()))
-        raise ValueError(f"Unknown allocation strategy: '{name}'. Available: {available}")
-
-    strategy_class = strategies[name]
-
-    if name == "manual":
-        overrides = kwargs.get("overrides", {})
-        return strategy_class(overrides)
-
-    return strategy_class()

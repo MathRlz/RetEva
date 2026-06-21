@@ -1,6 +1,6 @@
 """Per-stage model offload planning (model lifecycle).
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X4). Maps each stage
+Maps each stage
 position to the models whose last use falls there, so the executor can release them
 mid-run (frees the device) once a model is no longer needed.
 """

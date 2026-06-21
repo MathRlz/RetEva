@@ -113,7 +113,11 @@ ARTIFACT_GENERATED_ANSWERS = "generated_answers"
 ARTIFACT_TRANSCRIPTION_SCORES = "transcription_scores"
 ARTIFACT_RETRIEVAL_SCORES = "retrieval_scores"
 # LLM-judge verdicts (answer_judge node): generated answer / retrieval × the judge rubric.
+# judge_scores = overall per-query score; judge_pass = per-query 1.0/0.0 (→ judge_pass_rate).
+# Both are always published; the per-aspect judge_aspect_* outputs depend on config and so
+# are not part of the static node contract.
 ARTIFACT_JUDGE_SCORES = "judge_scores"
+ARTIFACT_JUDGE_PASS = "judge_pass"
 # Per-query traces (built by the explicit build_query_traces node; read by judge + report).
 ARTIFACT_QUERY_TRACES = "query_traces"
 # Generated-answer scores (answer_metrics node): reference_answer × generated_answer.

@@ -1,7 +1,6 @@
 """Executor subpackage: the DAG execution engine, run state, and entry points.
 
-Split out of the former ``evaluation/phased.py`` god module (Phase 1, audit §1). The run
-entry points (``run_graph`` / ``run_from_bundle``) and the run-state / context dataclasses
+The run entry points (``run_graph`` / ``run_from_bundle``) and the run-state / context dataclasses
 are re-exported here. Importing ``run`` also imports the handler package, so every stage
 handler is registered as a side effect.
 """

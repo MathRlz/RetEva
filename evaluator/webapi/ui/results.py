@@ -59,7 +59,7 @@ def _config_diff(run_a: Dict[str, Any], run_b: Dict[str, Any]) -> List[str]:
 
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from evaluator.webapi.ui._common import _graph_view_from_config
 
@@ -340,3 +340,27 @@ def register_results_routes(router: APIRouter, page) -> None:
         return page(
             request, "_run_detail.html", run=run, levels=levels, node_io=node_io
         )
+
+    @router.get("/ui/runs/{run_id}/config.yaml", include_in_schema=False)
+    def ui_run_config_yaml(
+        run_id: int, output_dir: str = "evaluation_results"
+    ) -> PlainTextResponse:
+        """Download a run's resolved config as YAML — reproduce / share / re-run the exact
+        experiment (the config stored with the run, byte-for-byte what produced these results)."""
+        import yaml
+
+        from evaluator.storage import ExperimentStore
+
+        try:
+            store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
+            run = store.get_run(run_id)
+        except _STORE_ERRORS as exc:
+            logger.warning("run config %s: store read failed: %s", run_id, exc)
+            run = None
+        config = (run or {}).get("config")
+        if not config:
+            return PlainTextResponse("run config not found", status_code=404)
+        text = yaml.safe_dump(config, sort_keys=False, default_flow_style=False)
+        return PlainTextResponse(text, headers={
+            "Content-Disposition": f'attachment; filename="run-{run_id}-config.yaml"',
+        })

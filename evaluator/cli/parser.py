@@ -1,147 +1,81 @@
-"""Command-line argument parsing for evaluation script."""
+"""Command-line argument parsing for the evaluation script.
+
+The CLI carries only *operational* concerns — where to save, verbosity, devices, cache policy, and
+machine-specific execution knobs. The experiment itself (models, dataset, retrieval, judge, …) is
+described entirely by the YAML ``--config``; it is never overridden from the command line, so a
+given config always describes the same experiment.
+"""
 
 import argparse
 from typing import List, Optional
 
+from ..config.types import SERVICE_STARTUP_MODES, SERVICE_OFFLOAD_POLICIES
+
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     """Parse command line arguments (from *argv*, default ``sys.argv[1:]``)."""
-    parser = argparse.ArgumentParser(description="Evaluate ASR and Text Embedding Models")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run a speech-retrieval evaluation. The experiment is defined by --config; "
+            "CLI flags are operational only (output, verbosity, devices, cache, execution)."
+        ),
+    )
 
-    # Config file
+    # Config file + utilities
     parser.add_argument("--config", type=str, default=None,
-                       help="Path to YAML configuration file")
-    parser.add_argument(
-        "--list_models",
-        action="store_true",
-        help="List available models by family and exit",
-    )
-    parser.add_argument(
-        "--print_graph",
-        action="store_true",
-        help="Print the execution DAG for the config and exit (no models loaded)",
-    )
+                        help="Path to YAML configuration file (the experiment definition)")
+    parser.add_argument("--list_models", action="store_true",
+                        help="List available models by family and exit")
+    parser.add_argument("--print_graph", action="store_true",
+                        help="Print the execution DAG for the config and exit (no models loaded)")
 
-    # Model arguments (override config)
-    parser.add_argument("--asr_model_type", type=str, default=None,
-                       choices=["whisper", "wav2vec2"])
-    parser.add_argument("--asr_model_name", type=str, default=None)
-    parser.add_argument("--asr_adapter_path", type=str, default=None,
-                       help="Path to PEFT/LoRA adapter weights for ASR model")
-    parser.add_argument("--text_emb_model_type", type=str, default=None,
-                       choices=["labse", "jina_v4", "clip", "nemotron"])
-    parser.add_argument("--text_emb_model_name", type=str, default=None)
-    parser.add_argument("--text_emb_adapter_path", type=str, default=None,
-                       help="Path to PEFT/LoRA adapter weights for text embedding model")
-    parser.add_argument("--audio_emb_model_type", type=str, default=None)
-    parser.add_argument("--audio_emb_model_name", type=str, default=None)
-    parser.add_argument("--audio_emb_adapter_path", type=str, default=None,
-                       help="Path to PEFT/LoRA adapter weights for audio embedding model")
+    # Output
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Directory to write results into")
 
-    # Pipeline mode
-    parser.add_argument("--pipeline_mode", type=str, default=None,
-                       choices=["asr_text_retrieval", "audio_emb_retrieval", "asr_only"])
-
-    # Device arguments
-    parser.add_argument("--asr_device", type=str, default=None)
-    parser.add_argument("--text_emb_device", type=str, default=None)
-    parser.add_argument("--audio_emb_device", type=str, default=None)
-
-    # GPU pool arguments
+    # Devices (GPU pool)
     parser.add_argument("--devices", type=str, default=None,
-                       help="Comma-separated list of devices for GPU pool (e.g., 'cuda:0,cuda:1')")
+                        help="Comma-separated devices for the GPU pool (e.g., 'cuda:0,cuda:1')")
     parser.add_argument("--allocation_strategy", type=str, default=None,
-                       choices=["memory_aware", "round_robin", "packing"],
-                       help="GPU allocation strategy for distributing models")
-    parser.add_argument(
-        "--service_startup_mode",
-        type=str,
-        default=None,
-        choices=["lazy", "eager"],
-        help="Service startup strategy for model runtime",
-    )
-    parser.add_argument(
-        "--service_offload_policy",
-        type=str,
-        default=None,
-        choices=["on_finish", "never", "on_finish_soft_cpu"],
-        help="Service offload policy: free after last use | keep resident | park warm on CPU",
-    )
-    parser.add_argument(
-        "--streaming_window_size",
-        type=int,
-        default=None,
-        help="Run the query side in windows of this size (corpus-scale streaming; Roadmap 3a)",
-    )
-    parser.add_argument(
-        "--cpu_stage_executor",
-        type=str,
-        default=None,
-        choices=["sync", "thread", "process"],
-        help="Parallelism for CPU-bound per-item stages (Roadmap 4b; default sync)",
-    )
-    parser.add_argument(
-        "--cpu_stage_workers",
-        type=int,
-        default=None,
-        help="Worker count for --cpu_stage_executor (0 = auto)",
-    )
+                        choices=["memory_aware", "round_robin", "packing"],
+                        help="GPU allocation strategy for distributing models")
 
-    # Dataset arguments
-    parser.add_argument("--dataset_name", type=str, default=None)
-    parser.add_argument("--questions_path", type=str, default=None,
-                       help="Path to benchmark questions JSON/JSONL")
-    parser.add_argument("--corpus_path", type=str, default=None,
-                       help="Path to corpus documents JSON/JSONL")
-    parser.add_argument("--batch_size", type=int, default=None)
-    parser.add_argument("--trace_limit", type=int, default=None,
-                       help="Include up to N query-level traces in results (0 disables)")
-    parser.add_argument("--skip_dataset_validation", action="store_true",
-                       help="Skip dataset integrity checks (not recommended for benchmark runs)")
+    # Execution knobs — machine-specific; do not change what is measured
+    parser.add_argument("--service_startup_mode", type=str, default=None,
+                        choices=list(SERVICE_STARTUP_MODES),
+                        help="Service startup strategy for model runtime")
+    parser.add_argument("--service_offload_policy", type=str, default=None,
+                        choices=list(SERVICE_OFFLOAD_POLICIES),
+                        help="Service offload policy: free after last use | keep resident | "
+                             "park warm on CPU")
+    parser.add_argument("--streaming_window_size", type=int, default=None,
+                        help="Run the query side in windows of this size (corpus-scale streaming)")
+    parser.add_argument("--cpu_stage_executor", type=str, default=None,
+                        choices=["sync", "thread", "process"],
+                        help="Parallelism for CPU-bound per-item stages (default sync)")
+    parser.add_argument("--cpu_stage_workers", type=int, default=None,
+                        help="Worker count for --cpu_stage_executor (0 = auto)")
+    parser.add_argument("--batch_size", type=int, default=None,
+                        help="Override the dataset batch size for this run")
 
-    # Vector DB arguments
-    parser.add_argument("--db_type", type=str, default=None,
-                       choices=["in_memory", "faiss", "faiss_gpu", "faiss_mmap"])
-    parser.add_argument("--k", type=int, default=None)
-    parser.add_argument("--retrieval_mode", type=str, default=None,
-                       choices=["dense", "sparse", "hybrid"])
-    parser.add_argument("--hybrid_dense_weight", type=float, default=None)
-    parser.add_argument("--reranker_mode", type=str, default=None,
-                       choices=["none", "token_overlap"])
-    parser.add_argument("--reranker_top_k", type=int, default=None)
-    parser.add_argument("--reranker_weight", type=float, default=None)
-
-    # Cache arguments
-    parser.add_argument("--no_cache", action="store_true",
-                       help="Disable caching")
-    parser.add_argument("--cache_dir", type=str, default=None)
+    # Cache policy
+    parser.add_argument("--no_cache", action="store_true", help="Disable caching")
+    parser.add_argument("--cache_dir", type=str, default=None, help="Cache directory")
     parser.add_argument("--clear_cache", action="store_true",
-                       help="Clear all caches before running")
+                        help="Clear all caches before running")
 
-    # Logging arguments
+    # Checkpointing — run mechanics (resumability)
+    parser.add_argument("--no_checkpoint", action="store_true", help="Disable checkpointing")
+    parser.add_argument("--checkpoint_interval", type=int, default=None,
+                        help="Checkpoint frequency")
+
+    # Dataset-validation escape hatch
+    parser.add_argument("--skip_dataset_validation", action="store_true",
+                        help="Skip dataset integrity checks (not recommended for benchmark runs)")
+
+    # Logging / verbosity
     parser.add_argument("--log_level", type=str, default=None,
-                       choices=["DEBUG", "INFO", "WARNING", "ERROR"])
-
-    # Output arguments
-    parser.add_argument("--experiment_name", type=str, default=None)
-    parser.add_argument("--output_dir", type=str, default=None)
-
-    # Checkpoint arguments
-    parser.add_argument("--no_checkpoint", action="store_true",
-                       help="Disable checkpointing")
-    parser.add_argument("--checkpoint_interval", type=int, default=None)
-
-    # LLM judge arguments
-    parser.add_argument("--judge_enabled", action="store_true",
-                       help="Enable LLM-as-judge over query traces")
-    parser.add_argument("--judge_model", type=str, default=None)
-    parser.add_argument("--judge_api_base", type=str, default=None)
-    parser.add_argument("--judge_api_key_env", type=str, default=None)
-    parser.add_argument("--judge_max_cases", type=int, default=None)
-    parser.add_argument("--judge_timeout_s", type=int, default=None)
-    parser.add_argument("--judge_temperature", type=float, default=None)
-
-    # Console verbosity (audit Batch F): a named profile; -v/-vv are shorthands.
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     parser.add_argument(
         "--verbosity", choices=["default", "verbose", "debug"], default=None,
         help="Console verbosity profile (default: quiet; env EVALUATOR_VERBOSITY)",
@@ -154,23 +88,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-# Mapping from CLI argument name to config nested path (tuple of attr names)
+# Mapping from CLI argument name to config nested path (tuple of attr names). Operational flags
+# only — the experiment is described by the config and is never overridden from the CLI.
 _CLI_ARG_MAP = {
-    # Model overrides (model.*)
-    "asr_model_type": ("model", "asr_model_type"),
-    "asr_model_name": ("model", "asr_model_name"),
-    "asr_adapter_path": ("model", "asr_adapter_path"),
-    "text_emb_model_type": ("model", "text_emb_model_type"),
-    "text_emb_model_name": ("model", "text_emb_model_name"),
-    "text_emb_adapter_path": ("model", "text_emb_adapter_path"),
-    "audio_emb_model_type": ("model", "audio_emb_model_type"),
-    "audio_emb_model_name": ("model", "audio_emb_model_name"),
-    "audio_emb_adapter_path": ("model", "audio_emb_adapter_path"),
-    "pipeline_mode": ("model", "pipeline_mode"),
-    # Device overrides (model.*)
-    "asr_device": ("model", "asr_device"),
-    "text_emb_device": ("model", "text_emb_device"),
-    "audio_emb_device": ("model", "audio_emb_device"),
     # Service runtime (service_runtime.*)
     "service_startup_mode": ("service_runtime", "startup_mode"),
     "service_offload_policy": ("service_runtime", "offload_policy"),
@@ -178,41 +98,21 @@ _CLI_ARG_MAP = {
     "streaming_window_size": ("streaming", "window_size"),
     "cpu_stage_executor": ("cpu_stage_executor",),
     "cpu_stage_workers": ("cpu_stage_workers",),
-    # Dataset overrides (data.*)
-    "dataset_name": ("data", "dataset_name"),
+    # Dataset batch size (data.*)
     "batch_size": ("data", "batch_size"),
-    "trace_limit": ("data", "trace_limit"),
-    "questions_path": ("data", "questions_path"),
-    "corpus_path": ("data", "corpus_path"),
-    # Vector DB overrides (vector_db.*)
-    "db_type": ("vector_db", "type"),
-    "k": ("vector_db", "k"),
-    "retrieval_mode": ("vector_db", "retrieval_mode"),
-    "hybrid_dense_weight": ("vector_db", "hybrid_dense_weight"),
-    "reranker_mode": ("vector_db", "reranker_mode"),
-    "reranker_top_k": ("vector_db", "reranker_top_k"),
-    "reranker_weight": ("vector_db", "reranker_weight"),
-    # Cache overrides (cache.*)
+    # Cache (cache.*)
     "cache_dir": ("cache", "cache_dir"),
-    # Logging overrides (logging.*)
+    # Logging (logging.*)
     "log_level": ("logging", "console_level"),
-    # Output overrides (top-level config)
-    "experiment_name": ("experiment_name",),
+    # Output (top-level config)
     "output_dir": ("output_dir",),
-    # Checkpoint overrides (top-level config)
+    # Checkpoint (top-level config)
     "checkpoint_interval": ("checkpoint_interval",),
-    # Judge overrides (judge.*)
-    "judge_model": ("judge", "model"),
-    "judge_api_base": ("judge", "api_base"),
-    "judge_api_key_env": ("judge", "api_key_env"),
-    "judge_max_cases": ("judge", "max_cases"),
-    "judge_timeout_s": ("judge", "timeout_s"),
-    "judge_temperature": ("judge", "temperature"),
 }
 
 
 def _set_nested_attr(obj, path: tuple, value) -> None:
-    """Set a nested attribute via tuple path (e.g., ('model', 'asr_model_type')).
+    """Set a nested attribute via tuple path (e.g., ('cache', 'cache_dir')).
 
     Raises a clear AttributeError naming the full path if any segment is missing,
     rather than failing opaquely deep in the traversal.
@@ -234,18 +134,16 @@ def _set_nested_attr(obj, path: tuple, value) -> None:
 
 
 def apply_args_to_config(args: argparse.Namespace, config) -> None:
-    """Apply command-line arguments to configuration object using mapping.
+    """Apply the operational command-line arguments to the configuration object in place.
 
-    Args:
-        args: Parsed command-line arguments.
-        config: EvaluationConfig object to modify in-place.
+    Only operational concerns are applied — the experiment (models, dataset, retrieval, judge) is
+    defined entirely by the config and is never modified from the CLI.
     """
     import os
 
     from ..config import DevicePoolConfig
-    from ..config.model_fields import MODEL_FAMILY_FIELDS
 
-    # Console verbosity (Batch F): -vv > -v > --verbosity > EVALUATOR_VERBOSITY env > config.
+    # Console verbosity: -vv > -v > --verbosity > EVALUATOR_VERBOSITY env > config.
     verbose_count = getattr(args, "verbose", 0) or 0
     verbosity = (
         "debug" if verbose_count >= 2
@@ -255,45 +153,11 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
     if verbosity:
         config.logging.verbosity = verbosity
 
-    # Capture model types before overrides so we can detect a family whose type changed.
-    old_types = {
-        fam.prefix: getattr(config.model, fam.type_field, None)
-        for fam in MODEL_FAMILY_FIELDS
-    }
-
-    # Apply all mapped CLI arguments
+    # Apply all mapped (operational) CLI arguments
     for arg_name, config_path in _CLI_ARG_MAP.items():
         value = getattr(args, arg_name, None)
         if value is not None:
             _set_nested_attr(config, config_path, value)
-
-    # L2: existence-check path-like overrides early, so a typo surfaces as a clear
-    # ConfigurationError here instead of a deep PEFT/loader stack trace much later.
-    # (Dataset paths are validated downstream by validate_dataset_runtime_config.)
-    from ..errors import ConfigurationError
-
-    for arg_name in (
-        "asr_adapter_path", "text_emb_adapter_path", "audio_emb_adapter_path",
-    ):
-        path = getattr(args, arg_name, None)
-        if path and not os.path.exists(path):
-            raise ConfigurationError(f"--{arg_name} not found: {path}")
-
-    # Model-coherence (same rule as the WebUI form, config.model_fields): a
-    # --X_model_type override that *changes* the family's model type makes the inherited
-    # name/adapter — a different model's identity — stale (e.g. wav2vec2 type + a whisper
-    # name → crash). Clear them unless the user also passed the name explicitly.
-    for fam in MODEL_FAMILY_FIELDS:
-        new_type = getattr(args, fam.type_field, None)
-        name_override = getattr(args, fam.name_field, None)
-        if new_type is None or name_override is not None:
-            continue
-        if old_types.get(fam.prefix) not in (None, new_type):
-            for stale_field in (fam.name_field, fam.adapter_field):
-                if hasattr(config.model, stale_field):
-                    setattr(config.model, stale_field, None)
-
-    # Handle special cases with custom logic
 
     # Device pool configuration
     if args.devices is not None or args.allocation_strategy is not None:
@@ -318,7 +182,3 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
     # Checkpoint disabled flag (inverted logic)
     if args.no_checkpoint:
         config.checkpoint_enabled = False
-
-    # Judge enabled flag (explicit)
-    if args.judge_enabled:
-        config.judge.enabled = True

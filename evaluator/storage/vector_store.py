@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import json
 
-from ..constants import MIN_NORM_THRESHOLD
+from ..utils.numeric import l2_normalize
 
 # faiss is imported lazily: loading it eagerly (on any `import evaluator.storage`)
 # pulls faiss + its OpenMP runtime into every process, which clashes with torch's
@@ -86,19 +86,13 @@ class InMemoryVectorStore(VectorStore):
         self.payloads: List[Any] = []
 
     def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
-        # Normalize vectors for cosine similarity
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        norms = np.maximum(norms, MIN_NORM_THRESHOLD)  # Avoid division by zero
-        self.vectors = vectors / norms
+        self.vectors = l2_normalize(vectors, axis=1)  # cosine similarity
         self.payloads = payloads
 
     def search(self, query: np.ndarray, k: int = 5) -> List[Tuple[Any, float]]:
         if self.vectors is None:
             raise ValueError("Cannot search: vectors not built yet. Call build() first.")
-        # Normalize query for cosine similarity
-        query_norm = np.linalg.norm(query)
-        if query_norm > MIN_NORM_THRESHOLD:
-            query = query / query_norm
+        query = l2_normalize(query)
 
         sims = np.dot(self.vectors, query.T).squeeze()
         indices = np.argsort(-sims)[:k]
@@ -110,10 +104,7 @@ class InMemoryVectorStore(VectorStore):
     def search_batch(self, queries: np.ndarray, k: int) -> List[List[Tuple[Any, float]]]:
         if self.vectors is None:
             raise ValueError("Cannot search: vectors not built yet.")
-        queries = np.asarray(queries, dtype=np.float32)
-        norms = np.linalg.norm(queries, axis=1, keepdims=True)
-        norms = np.maximum(norms, MIN_NORM_THRESHOLD)
-        queries = queries / norms
+        queries = l2_normalize(np.asarray(queries, dtype=np.float32), axis=1)
         # Vectorized dot product: (N, D) @ (D, M) → (N, M)
         sims = queries @ self.vectors.T
         # Top-k per query via argpartition
@@ -389,22 +380,3 @@ class FaissGpuVectorStore(VectorStore):
             metadata = json.load(f)
             self.dim = metadata['dim']
             self.gpu_id = metadata.get('gpu_id', 0)
-
-
-def build_gpu_ivf(vectors: np.ndarray, dim: int, nlist: int = 1024, gpu_id: int = 0):
-    _ensure_faiss()
-    res = faiss.StandardGpuResources()
-
-    quantizer = faiss.IndexFlatIP(dim)
-    cpu_index = faiss.IndexIVFFlat(quantizer, dim, nlist)
-
-    gpu_index = faiss.index_cpu_to_gpu(res, gpu_id, cpu_index)
-
-    vectors = vectors.astype(np.float32)
-    faiss.normalize_L2(vectors)
-
-    gpu_index.train(vectors)
-    gpu_index.add(vectors)
-
-    gpu_index.nprobe = 10
-    return gpu_index

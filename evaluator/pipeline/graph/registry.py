@@ -100,9 +100,6 @@ class StageGraph:
     def node_ids(self) -> List[str]:
         return [node.id for node in self.nodes]
 
-    def has_stage(self, stage: str) -> bool:
-        return any(node.stage == stage for node in self.nodes)
-
     def topological_levels(self) -> List[List[StageNode]]:
         remaining: Dict[str, StageNode] = {node.id: node for node in self.nodes}
         resolved: set[str] = set()

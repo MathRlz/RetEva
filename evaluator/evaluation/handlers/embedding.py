@@ -1,6 +1,6 @@
 """Embedding stage handlers: audio / text embedding, fusion, corpus index.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X6). Each handler
+Each handler
 registers itself via ``@register_stage_handler`` at import time.
 """
 

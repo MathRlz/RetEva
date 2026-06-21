@@ -8,14 +8,16 @@ from evaluator.pipeline.graph.templates import GRAPH_TEMPLATES, graph_template
 from evaluator.datasets.descriptor import list_registered_datasets, get_descriptor
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.form_builder import (
+    config_to_canvas_spec,
     create_config_options,
     deep_merge_dict,
     graph_preview,
+    graph_render_payload,
     load_config,
     nested_config,
     prepare_run_config,
+    render_node,
     required_model_fields_for,
-    resolve_node_form,
 )
 from evaluator.webapi.schemas import (
     ConfigCreateRequest,
@@ -137,28 +139,20 @@ def build_config_router(
             graph = graph_template(mode)
         except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {
-            "mode": graph.mode,
-            "levels": [[n.id for n in level] for level in graph.topological_levels()],
-            "nodes": [
-                {
-                    "id": n.id,
-                    "type": n.stage,
-                    "params": dict(n.params or {}),
-                    "bindings": [list(b) for b in n.bindings],
-                    # field-aware contract (ports/label/family/switches) for THIS instance,
-                    # so the canvas renders an operator node by its discriminator fields.
-                    **resolve_node_form(n.stage, dict(n.params or {})),
-                }
-                for n in graph.nodes
-            ],
-        }
+        # field-aware contract (ports/label/family/switches) per node so the canvas renders an
+        # operator by its discriminator fields — the shared render_node shape.
+        return graph_render_payload(graph, lambda n: render_node(n, dict(n.params or {})))
 
     @router.post("/api/graph/build", summary="Build + validate a canvas graph spec")
     def graph_build_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
         """Build the DAG from a builder canvas spec ``{mode, nodes:[{id,type,params}],
         edges:[{from,to}]}`` and return its topological levels — or a 400 with the error (E4).
         ``edges`` ([{from,to}]) is folded into the ``{to: [from,…]}`` shape the builder expects.
+
+        Also returns edit-time *advice* (P3): ``warnings`` (embedding-space mismatches — the same
+        check the Run path enforces, surfaced here so the user sees it while editing rather than
+        only at submit) and ``metrics`` (which metrics will auto-inject given the graph's produced
+        artifacts), so the canvas previews them live.
         """
         from ...pipeline import build_graph_from_spec
 
@@ -180,22 +174,107 @@ def build_config_router(
                 )
             else:
                 graph = build_graph_from_spec(nodes, mode=mode, edges=edges)
-            # Per-node V[s] check (§4.1 P1) — per-node embedder overrides only
-            # (no run config here, so global fields contribute nothing).
-            from ...config import EvaluationConfig
-            from ...evaluation.validation import validate_graph_embedding_spaces
-
-            validate_graph_embedding_spaces(graph, EvaluationConfig())
         except Exception as exc:  # noqa: BLE001 — surface any build error as 400
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "mode": graph.mode,
-            "levels": [[n.id for n in level] for level in graph.topological_levels()],
-            "nodes": [
-                {"id": n.id, "stage": n.stage, "depends_on": list(n.depends_on)}
-                for n in graph.nodes
-            ],
-        }
+        # Edit-time advice (non-blocking). Embedding-space mismatch is a *warning* here (§4.1 P1,
+        # per-node overrides only — no run config) so the user sees it while editing; the run
+        # path still hard-validates. Metric-applicability: which metrics land given the graph's
+        # produced artifacts (scored + the dataset_source's gt columns).
+        from ...config import EvaluationConfig
+        from ...evaluation.metric_registry import applicable_metrics
+        from ...evaluation.validation import check_embedding_spaces
+        from ...pipeline.graph import _effective_outputs
+
+        warnings = check_embedding_spaces(graph, EvaluationConfig())
+        produced: set = set()
+        for n in graph.nodes:
+            produced.update(_effective_outputs(n.stage, n.params))
+        metrics = [m.name for m in applicable_metrics(produced, collect_all=True)]
+        payload = graph_render_payload(
+            graph, lambda n: {"id": n.id, "stage": n.stage, "depends_on": list(n.depends_on)}
+        )
+        payload["warnings"] = warnings
+        payload["metrics"] = metrics
+        return payload
+
+    @router.post(
+        "/api/graph/from-config",
+        summary="Load a YAML config onto the builder canvas (round-trip)",
+    )
+    def graph_from_config_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse a node-centric (or legacy) YAML config and return the builder canvas seed for
+        its DAG — nodes with their configured models/params + the resolved edges — so an
+        existing experiment can be opened in the builder, edited, and re-run. A parse / build
+        error is a 400. ``validate=False`` so a partial config still loads for editing.
+        """
+        import yaml as _yaml
+
+        from evaluator.config import EvaluationConfig
+        from evaluator.config.graph_config import to_legacy_dict
+
+        text = payload.get("yaml") or ""
+        if not str(text).strip():
+            raise HTTPException(status_code=400, detail="Provide a YAML config in 'yaml'.")
+        try:
+            raw = _yaml.safe_load(text)
+            if not isinstance(raw, dict):
+                raise ValueError("YAML must be a config mapping (key: value).")
+            config = EvaluationConfig.from_dict(to_legacy_dict(raw), validate=False)
+            return config_to_canvas_spec(config)
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — surface parse/translate/build as 400
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post(
+        "/api/graph/to-config",
+        summary="Serialize the canvas graph as a runnable config YAML (round-trip out)",
+    )
+    def graph_to_config_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """The inverse of /api/graph/from-config: wrap the builder canvas spec as a node-centric
+        config (``experiment`` + ``graph`` + optional ``llm``) and return it as YAML — a
+        shareable, CLI-runnable artifact, re-loadable via "Load a YAML config". Validated by
+        building the DAG (pure topology, no models); an unbuildable graph is a 400.
+        """
+        import copy
+
+        import yaml as _yaml
+
+        from evaluator.config import EvaluationConfig
+        from evaluator.config.graph_config import to_legacy_dict
+        from evaluator.pipeline import build_graph_for_config
+
+        from evaluator.webapi.form_builder import lift_single_source_dataset, minimal_edges
+        from evaluator.webapi.form_config import _GRAPH_SPEC_KEYS
+
+        spec = payload.get("spec") or {}
+        name = str(payload.get("experiment_name") or "builder_export").strip() or "builder_export"
+        # deep-copy: lift_single_source_dataset strips the dataset_source node in place
+        graph = copy.deepcopy({k: spec[k] for k in _GRAPH_SPEC_KEYS if k in spec})
+        if not graph.get("nodes"):
+            raise HTTPException(status_code=400, detail="The graph has no nodes to export.")
+        # Keep only edges the auto-wiring wouldn't recreate, so bindings don't accumulate across
+        # export→load→export and the YAML stays minimal.
+        if graph.get("edges"):
+            graph["edges"] = minimal_edges(graph["nodes"], graph["edges"])
+            if not graph["edges"]:
+                del graph["edges"]
+        # A single registered-dataset source lifts to a clean top-level `dataset:` block (the node
+        # goes structural) so the export reads well and YAML→canvas→YAML is idempotent.
+        config: Dict[str, Any] = {"experiment": {"name": name}}
+        dataset_block = lift_single_source_dataset(graph.get("nodes") or [])
+        if dataset_block:
+            config["dataset"] = dataset_block
+        config["graph"] = graph
+        if spec.get("llm"):
+            config["llm"] = spec["llm"]
+        try:
+            # validate it builds — to_legacy_dict mutates its input, so deep-copy first
+            cfg = EvaluationConfig.from_dict(to_legacy_dict(copy.deepcopy(config)), validate=False)
+            build_graph_for_config(cfg)
+        except Exception as exc:  # noqa: BLE001 — surface any build error as 400
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"yaml": _yaml.safe_dump(config, sort_keys=False)}
 
     @router.post("/api/sweep/preview", summary="Expand a sweep spec to its run group")
     def sweep_preview_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:

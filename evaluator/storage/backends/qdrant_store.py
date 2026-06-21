@@ -21,7 +21,7 @@ except ImportError:
     QDRANT_AVAILABLE = False
 
 from ..vector_store import VectorStore
-from ...constants import MIN_NORM_THRESHOLD
+from ...utils.numeric import l2_normalize
 from ...logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -136,10 +136,7 @@ class QdrantVectorStore(VectorStore):
         # Store payloads locally for retrieval
         self._payloads = payloads
 
-        # Normalize vectors for cosine similarity
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        norms = np.maximum(norms, MIN_NORM_THRESHOLD)
-        normalized_vectors = (vectors / norms).astype(np.float32)
+        normalized_vectors = l2_normalize(vectors, axis=1).astype(np.float32)  # cosine
 
         # Ensure collection exists
         dim = vectors.shape[1]
@@ -199,10 +196,7 @@ class QdrantVectorStore(VectorStore):
             logger.warning("Cannot query %s (collection unavailable): %s", self.collection_name, exc)
             return []
 
-        # Normalize query
-        query_norm = np.linalg.norm(query)
-        if query_norm > MIN_NORM_THRESHOLD:
-            query = query / query_norm
+        query = l2_normalize(query)
 
         # Build filter if provided
         query_filter = None
@@ -255,10 +249,7 @@ class QdrantVectorStore(VectorStore):
         Returns:
             List of result lists, one per query.
         """
-        # Normalize queries
-        norms = np.linalg.norm(queries, axis=1, keepdims=True)
-        norms = np.maximum(norms, MIN_NORM_THRESHOLD)
-        normalized_queries = (queries / norms).astype(np.float32)
+        normalized_queries = l2_normalize(queries, axis=1).astype(np.float32)
 
         # Build filter if provided
         query_filter = None

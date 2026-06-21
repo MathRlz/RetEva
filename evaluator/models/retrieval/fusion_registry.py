@@ -24,6 +24,20 @@ class HybridFusionStrategy(Protocol):
         ...
 
 
+def _normalize_hybrid(dense_results, sparse_results):
+    """Shared setup for the weighted/max strategies: each list's min-max-normalized score dict
+    (keyed by payload) + the payload-by-key lookup (last write wins). The two strategies differ
+    only in how they merge ``dense_norm``/``sparse_norm`` afterwards."""
+    dense_norm = _min_max_norm({_payload_key(p): float(s) for p, s in dense_results})
+    sparse_norm = _min_max_norm({_payload_key(p): float(s) for p, s in sparse_results})
+    payload_by_key = {}
+    for payload, _ in dense_results:
+        payload_by_key[_payload_key(payload)] = payload
+    for payload, _ in sparse_results:
+        payload_by_key[_payload_key(payload)] = payload
+    return dense_norm, sparse_norm, payload_by_key
+
+
 class WeightedFusion:
     """Weighted linear combination over normalized scores."""
 
@@ -36,17 +50,9 @@ class WeightedFusion:
         top_k: int,
         rrf_k: int,
     ) -> SearchResults:
-        dense_scores = {_payload_key(p): float(s) for p, s in dense_results}
-        sparse_scores = {_payload_key(p): float(s) for p, s in sparse_results}
-        dense_norm = _min_max_norm(dense_scores)
-        sparse_norm = _min_max_norm(sparse_scores)
-
-        payload_by_key = {}
-        for payload, _ in dense_results:
-            payload_by_key[_payload_key(payload)] = payload
-        for payload, _ in sparse_results:
-            payload_by_key[_payload_key(payload)] = payload
-
+        dense_norm, sparse_norm, payload_by_key = _normalize_hybrid(
+            dense_results, sparse_results
+        )
         merged = {}
         keys = set(dense_norm.keys()) | set(sparse_norm.keys())
         for key in keys:
@@ -86,17 +92,9 @@ class MaxScoreFusion:
         top_k: int,
         rrf_k: int,
     ) -> SearchResults:
-        dense_scores = {_payload_key(p): float(s) for p, s in dense_results}
-        sparse_scores = {_payload_key(p): float(s) for p, s in sparse_results}
-        dense_norm = _min_max_norm(dense_scores)
-        sparse_norm = _min_max_norm(sparse_scores)
-
-        payload_by_key = {}
-        for payload, _ in dense_results:
-            payload_by_key[_payload_key(payload)] = payload
-        for payload, _ in sparse_results:
-            payload_by_key[_payload_key(payload)] = payload
-
+        dense_norm, sparse_norm, payload_by_key = _normalize_hybrid(
+            dense_results, sparse_results
+        )
         merged = {}
         keys = set(dense_norm.keys()) | set(sparse_norm.keys())
         for key in keys:
@@ -109,11 +107,26 @@ class MaxScoreFusion:
         return [(payload_by_key[key], score) for key, score in ranked]
 
 
-FUSION_REGISTRY: Dict[str, HybridFusionStrategy] = {
-    "weighted": WeightedFusion(),
-    "rrf": RRFFusion(),
-    "max_score": MaxScoreFusion(),
-}
+# The registry store (kept public as ``FUSION_REGISTRY`` for back-compat); populate via
+# ``register_fusion`` so a plugin can add a strategy without editing this module — the OCP
+# extension point, matching the model / node / metric / vector-store registries.
+FUSION_REGISTRY: Dict[str, HybridFusionStrategy] = {}
+
+
+def register_fusion(name: str, strategy: HybridFusionStrategy) -> None:
+    """Register a hybrid dense+sparse fusion strategy under ``name``."""
+    FUSION_REGISTRY[name] = strategy
+
+
+def list_fusions() -> List[str]:
+    """The registered hybrid-fusion method names (sorted) — the single source for config
+    validation and the builder UI's `method` select."""
+    return sorted(FUSION_REGISTRY)
+
+
+register_fusion("weighted", WeightedFusion())
+register_fusion("rrf", RRFFusion())
+register_fusion("max_score", MaxScoreFusion())
 
 
 def fuse_hybrid_results(
@@ -125,12 +138,11 @@ def fuse_hybrid_results(
     top_k: int,
     rrf_k: int,
 ) -> SearchResults:
-    """Fuse hybrid results via registered strategy."""
+    """Fuse hybrid dense+sparse results via the registered strategy ``method``."""
     strategy = FUSION_REGISTRY.get(method)
     if strategy is None:
         raise ValueError(
-            f"Unsupported hybrid fusion method: {method}. "
-            f"Supported: {', '.join(sorted(FUSION_REGISTRY.keys()))}"
+            f"Unsupported hybrid fusion method: {method}. Supported: {', '.join(list_fusions())}"
         )
     return strategy.fuse(
         dense_results,

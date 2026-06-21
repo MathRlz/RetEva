@@ -40,6 +40,28 @@ class DatasetType(str, Enum):
         return self.value
 
 
+# ── Closed option sets validated as plain strings ─────────────────────────────────────
+# The canonical source for each: config validation, the builder/form selects, the
+# operators-catalog node forms, the CLI, and the /api/introspection/schema endpoint all
+# reference these tuples, so a value can never drift between the UI and the core.
+RETRIEVAL_MODES = ("dense", "sparse", "hybrid")
+RERANKER_MODES = ("none", "token_overlap", "cross_encoder")
+SERVICE_STARTUP_MODES = ("lazy", "eager")
+SERVICE_OFFLOAD_POLICIES = ("on_finish", "never", "on_finish_soft_cpu")
+DATASET_SOURCES = ("local", "huggingface", "custom")
+
+# Coarse modality per dataset type (UI picker grouping + the introspection schema). Evaluator-owned
+# so a new DatasetType is grouped from one place rather than a webapi-local map.
+DATASET_TYPE_MODALITY = {
+    DatasetType.AUDIO_TRANSCRIPTION.value: "audio",
+    DatasetType.AUDIO_QUERY_RETRIEVAL.value: "audio",
+    DatasetType.TEXT_QUERY_RETRIEVAL.value: "text",
+    DatasetType.QUESTION_ANSWERING.value: "text",
+    DatasetType.PASSAGE_RANKING.value: "text",
+    DatasetType.MULTIMODAL_QA.value: "multimodal",
+}
+
+
 def to_enum(value: Any, enum_class: type[Enum]) -> Enum:
     """Convert a value to an enum, accepting both strings and enum instances.
 

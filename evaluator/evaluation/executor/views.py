@@ -1,7 +1,6 @@
-"""Per-worker state view for intra-level parallel execution (T5).
+"""Per-worker state view for intra-level parallel execution.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X3). ``_NodeView``
-isolates the swap-sensitive / per-query attrs (``_VIEW_LOCAL_ATTRS``) per branch while
+``_NodeView`` isolates the swap-sensitive / per-query attrs (``_VIEW_LOCAL_ATTRS``) per branch while
 delegating everything else to the shared base ``RunState``.
 """
 

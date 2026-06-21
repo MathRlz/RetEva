@@ -206,3 +206,17 @@ register_metric(
     gt="relevant_docs",
     fn=lambda ret, rel: float(average_precision(ret, rel)),
 )
+
+# --- LLM judge metrics (reference-free) ---------------------------------------------------------
+# The judge node publishes per-query numeric ItemSets; each metric scores its own artifact, so a
+# metric auto-injects only when that artifact is present (i.e. only the *configured* aspects fire).
+# fn is the identity — the score is already in [0, 1] (pass is 1.0/0.0 → its mean is the pass rate).
+from ..config.judge import VALID_JUDGE_ASPECTS  # noqa: E402
+
+register_metric("judge_overall", scored="judge_scores", gt=None, fn=lambda v, _g: float(v))
+register_metric("judge_pass_rate", scored="judge_pass", gt=None, fn=lambda v, _g: float(v))
+for _aspect in sorted(VALID_JUDGE_ASPECTS):
+    register_metric(
+        f"judge_{_aspect}", scored=f"judge_aspect_{_aspect}", gt=None,
+        fn=lambda v, _g: float(v),
+    )

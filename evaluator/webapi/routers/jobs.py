@@ -7,10 +7,32 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from evaluator.webapi.form_builder import prepare_run_config
+from evaluator import ConfigurationError
+from evaluator.webapi.form_builder import graph_spec_to_config_dict, prepare_run_config
 from evaluator.webapi.jobs import JobManager
-from evaluator.webapi.schemas import ErrorResponse, EvaluationJobRequest, JobSubmitResponse, MatrixJobRequest
+from evaluator.webapi.schemas import (
+    ErrorResponse,
+    EvaluationJobRequest,
+    GraphRunRequest,
+    JobSubmitResponse,
+    MatrixJobRequest,
+)
 from evaluator.webapi.utils import artifact_listing
+
+
+def _require_dataset_choice(spec: Dict[str, Any]) -> None:
+    """Reject a builder run whose ``dataset_source`` has no dataset chosen — an empty one would
+    silently fall back to the EvaluationConfig default rather than the dataset the user drew."""
+    from evaluator.pipeline.graph.operators import node_kind
+
+    for node in spec.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        params = node.get("params") or {}
+        if node_kind(node.get("type"), params) == "dataset_source" and not params.get("dataset"):
+            raise ValueError(
+                "Select a dataset on the dataset-source node before running."
+            )
 
 
 def _require_job(jobs: JobManager, job_id: str):
@@ -58,6 +80,38 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
             return {"job_id": job.job_id}
         except ImportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post(
+        "/api/jobs/from-graph",
+        response_model=JobSubmitResponse,
+        summary="Run a graph built in the visual builder",
+        responses={400: {"model": ErrorResponse}},
+    )
+    def submit_from_graph(payload: GraphRunRequest) -> Dict[str, str]:
+        """Translate a builder canvas spec into a config and submit it as a job — closing the
+        builder→run loop. An invalid graph (unknown node, no dataset, space mismatch) is a 400
+        with the translator/validation message, not a 500.
+        """
+        try:
+            _require_dataset_choice(payload.spec)
+            config_dict = graph_spec_to_config_dict(
+                payload.spec, experiment_name=payload.experiment_name
+            )
+            config = prepare_run_config(config_dict, auto_devices=payload.auto_devices)
+            # Validate the topology synchronously (pure DAG build, no models): an unknown node
+            # or embedding-space mismatch becomes a 400 *now* instead of a failed job later —
+            # same checks as /api/graph/build, but config-aware.
+            from evaluator.evaluation.validation import validate_graph_embedding_spaces
+            from evaluator.pipeline import build_graph_for_config
+
+            graph = build_graph_for_config(config)
+            validate_graph_embedding_spaces(graph, config)
+        except (ConfigurationError, ValueError, KeyError, ImportError) as exc:
+            # ImportError: a configured vector-db backend (faiss/chromadb/qdrant) isn't
+            # installed — a user-fixable config problem, not a server fault.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        job = jobs.submit_evaluation(config)
+        return {"job_id": job.job_id}
 
     @router.post(
         "/api/jobs/matrix",

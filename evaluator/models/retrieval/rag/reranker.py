@@ -33,25 +33,6 @@ class BaseReranker(ABC):
         pass
 
     @abstractmethod
-    def rerank_batch(
-        self,
-        queries: List[str],
-        documents_batch: List[List[Tuple[Any, float]]],
-        top_k: Optional[int] = None,
-    ) -> List[List[Tuple[Any, float]]]:
-        """Rerank documents for multiple queries.
-
-        Args:
-            queries: List of query texts.
-            documents_batch: List of document lists for each query.
-            top_k: Number of top results to return per query.
-
-        Returns:
-            List of reranked document lists.
-        """
-        pass
-
-    @abstractmethod
     def name(self) -> str:
         """Return the reranker model name."""
         pass
@@ -161,31 +142,3 @@ class CrossEncoderReranker(BaseReranker):
             scored = scored[:top_k]
 
         return scored
-
-    def rerank_batch(
-        self,
-        queries: List[str],
-        documents_batch: List[List[Tuple[Any, float]]],
-        top_k: Optional[int] = None,
-    ) -> List[List[Tuple[Any, float]]]:
-        """Rerank documents for multiple queries.
-
-        Args:
-            queries: List of query texts.
-            documents_batch: List of document lists for each query.
-            top_k: Number of top results to return per query.
-
-        Returns:
-            List of reranked document lists.
-        """
-        if len(queries) != len(documents_batch):
-            raise ValueError(
-                f"Number of queries ({len(queries)}) must match "
-                f"number of document batches ({len(documents_batch)})"
-            )
-
-        results = []
-        for query, documents in zip(queries, documents_batch):
-            results.append(self.rerank(query, documents, top_k))
-
-        return results

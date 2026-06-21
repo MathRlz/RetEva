@@ -11,6 +11,24 @@ from evaluator.webapi.jobs import JobManager
 from evaluator.webapi.form_builder import _prepared_config_or_error
 
 
+def _seconds_since_progress(data: dict):
+    """Seconds since the last progress update for a still-running job (else None) — drives the
+    "no update for Ns" soft-stall hint. A snapshot recomputed each poll, so it self-clears."""
+    if data.get("status") not in ("running", "queued"):
+        return None
+    lp = data.get("last_progress") or {}
+    ts = lp.get("ts")
+    if not ts:
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return None
+    return max(0, int(elapsed.total_seconds()))
+
+
 def register_jobs_routes(router: APIRouter, page, jobs: JobManager) -> None:
     def _status_response(request: Request, job_id: str) -> HTMLResponse:
         try:
@@ -31,6 +49,7 @@ def register_jobs_routes(router: APIRouter, page, jobs: JobManager) -> None:
             job=data,
             result=result,
             log_text=log_text,
+            stale_seconds=_seconds_since_progress(data),
         )
 
     @router.post("/ui/run", response_class=HTMLResponse, include_in_schema=False)

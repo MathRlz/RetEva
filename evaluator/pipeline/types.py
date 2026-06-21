@@ -76,11 +76,6 @@ class PipelineBundle:
         return requirements[mode]
 
     @property
-    def has_asr(self) -> bool:
-        """Check if ASR pipeline is available."""
-        return self.asr_pipeline is not None
-
-    @property
     def has_text_embedding(self) -> bool:
         """Check if text embedding pipeline is available."""
         return self.text_embedding_pipeline is not None
@@ -89,13 +84,3 @@ class PipelineBundle:
     def has_audio_embedding(self) -> bool:
         """Check if audio embedding pipeline is available."""
         return self.audio_embedding_pipeline is not None
-
-    @property
-    def has_retrieval(self) -> bool:
-        """Check if retrieval pipeline is available."""
-        return self.retrieval_pipeline is not None
-
-    @property
-    def can_fuse_embeddings(self) -> bool:
-        """Check if both audio and text embedding pipelines are available for fusion."""
-        return self.has_audio_embedding and self.has_text_embedding

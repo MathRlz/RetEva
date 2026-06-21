@@ -4,19 +4,11 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-# DatasetType value → coarse modality for grouping the picker (Audio / Text / Multimodal).
-_MODALITY_BY_TYPE = {
-    "audio_transcription": "audio",
-    "audio_query_retrieval": "audio",
-    "text_query_retrieval": "text",
-    "question_answering": "text",
-    "passage_ranking": "text",
-    "multimodal_qa": "multimodal",
-}
+from evaluator.config.types import DATASET_TYPE_MODALITY
 
 
 def _modality(dataset_type: str) -> str:
-    return _MODALITY_BY_TYPE.get(str(dataset_type), "other")
+    return DATASET_TYPE_MODALITY.get(str(dataset_type), "other")
 
 
 def build_datasets_router() -> APIRouter:

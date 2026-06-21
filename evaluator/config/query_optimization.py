@@ -58,10 +58,13 @@ class QueryOptimizationConfig(LLMBackendMixin):
         if self.method not in valid_methods:
             raise ValueError(f"method must be one of {valid_methods}, got {self.method!r}")
 
-        valid_strategies = {"rrf", "weighted", "union", "intersection"}
+        from ..models.retrieval.query.optimization import list_combine_strategies
+
+        valid_strategies = list_combine_strategies()
         if self.combine_strategy not in valid_strategies:
             raise ValueError(
-                f"combine_strategy must be one of {valid_strategies}, got {self.combine_strategy!r}"
+                f"combine_strategy must be one of {valid_strategies}, "
+                f"got {self.combine_strategy!r}"
             )
 
         if not 0.0 <= self.temperature <= 2.0:

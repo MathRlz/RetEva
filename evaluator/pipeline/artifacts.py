@@ -96,10 +96,6 @@ def artifact_modality(name: str) -> Modality:
     return get_artifact_type(name).modality
 
 
-def is_source_artifact(name: str) -> bool:
-    return get_artifact_type(name).is_source
-
-
 def list_artifacts() -> List[ArtifactType]:
     return [_REGISTRY[name] for name in sorted(_REGISTRY)]
 
@@ -149,7 +145,13 @@ register_artifact("refined_query_text", Modality.TEXT)
 # Per-comparison score artifacts from the typed metric nodes (Phase 5).
 register_artifact("transcription_scores", Modality.SCORES)
 register_artifact("retrieval_scores", Modality.SCORES)
-register_artifact("judge_scores", Modality.SCORES)
+register_artifact("judge_scores", Modality.SCORES)  # overall per-query judge score
+register_artifact("judge_pass", Modality.SCORES)  # per-query 1.0/0.0 → judge_pass_rate
+# per-aspect judge scores; only the configured aspects are actually published at run time
+for _judge_aspect in (
+    "relevance", "faithfulness", "correctness", "completeness", "clarity", "accuracy", "factuality",
+):
+    register_artifact(f"judge_aspect_{_judge_aspect}", Modality.SCORES)
 register_artifact("answer_scores", Modality.SCORES)
 # Planned modalities are additive — e.g. an image query field:
 #   register_artifact("query_image", Modality.IMAGE, is_source=True)

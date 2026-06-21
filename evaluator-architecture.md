@@ -164,12 +164,14 @@ retrieval); `pubmed_qa` (multimodal QA).
 - Per-source runtime loading (`datasets.load_runtime_datasets` → `{id: QueryDataset}`) + per-source
   artifact keying (`corpus_embedding` binds its docs source via `_node_dataset`).
 
-**Loading (runtime).** Dataset loading + TTS synthesis are a **pre-graph step** in `_run_core`,
-not yet a node: `prepare_dataset` resolves the `DatasetDescriptor` (the single source of truth for
-a dataset's capabilities + loader), loads it, and synthesizes missing `query_audio` **before** any
-model pipeline is built (so TTS is never co-resident with an embedder — avoids a native crash).
-The live dataset is placed on `RunState`; the `dataset_source` node then surfaces its source
-artifacts into the graph. Promoting loading itself to an explicit node is `[planned]`.
+**Loading (runtime).** Dataset loading is **in-graph**, owned by the `dataset_source` node
+(`handlers/source.py:_ensure_dataset_loaded`): the first such node to run resolves the
+`DatasetDescriptor` (the single source of truth for a dataset's capabilities + loader), loads the
+single + multi-source map + the disjoint-join gate + any replay slice, places the live dataset on
+`RunState` (a shared resource, like the model pipelines), and surfaces its source artifacts into the
+graph. TTS is likewise the in-graph `tts` node. Only **config validation**
+(`validate_dataset_runtime_config`) stays pre-graph — no data load before the DAG, so the run is
+exactly the graph the config describes.
 
 ---
 
@@ -1058,7 +1060,7 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
 | Shared metric-reduction utilities (both report paths) | `evaluation/handlers/metrics.py` (`_branch_scores`, `_run_provenance`, `_attach_report`, `_retrieval_wer_impact`) |
 | Per-branch scope markers (drives `_NodeView` isolation) | `evaluation/executor/state.py:per_branch_field_names` |
 | Deterministic e2e parity-gate snapshot | `scripts/report_snapshot.py` |
-| One execution core (load → pipelines → evaluate) | `services/evaluation_service.py:_run_core` |
+| One execution core (validate → pipelines → evaluate; the dataset loads in-graph) | `services/evaluation_service.py:_run_core` |
 | Pre-flight validation chain (determinism, cost budget, V[s] config+graph, store backends) | `evaluation/validation.py:run_pre_flight` |
 | Audio bricks (tts, augment_audio) + the audio-ref bus | `evaluation/handlers/audio.py`, `evaluation/audio_refs.py` |
 | Corpus embed (`corpus_embedding`) + index build (`vector_db`) | `services/corpus_index.py` (`embed_corpus`, `embed_corpus_audio`, `build_index_from_vectors`; `build_corpus_index` = back-compat wrapper) |
@@ -1077,7 +1079,7 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
 | ~~Flip default modes to the corpus split~~ | done (2026-06-12); parity baselines in amazing_curie need one regeneration |
 | RAG-grounded entity correction (phonetic drug-name → dose validation, `patient_context` retrieval, constrained decode) | `[planned]` (C7, §6) |
 | ~~Corrector registry~~ | done (2026-06-12, §11) |
-| Dataset loading + TTS synthesis as an explicit graph node (today a pre-graph step in `_run_core`) | `[planned]` (§2) |
+| ~~Dataset loading + TTS as graph nodes~~ — both **done**: TTS is the in-graph `tts` node, and dataset *loading* is now owned by the `dataset_source` node (`handlers/source.py:_ensure_dataset_loaded`; the run is exactly the DAG, no pre-graph load — only config validation stays pre-graph) | `[impl]` (2026-06-18, §2) |
 | Pareto / visual cross-run leaderboard views | `[impl]` (2026-06-17, Roadmap 4a): `analysis/pareto.py` (multi-objective non-domination), `ExperimentStore.group_runs` / `experiment_groups`, `GET /api/leaderboard/pareto` (objectives like `MRR:max,latency_ms:min`), and a server-rendered `/ui/pareto` view (frontier scatter + tagged table, `templates/_pareto.html`) on the Results page. A sweep-submit form remains. |
 | Streaming / out-of-core evaluation (windowed driver + off-RAM corpus/index) | 3a windowed query-side driver `[impl]` (2026-06-17, opt-in `streaming.window_size`): prelude (source + corpus index) runs once, the query producers (asr/embed/retrieve/refine) run per window, only the finalize-bound per-item slots (`query_text`, `retrieved`) accumulate while query vectors are released per window, and the metric/report/CI nodes run once over the full set. Mock equivalence test proves windowed == whole report (incl. bootstrap CIs) for window sizes 1–4; window-granular checkpoint/resume landed (`_setup_window_journal` — a crashed run resumes at the first incomplete window, re-running the cache-fast prelude and restoring the accumulator; a resume-after-crash test reproduces the full report). **Container m1c gate PASSED (2026-06-17, `amazing_curie`, real models):** on `e2e_pubmed_qa_small`, a windowed run (`--streaming_window_size 2`) reproduces the whole run's **metrics and rankings byte-for-byte** (MRR/MAP/Recall/NDCG/WER/CER + per-query doc order); the only divergence is ≤2.1e-7 in raw similarity scores, because the windowed run embeds fewer query texts per call (a different matmul shape → oneDNN float round-off — `data.batch_size` alone has 0.0 effect, confirming it's the per-window embedding-call size, not a logic difference). Intra-window parallelism remains. 3b off-RAM corpus/index: first increment `[impl]` (2026-06-17) — `vector_db.type: faiss_mmap` (`storage/vector_store.py:FaissMmapVectorStore`) memory-maps the FAISS index + fetches payloads by id from a Parquet store (`storage/payload_store.py:ParquetPayloadStore`, one row group resident), so neither the index nor the corpus is bounded by one box's RAM; search is byte-identical to `faiss` (container gate: faiss_mmap == faiss full report, sole diff the store-name echo). IVF on-disk indexes for huge corpora + a remote HTTP backend remain. |
 | ~~Typed embedding spaces~~ (compatible-space registry + runtime guard, 2b, §4.1) · ~~composable retrieval operators~~ (`refine_ops`, 2a, §6) · ~~plugin entry-points~~ (`evaluator/plugins.py`, 1c, §11) | `[impl]` (2026-06-17) |

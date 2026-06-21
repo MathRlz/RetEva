@@ -16,7 +16,7 @@
 
   <details class="step" open>
     <summary>Pipeline mode</summary>
-    <label class="field">
+    <label class="field" title="{{ options.field_help.get('pipeline_mode','') }}">
       <span>Mode</span>
       <select name="pipeline_mode"
               hx-get="/ui/models" hx-target="#model-fields" hx-include="#config-form" hx-trigger="change">
@@ -48,15 +48,15 @@
       </label>
       <label class="field"><span>Questions path</span><input name="questions_path" value="{{ p.get('questions_path','') }}"></label>
       <label class="field"><span>Corpus path</span><input name="corpus_path" value="{{ p.get('corpus_path','') }}"></label>
-      <label class="field"><span>Batch size</span><input type="number" name="batch_size" value="{{ p.get('batch_size', 8) }}"></label>
-      <label class="field"><span>Trace limit</span><input type="number" name="trace_limit" value="{{ p.get('trace_limit', 0) }}"></label>
+      <label class="field" title="{{ options.field_help.get('batch_size','') }}"><span>Batch size</span><input type="number" name="batch_size" value="{{ p.get('batch_size', 8) }}"></label>
+      <label class="field" title="{{ options.field_help.get('trace_limit','') }}"><span>Trace limit</span><input type="number" name="trace_limit" value="{{ p.get('trace_limit', 0) }}"></label>
     </div>
   </details>
 
   <details class="step">
     <summary>Retrieval &amp; output</summary>
     <div class="grid">
-      <label class="field">
+      <label class="field" title="{{ options.field_help.get('vector_db_type','') }}">
         <span>Vector DB</span>
         <select name="vector_db_type">
           {% for t in options.vector_db_types %}
@@ -64,7 +64,7 @@
           {% endfor %}
         </select>
       </label>
-      <label class="field">
+      <label class="field" title="{{ options.field_help.get('retrieval_mode','') }}">
         <span>Retrieval mode</span>
         <select name="retrieval_mode">
           {% for r in options.retrieval_modes %}
@@ -72,7 +72,7 @@
           {% endfor %}
         </select>
       </label>
-      <label class="field"><span>k</span><input type="number" name="k" value="{{ p.get('k', 10) }}"></label>
+      <label class="field" title="{{ options.field_help.get('k','') }}"><span>k</span><input type="number" name="k" value="{{ p.get('k', 10) }}"></label>
       <label class="field"><span>Experiment name</span><input name="experiment_name" value="{{ p.get('experiment_name','webui_experiment') }}"></label>
       <label class="field"><span>Output dir</span><input name="output_dir" value="{{ p.get('output_dir','evaluation_results/webui') }}"></label>
     </div>

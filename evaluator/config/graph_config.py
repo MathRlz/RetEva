@@ -24,7 +24,6 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 
 from ..errors import ConfigurationError
-from .evaluation import EvaluationConfig
 
 
 class GraphConfigError(ConfigurationError):
@@ -210,8 +209,7 @@ def _translate_datasets_map(new: Dict[str, Any], legacy: Dict[str, Any]):
 
     Each entry's keys are translated to DataConfig field names; an optional `role` is
     kept verbatim and later injected into the referencing dataset_source node's params.
-    Returns ``(datasets, role_by_dataset_id)`` so the graph translator can validate
-    dataset_source references against whether a datasets: block was present at all.
+    Returns ``role_by_dataset_id`` (id → role) for the graph translator's source wiring.
     """
     role_by_dataset_id: Dict[str, str] = {}
     datasets = new.pop("datasets", None)
@@ -228,14 +226,13 @@ def _translate_datasets_map(new: Dict[str, Any], legacy: Dict[str, Any]):
                 role_by_dataset_id[str(sid)] = str(role)
             translated[str(sid)] = mapped
         legacy.setdefault("data", {})["datasets"] = translated
-    return datasets, role_by_dataset_id
+    return role_by_dataset_id
 
 
 def _translate_graph(
     new: Dict[str, Any],
     legacy: Dict[str, Any],
     model: Dict[str, Any],
-    datasets: Any,
     role_by_dataset_id: Dict[str, str],
 ) -> None:
     """graph → pipeline_mode (+ optional explicit node/edge override, config C2)."""
@@ -253,12 +250,6 @@ def _translate_graph(
         # The graph template is a build-time reference on graph_override (expanded with the
         # config's features). There is no pipeline_mode field; an explicit graph.nodes wins.
         legacy.setdefault("graph_override", {})["template"] = graph["mode"]
-    # Back-compat: a legacy flat ``model: {pipeline_mode: X}`` becomes a template reference too
-    # (the field is gone, so it must not reach ModelConfig).
-    if isinstance(model, dict) and model.get("pipeline_mode"):
-        legacy.setdefault("graph_override", {}).setdefault("template", model["pipeline_mode"])
-    if isinstance(model, dict):
-        model.pop("pipeline_mode", None)
     if "nodes" in graph:
         node_ids = graph["nodes"]
         # Items are a node-type string OR a dict {id, type, params} for a distinct
@@ -269,12 +260,21 @@ def _translate_graph(
             raise GraphConfigError(
                 "graph.nodes must be a list of node-type strings or {id, type, params} dicts."
             )
+        # Node `type` may be the operator *stage* the builder canvas emits (e.g. `source`,
+        # `convert`, `embed`) or the concrete *kind* a YAML uses (`dataset_source`, `asr`,
+        # `text_embedding`); node_kind() collapses both to the kind so the fold below works
+        # for either typing. (node_kind is idempotent on kinds, so kind-typed nodes are
+        # unchanged.)
+        from ..pipeline.graph.operators import node_kind
+
         # A dataset_source node referencing a `datasets:` entry inherits that entry's
         # role into its params (single source of truth = the datasets map), so graph
         # wiring (_effective_outputs) routes downstream nodes to the right source. A
         # role set explicitly on the node wins; an unknown dataset id is an error.
         for item in node_ids:
-            if not (isinstance(item, dict) and item.get("type") == "dataset_source"):
+            if not (isinstance(item, dict)
+                    and node_kind(item.get("type"), item.get("params") or {})
+                    == "dataset_source"):
                 continue
             params = item.get("params") or {}
             ds_id = params.get("dataset")
@@ -298,22 +298,50 @@ def _translate_graph(
         # runtime per-node override is for branches, not the base model). Transform/sink nodes
         # (augmenter, augment_audio, dataset_sink, dataset_source) keep their params — read at
         # runtime via graph_override. No-op for the plain-string list form (back-compat).
+        from ..pipeline.graph.operators import operator_discriminators
+
         graph_vdb: Dict[str, Any] = {}
+        folded_model_roles: set = set()
         for item in node_ids:
             if not isinstance(item, dict):
                 continue
             ntype, nparams = item.get("type"), item.get("params") or {}
             if not nparams:
                 continue
-            if ntype in _MODEL_NODE_FIELDS:
-                model.update(_map_keys(nparams, _MODEL_NODE_FIELDS[ntype], f"graph.nodes.{ntype}.params"))
-                item["params"] = {}
-            elif ntype == "vector_db":
-                graph_vdb.update(_vector_db_node_to_config(nparams))
-                item["params"] = {}
-            elif ntype == "retrieval":
-                graph_vdb.update(_retrieval_to_vector_db(nparams))
-                item["params"] = {}
+            kind = node_kind(ntype, nparams)
+            # The discriminator selectors (op/axis/modality/method/…) identify the kind, not
+            # the model/vector_db config — split them out so the config fold doesn't choke on
+            # them, and keep them on the node so node_kind still resolves it at build time. For
+            # kind-typed nodes (no discriminators) this is a no-op (params fully fold, as before).
+            disc = operator_discriminators(ntype)
+            selectors = {k: v for k, v in nparams.items() if k in disc}
+            fields = {k: v for k, v in nparams.items() if k not in disc}
+            if kind in _MODEL_NODE_FIELDS:
+                if fields:
+                    # A legacy config carries one model per role, so two nodes folding the same
+                    # role would silently clobber. Most often that's a corpus embedder missing
+                    # its ``axis: corpus`` discriminator (so it resolves to text_embedding) —
+                    # name the likely fix rather than run the wrong experiment.
+                    if kind in folded_model_roles:
+                        raise GraphConfigError(
+                            f"two graph nodes resolve to the same model role '{kind}', which a "
+                            f"config can carry only once. Disambiguate the operators — e.g. set "
+                            f"'axis: corpus' on the corpus embedder so it isn't a second "
+                            f"'{kind}'."
+                        )
+                    folded_model_roles.add(kind)
+                    model.update(_map_keys(
+                        fields, _MODEL_NODE_FIELDS[kind], f"graph.nodes.{ntype}.params"
+                    ))
+                item["params"] = selectors
+            elif kind == "vector_db":
+                if fields:
+                    graph_vdb.update(_vector_db_node_to_config(fields))
+                item["params"] = selectors
+            elif kind == "retrieval":
+                if fields:
+                    graph_vdb.update(_retrieval_to_vector_db(fields))
+                item["params"] = selectors
         if graph_vdb:
             legacy["vector_db"] = {**legacy.get("vector_db", {}), **graph_vdb}
         # edges: list of {from, to} → {to: [from, ...]} for build_graph_from_spec
@@ -464,8 +492,8 @@ def to_legacy_dict(new: Dict[str, Any]) -> Dict[str, Any]:
     _translate_experiment(new, legacy)
     _translate_runtime(new, legacy)
     _translate_dataset(new, legacy)
-    datasets, role_by_dataset_id = _translate_datasets_map(new, legacy)
-    _translate_graph(new, legacy, model, datasets, role_by_dataset_id)
+    role_by_dataset_id = _translate_datasets_map(new, legacy)
+    _translate_graph(new, legacy, model, role_by_dataset_id)
     _translate_nodes(new, legacy, model)
 
     # Escape hatch: any remaining top-level keys are legacy-style and passed through
@@ -478,10 +506,6 @@ def to_legacy_dict(new: Dict[str, Any]) -> Dict[str, Any]:
         else:
             legacy.setdefault(key, value)
     return legacy
-
-
-def _invert(mapping: Dict[str, str]) -> Dict[str, str]:
-    return {v: k for k, v in mapping.items()}
 
 
 def _build_vdb_to_retrieval() -> Dict[str, Tuple[str, ...]]:
@@ -528,7 +552,7 @@ def legacy_yaml_to_graph_yaml(old: Dict[str, Any]) -> Dict[str, Any]:
     # data → dataset
     data = old.pop("data", None)
     if isinstance(data, dict):
-        inv = _invert(_DATASET_FIELDS)
+        inv = _DATA_FIELD_TO_KEY  # config-field → node-key (module constant)
         ds, leftover = {}, {}
         for k, v in data.items():
             (ds if k in inv else leftover)[inv.get(k, k)] = v
@@ -656,12 +680,3 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
             edges.append({"from": dep, "to": n.id})
     ncfg["graph"] = {"nodes": nodes, "edges": edges}
     return ncfg
-
-
-def load_graph_config(path: str, *, validate: bool = True) -> EvaluationConfig:
-    """Load a node-centric YAML config and build an ``EvaluationConfig``.
-
-    Thin alias for :meth:`EvaluationConfig.from_yaml` — the single load chokepoint that
-    already translates the node-centric shape via :func:`to_legacy_dict`.
-    """
-    return EvaluationConfig.from_yaml(path, validate=validate)

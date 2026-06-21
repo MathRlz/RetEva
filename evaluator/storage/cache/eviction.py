@@ -62,16 +62,6 @@ class EvictionMixin:
         )
         return stats
 
-    def get_cache_size(self) -> Dict[str, int]:
-        """Get size of each cache type in bytes (legacy method, uses get_cache_stats)."""
-        full_stats = self.get_cache_stats()
-        sizes = {
-            cache_type: info["size_bytes"]
-            for cache_type, info in full_stats["by_category"].items()
-        }
-        sizes["total"] = full_stats["total_size_bytes"]
-        return sizes
-
     def _human_readable_size(self, size_bytes: int | float) -> str:
         """Convert bytes to human readable format."""
         size: float = float(size_bytes)
@@ -195,48 +185,3 @@ class EvictionMixin:
                 evicted,
                 self.max_size_gb,
             )
-
-    def clear_model(self, model_name: str) -> int:
-        """
-        Clear all caches related to a specific model.
-
-        This searches for cached files that contain the model name in their key
-        and removes them. This is a heuristic approach based on how cache keys
-        are generated (they include model names).
-
-        Args:
-            model_name: Name of the model to clear caches for.
-
-        Returns:
-            Number of cache entries cleared.
-        """
-        cleared_count = 0
-
-        if self.enabled and self.manifest_db_path.exists():
-            with closing(self._connect()) as conn, conn:
-                rows = conn.execute(
-                    """
-                    SELECT cache_type, cache_key, artifact_path
-                    FROM cache_entries
-                    WHERE model_name = ?
-                    """,
-                    (model_name,),
-                ).fetchall()
-                for cache_type, cache_key, artifact_path in rows:
-                    try:
-                        path = self._abs_artifact_path(artifact_path)
-                        if path.exists():
-                            path.unlink()
-                            cleared_count += 1
-                        conn.execute(
-                            "DELETE FROM cache_entries WHERE cache_type = ? AND cache_key = ?",
-                            (cache_type, cache_key),
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to delete manifest entry {artifact_path}: {e}"
-                        )
-                conn.commit()
-
-        logger.info(f"Cleared {cleared_count} cache entries for model: {model_name}")
-        return cleared_count

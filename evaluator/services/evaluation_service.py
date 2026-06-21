@@ -172,40 +172,27 @@ def _run_core(
 
     run_pre_flight(config)
 
-    # Load the dataset. TTS synthesis of any missing query audio is in-graph now (the tts
-    # node gap-fills during execution), so this is load + validation only.
-    dataset = prepare_dataset(
-        config,
-        retrieval_required=_run_needs_retrieval(config),
-        cache_manager=cache_manager,
+    # Validate the dataset config pre-graph (no data load — loading is the in-graph dataset_source
+    # node now). TTS synthesis is in-graph (the tts node). Item replay (2d) rides ``load_info``
+    # into the source node, which applies the query-id slice at load (corpus kept whole).
+    validate_dataset_runtime_config(
+        config, retrieval_required=_run_needs_retrieval(config)
     )
-
     if query_ids is not None:
-        # Item replay (2d): keep the corpus whole, slice the query side to the wanted ids so
-        # the single item runs the full graph (retrieval scores match a full run).
-        from ..datasets.runtime import slice_by_query_ids
-        from ..errors import ConfigurationError
-
-        dataset = slice_by_query_ids(dataset, query_ids)
-        if len(dataset) == 0:
-            raise ConfigurationError(
-                f"replay: no dataset rows match query id(s) {sorted(set(map(str, query_ids)))}"
-            )
-        logger.info("replay: sliced dataset to %d row(s) by query id", len(dataset))
+        load_info["replay_query_ids"] = query_ids
 
     # Run-start summary on the shared service path (the CLI logs the full config at debug; this
     # one INFO line makes a webapi/API run diagnosable: what ran, over how much data).
     from ..logging_config import runtime_logger
 
     runtime_logger.info(
-        "run start: template=%s rows=%d retrieval=%s fusion=%s correction=%s query_opt=%s",
+        "run start: template=%s retrieval=%s fusion=%s correction=%s query_opt=%s",
         config.graph_template,
-        len(dataset),
         _run_needs_retrieval(config),
-        bool(getattr(getattr(config, "embedding_fusion", None), "enabled", False)),
-        bool(getattr(getattr(config, "query_correction", None), "enabled", False)),
-        bool(getattr(getattr(config, "query_optimization", None), "enabled", False)),
-    )
+        config.embedding_fusion.enabled,
+        config.query_correction.enabled,
+        config.query_optimization.enabled,
+    )  # the dataset_source node logs "Dataset size: N" once it loads in-graph
 
     bundle = create_pipeline_from_config(
         config, cache_manager, service_provider=service_provider
@@ -219,13 +206,16 @@ def _run_core(
     tracker = _create_tracker(config)
     metrics = _evaluate_metrics(
         config,
-        dataset,
+        None,  # the dataset is loaded in-graph by the dataset_source node (see load_info below)
         bundle,
         cache_manager,
         tracker,
         progress_callback=progress_callback,
         load_info=load_info,
     )
+    # The in-graph load stashed the loaded dataset on the shared ``load_info`` dict, so the
+    # caller's num_samples/metadata needs no pre-graph load.
+    dataset = load_info.get("dataset")
     return metrics, dataset
 
 

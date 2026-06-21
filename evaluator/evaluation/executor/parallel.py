@@ -1,7 +1,6 @@
-"""Intra-level parallel execution + device serialization (T5).
+"""Intra-level parallel execution + device serialization.
 
-Moved verbatim from the former ``evaluation/phased.py`` (Phase 1, X3). Runs a
-topological level's independent nodes concurrently on threads, serialized per device
+Runs a topological level's independent nodes concurrently on threads, serialized per device
 so two nodes never contend for one GPU. The shared stage-times lock lives in
 ``engine`` (``_run_one_node`` owns the accumulation).
 """

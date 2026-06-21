@@ -1,11 +1,11 @@
 """Metrics stage handlers: per-branch aggregate report + the single-branch metrics node.
 
 Registers the ``metrics`` and ``aggregate`` handlers at import time. The metric **registry**
-is the one place metrics are computed (Phase 4 L3 removed the legacy double-compute path); the
+is the one place metrics are computed; the
 flat ``WER``/``MRR``/``Recall@k``/... keys are report-derived aliases (`_derive_bare_keys`).
 Diagnostics the report does not carry + the per-item intermediates the rag/judge stages consume
 are computed from the aligned per-item state. WER/CER score the ASR hypothesis (`query_text`,
-immutable since Phase 4) — no separate raw_query_text snapshot.
+immutable) — no separate raw_query_text snapshot.
 
 Two concerns are extracted to siblings: the provenance assembly (``metrics_provenance``) and the
 IR diagnostics (``metrics_diagnostics``); this core owns the report assembly + the typed metric
@@ -103,6 +103,48 @@ def _attach_report(results, report) -> None:
 
     results["report"] = report
     results.update(flatten_report(report))
+
+
+def attach_judge_metrics(s: "RunState") -> None:
+    """Merge the LLM-judge per-query scores into the report as registry metrics (J3).
+
+    The judge node runs *downstream* of the report assembler (and, in a branched run, of the
+    terminal ``aggregate``), so its keyed ``judge_*`` ItemSets are not on the bus when the
+    report is first scored. This terminal pass — called from the finalize node, after every
+    report producer has run — scores those ItemSets through the SAME metric registry + reducer
+    and merges the scalars into ``report['branches'][<branch>]`` + the flat leaderboard keys.
+    No-op when the judge did not run (no ``judge_*`` ItemSets published), so a judge-off run
+    (the parity default) is byte-identical."""
+    report = s.results.get("report") if s.results else None
+    if not isinstance(report, dict):
+        return
+    from ..item_set import ItemSet
+
+    # Scan every producer's slots (not the finalize node's bindings) — the judge ItemSets are
+    # published by the answer_judge node, which is not wired as a finalize input.
+    judge_arts: Dict[str, ItemSet] = {}
+    for pid, art in list(s.ctx.slots()):
+        if art in ("judge_scores", "judge_pass") or art.startswith("judge_aspect_"):
+            val = s.ctx.get(pid, art)
+            if isinstance(val, ItemSet):
+                judge_arts[art] = val
+    if not judge_arts:
+        return
+    from ..metric_registry import compute_metrics
+    from ..aggregate import flatten_report, reduce_scores
+
+    # collect_all → exactly the judge_* metrics fire (only judge artifacts are present).
+    scores = compute_metrics(judge_arts, collect_all=True)
+    if not scores:
+        return
+    # The judge runs once globally (single query_traces); attach to the run's mode branch when
+    # present (single-branch), else the first branch (a branched run's primary).
+    branches = report.setdefault("branches", {})
+    target = s.mode if s.mode in branches else next(iter(branches), s.mode)
+    branch = branches.setdefault(target, {})
+    for name, item_scores in scores.items():
+        branch[name] = reduce_scores(item_scores, with_ci=True)
+    s.results.update(flatten_report(report))
 
 
 def _retrieval_wer_impact(
@@ -258,16 +300,13 @@ def _wer_cer_pair(pair):
 def _asr_item_scores(s: RunState):
     """Per-item raw-ASR WER/CER lists (consumed by the answer-gen / judge / trace stages).
 
-    The per-item WER/CER map is a pure, CPU-bound, order-preserving fold, so it runs through the
-    4b ``parallel_map`` (``sync`` by default → byte-identical to the serial loop; ``thread`` /
-    ``process`` parallelize the GIL-bound edit-distance work)."""
+    The per-item WER/CER map is a pure, CPU-bound, order-preserving fold."""
     if not asr_ran(s):  # only ASR modes carry WER/CER
         return [], []
-    from ..executor.cpu_parallel import parallel_map, resolve_cpu_backend
+    from ..executor.cpu_parallel import run_per_item
 
     pairs = list(zip(_reference_transcriptions(s), _asr_hypothesis(s)))
-    backend, workers = resolve_cpu_backend(s.config)
-    scored = parallel_map(_wer_cer_pair, pairs, backend=backend, workers=workers)
+    scored = run_per_item(s, _wer_cer_pair, pairs)
     return [w for w, _ in scored], [c for _, c in scored]
 
 
@@ -289,9 +328,8 @@ _BARE_KEY_FOR = {
 
 def _derive_bare_keys(results: "RunResults", scores: Dict[str, Any], asr_mode: bool) -> None:
     """Surface the registry per-item scores as the legacy flat bare keys (report-derived
-    aliases, L3) — the registry is the single scalar source. WER/CER are gated to ASR runs
-    (``asr_mode``; legacy parity: audio_emb/audio_text carry no WER). Means are identical to the
-    deleted legacy scalars (smoke-confirmed: single-branch WER 0.6541 == registry wer)."""
+    aliases) — the registry is the single scalar source. WER/CER are gated to ASR runs
+    (``asr_mode``; audio_emb/audio_text carry no WER)."""
     for name, items in scores.items():
         key = _BARE_KEY_FOR.get(name)
         if key is None:
@@ -405,7 +443,7 @@ def _attach_registry_report(
         if values is not None and len(values) >= n:
             artifacts[name] = ItemSet(ids, list(values)[:n])
 
-    # Bus-first: the ASR hypothesis in ASR modes (query_text is immutable since Phase 4, so
+    # Bus-first: the ASR hypothesis in ASR modes (query_text is immutable, so
     # this is the un-rewritten output `wer`/`cer` score); the spoken reference in audio modes
     # (legacy parity — there the "query" scored by text metrics is the GT).
     reference = _reference_transcriptions(s)

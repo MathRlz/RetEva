@@ -61,3 +61,15 @@ def resolve_cpu_backend(config: Any) -> Tuple[str, int]:
     if backend not in BACKENDS:
         raise ValueError(f"cpu_stage_executor must be one of {BACKENDS}, got {backend!r}")
     return backend, int(getattr(config, "cpu_stage_workers", 0) or 0)
+
+
+def run_per_item(s: Any, fn: Callable, items: Sequence[Any], **bound: Any) -> List[Any]:
+    """Map a picklable per-item ``fn`` over ``items`` via :func:`parallel_map`, resolving the
+    backend from the run config (``s.config``). ``**bound`` are bound onto ``fn`` with
+    ``functools.partial``. The single shape behind the 4b per-item stages (WER/CER, augment,
+    correct, optimize, augment_audio)."""
+    import functools
+
+    backend, workers = resolve_cpu_backend(s.config)
+    f = functools.partial(fn, **bound) if bound else fn
+    return parallel_map(f, items, backend=backend, workers=workers)
