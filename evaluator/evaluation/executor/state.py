@@ -201,6 +201,26 @@ class RunState:
         every handler overlays on its global config."""
         return getattr(self.current_node, "params", None) or {}
 
+    def node_overlay(self, base: Any, keys: tuple, casts: Optional[Dict] = None,
+                     force: Optional[Dict] = None) -> Any:
+        """The effective config for the current node: the global ``base`` with this node's real
+        params overlaid (``dataclasses.replace``). Only genuine feature keys override — never the
+        operator-alias discriminator fields (op/level/family/…), which would mask the global with
+        defaults — and an empty node returns ``base`` unchanged, so the pre-explicit (mode+features)
+        path stays a no-op (parity). ``force`` pins fields the node's mere presence implies (a tts
+        node ⇒ ``enabled=True``). This is how a feature becomes an explicit node carrying its params
+        instead of a top-level ``features:`` block."""
+        from dataclasses import replace as _replace
+
+        overlay = {k: v for k, v in self.node_params.items()
+                   if k in keys and v not in (None, "")}
+        for k, cast in (casts or {}).items():
+            if k in overlay:
+                overlay[k] = cast(overlay[k])
+        if base is None or (not overlay and not force):
+            return base
+        return _replace(base, **{**(force or {}), **overlay})
+
     def _producers(self, name: str) -> list:
         """Producer node ids bound to input ``name`` for the current node (in order)."""
         bindings = getattr(self.current_node, "bindings", ())
@@ -264,22 +284,6 @@ class RunState:
             raise KeyError(f"no published producer for input '{name}'")
         return default
 
-    def input_role(self, role: str, default: Any = None) -> Any:
-        """Read the input bound to an edge ``role`` (operator-abstraction comparison-by-edge).
-
-        Returns the value the producer tagged ``role`` (e.g. ``expected`` / ``actual``)
-        published — so a generic ``measure`` node compares its pair by role rather than by
-        hardcoded artifact names. Empty (→ ``default``) for every node that hasn't opted into
-        role-tagged edges, so existing handlers are unaffected."""
-        from ..item_set import ItemSet
-
-        roles = getattr(self.current_node, "binding_roles", ())
-        for art, producer, r in roles:
-            if r == role and self.ctx.has(producer, art):
-                value = self.ctx.get(producer, art)
-                return value.values if isinstance(value, ItemSet) else value
-        return default
-
     def get_items(self, name: str, default: Any = _MISSING) -> Any:
         """Read input ``name`` as a keyed ``ItemSet``. A producer that published a plain
         list is wrapped with positional index ids (best-effort) so keyed consumers work."""
@@ -307,7 +311,3 @@ class RunState:
                 if isinstance(value, ItemSet):
                     return value
         return default
-
-    def get_artifacts(self, name: str) -> list:
-        """Read input ``name`` from every bound producer (e.g. fusion's two embedders)."""
-        return [self.ctx.get(pid, name) for pid in self._producers(name)]

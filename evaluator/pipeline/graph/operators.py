@@ -1,7 +1,8 @@
-"""Operator vocabulary: the alias bijection (DAG_OPERATOR_ABSTRACTION.md).
+"""Operator vocabulary: the alias bijection (evaluator-architecture.md §9).
 
-The 34 named node types collapse into ~11 generic **operators** whose behavior is selected
-by fields. This module holds the two halves of that bijection:
+The named node types collapse into 12 **operators** whose behavior is selected by fields
+(asr and tts are first-class — two different models' nodes, no discriminator). This module
+holds the two halves of that bijection:
 
 * ``ALIASES`` — *forward*: ``old_name -> (operator, fixed_fields)``. Used at one chokepoint
   (``wiring._normalize_spec_item``) to expand a legacy node-type string (or an
@@ -19,11 +20,13 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 # old node-type name -> (operator, fixed discriminator fields merged into params).
+# asr and tts are FIRST-CLASS node types (self-mapped): two different model nodes, not one
+# `convert` operator discriminated by an `op` field — the graph names what runs.
 ALIASES: Dict[str, Tuple[str, dict]] = {
     "dataset_source": ("source", {}),
     "dataset_union": ("source", {"union": True}),
-    "tts": ("convert", {"op": "tts"}),
-    "asr": ("convert", {"op": "asr"}),
+    "tts": ("tts", {}),
+    "asr": ("asr", {}),
     "text_embedding": ("embed", {"axis": "query", "modality": "text"}),
     "audio_embedding": ("embed", {"axis": "query", "modality": "audio"}),
     "corpus_embedding": ("embed", {"axis": "corpus"}),
@@ -86,6 +89,12 @@ def expand_alias(name: str, params: Optional[dict]) -> Tuple[str, Optional[dict]
     its own registered node). A name that is already an operator (or unknown) is unchanged.
     Pure — the input params dict is not mutated.
     """
+    if name == "convert":
+        # Back-compat: the retired `convert` operator (asr/tts discriminated by `op`) resolves
+        # to the first-class node type; the `op` field is dropped (the type IS the op).
+        kind = "tts" if (params or {}).get("op") == "tts" else "asr"
+        rest = {k: v for k, v in (params or {}).items() if k != "op"}
+        return kind, (rest or None)
     if name not in ALIASES:
         return name, params
     operator, fixed = ALIASES[name]

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from .graph.display import display_label
 from .graph.operators import expand_alias, node_kind, operator_discriminators
+from .graph.artifacts import STRUCTURAL_ARTIFACTS
 from .graph.registry import _resolve as resolve_field
 from .graph.registry import node_category, node_domain, node_model_field
 from .stage_graph import _effective_inputs as effective_inputs
@@ -31,4 +32,5 @@ __all__ = [
     "display_artifact_names",
     "dataset_columns",
     "get_stage_node_def",
+    "STRUCTURAL_ARTIFACTS",
 ]

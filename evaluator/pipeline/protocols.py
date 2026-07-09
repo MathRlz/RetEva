@@ -6,43 +6,11 @@ for pipeline components, enabling type checking and ensuring consistency
 across different pipeline implementations.
 """
 
-from typing import Any, Dict, List, Optional, Protocol, Tuple, TypedDict, Union, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_checkable
 
 import numpy as np
 import torch
 from ..models.retrieval.contracts import ScoredRetrievalResult
-
-
-@runtime_checkable
-class EmbeddingPipeline(Protocol):
-    """
-    Protocol for embedding pipelines (text and audio).
-
-    Embedding pipelines convert input data (text or audio) into dense
-    vector representations (embeddings).
-    """
-
-    def process(self, *args: Any, **kwargs: Any) -> np.ndarray:
-        """
-        Process a single input and return its embedding.
-
-        Returns:
-            np.ndarray: Embedding vector
-        """
-        ...
-
-    def process_batch(self, *args: Any, **kwargs: Any) -> np.ndarray:
-        """
-        Process a batch of inputs and return their embeddings.
-
-        Returns:
-            np.ndarray: Array of embedding vectors with shape (batch_size, embedding_dim)
-        """
-        ...
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        ...
 
 
 @runtime_checkable
@@ -240,21 +208,3 @@ class RetrievalPipelineProtocol(Protocol):
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache/index statistics."""
         ...
-
-
-# Type aliases for common return types
-EmbeddingArray = np.ndarray
-SearchResult = Union[ScoredRetrievalResult, Tuple[Any, float]]
-SearchResults = List[SearchResult]
-BatchSearchResults = List[SearchResults]
-
-
-class RetrievalPayload(TypedDict, total=False):
-    """Canonical payload shape used by retrieval/evaluation."""
-    doc_id: str
-    text: str
-
-# Cache stats type
-
-
-CacheStats = Dict[str, Union[int, float, Dict[str, Union[int, float]]]]

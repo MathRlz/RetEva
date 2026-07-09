@@ -144,9 +144,14 @@ def run_graph(
     # pipeline-presence detection would misread as audio_text fusion.
     configured_mode = None
     if eval_config is not None and getattr(eval_config, "model", None) is not None:
-        from ...pipeline.graph.modes import _config_template
+        from ...pipeline.graph.modes import _config_template, label_from_graph
 
-        configured_mode = _config_template(eval_config)
+        # a back-compat template reference wins; else derive the label from the explicit graph's
+        # node kinds (audio_emb vs audio_text hinges on corpus_embedding vs text_embedding),
+        # which presence-detection alone can't tell apart.
+        configured_mode = _config_template(eval_config) or label_from_graph(
+            getattr(eval_config, "graph_override", None)
+        )
     mode = detect_graph_template(
         retrieval_pipeline,
         asr_pipeline,

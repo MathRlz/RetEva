@@ -1,7 +1,7 @@
 """Node-centric YAML config → ``EvaluationConfig``.
 
-The human-readable config is organized by *node* (mirroring the DAG): a ``graph:``
-block picks the pipeline mode (auto-derive) and a ``nodes:`` block carries each node's
+The human-readable config is organized by *node* (mirroring the DAG): ``graph.nodes`` IS
+the spec (every capability is a node) and a ``nodes:`` block carries each node's
 model + params. This loader translates that shape into the legacy config dict and reuses
 ``EvaluationConfig.from_dict`` for construction + validation (so there is one runtime
 config object, only the YAML surface changes). See ``evaluator-architecture.md`` §10.
@@ -10,7 +10,8 @@ Example::
 
     experiment: { name: whisper_jina, output_dir: evaluation_results }
     dataset:    { id: pubmed_qa, questions: q.json, corpus: corpus.json }
-    graph:      { mode: asr_text_retrieval }
+    graph:      { nodes: [dataset_source, tts, corpus_embedding, vector_db, asr,
+                          text_embedding, retrieval, metrics, finalize] }
     nodes:
       asr:            { model: whisper, size: large }
       text_embedding: { model: labse }
@@ -30,7 +31,10 @@ class GraphConfigError(ConfigurationError):
     """Raised when a node-centric config cannot be translated."""
 
 
-# nodes.<name>.<key> → ModelConfig field. Each model node shares the same param names.
+# nodes.<name>.<key> → ModelConfig field. Each model node shares the same param names. This is the
+# node→flat TRANSLATION (one default per role): the FIRST graph node of a role folds here; further
+# same-role nodes keep their model on the node (a per-node override) — the flat ``model.*`` is the
+# default for nodes without their own. So the config is node-centric while back-compat holds.
 _MODEL_NODE_FIELDS = {
     "asr": {
         "model": "asr_model_type",
@@ -64,6 +68,22 @@ _MODEL_NODE_FIELDS = {
         "quantization": "audio_emb_quantization",
     },
 }
+
+# A feature node's non-structural params fold into its capability sub-config (the same
+# top-level key the old ``features:`` block populated), so the built StageNode stays structural
+# (== the mode+features build) while the run reads the full config off the sub-config object.
+# The overlay (RunState.node_overlay) still lets a per-node param win when one is present.
+_FEATURE_NODE_CONFIG = {
+    "tts": "audio_synthesis",
+    "answer_judge": "judge",
+    "answer_gen": "answer_generation",
+    "query_correction": "query_correction",
+    "query_optimization": "query_optimization",
+    "multi_query_retrieval": "query_optimization",
+    "fusion": "embedding_fusion",  # embedding-level only; result_fusion is hybrid rank-fusion (vdb)
+}
+# Structural params kept ON a feature node (they pick the variant, not the model config).
+_FEATURE_NODE_KEEP = {"multi_query_retrieval": {"method"}}
 
 # dataset.<key> → DataConfig field.
 _DATASET_FIELDS = {
@@ -235,21 +255,25 @@ def _translate_graph(
     model: Dict[str, Any],
     role_by_dataset_id: Dict[str, str],
 ) -> None:
-    """graph → pipeline_mode (+ optional explicit node/edge override, config C2)."""
+    """graph → explicit node/edge/branch override (a config is an explicit graph; C2)."""
     graph = new.pop("graph", None) or {}
+    if "mode" in graph:
+        # Hard cut-over: a config is an explicit graph. Pipeline templates live only in the
+        # builder (as a node-KIND skeleton the user fills in) — never in a config file.
+        raise GraphConfigError(
+            "graph.mode is no longer supported — a config is an explicit graph. Replace "
+            "`graph: {mode: <m>}` with `graph: {nodes: [...]}` (see any configs/*.yaml). "
+            "Every capability is a node; the run label is derived from the graph."
+        )
     # Reject unknown graph keys (T2): the graph block is parsed selectively, so a typo
     # (e.g. `branchess:`) would otherwise be silently dropped → a quietly wrong experiment.
-    _GRAPH_KEYS = {"mode", "nodes", "edges", "branches"}
+    _GRAPH_KEYS = {"nodes", "edges", "branches"}
     _unknown_graph = set(graph) - _GRAPH_KEYS
     if _unknown_graph:
         raise GraphConfigError(
             f"Unknown key(s) under graph: {sorted(_unknown_graph)}. "
             f"Allowed: {sorted(_GRAPH_KEYS)}."
         )
-    if "mode" in graph and "nodes" not in graph:
-        # The graph template is a build-time reference on graph_override (expanded with the
-        # config's features). There is no pipeline_mode field; an explicit graph.nodes wins.
-        legacy.setdefault("graph_override", {})["template"] = graph["mode"]
     if "nodes" in graph:
         node_ids = graph["nodes"]
         # Items are a node-type string OR a dict {id, type, params} for a distinct
@@ -303,12 +327,18 @@ def _translate_graph(
         graph_vdb: Dict[str, Any] = {}
         folded_model_roles: set = set()
         for item in node_ids:
-            if not isinstance(item, dict):
-                continue
-            ntype, nparams = item.get("type"), item.get("params") or {}
-            if not nparams:
-                continue
+            if isinstance(item, dict):
+                ntype, nparams = item.get("type"), item.get("params") or {}
+            else:
+                ntype, nparams = item, {}
             kind = node_kind(ntype, nparams)
+            # A feature NODE present ⇒ its capability is enabled (the graph is the spec) — even a
+            # bare node with no params. The param fold below (dict nodes) adds the rest.
+            _cap = _FEATURE_NODE_CONFIG.get(kind)
+            if _cap:
+                legacy[_cap] = {"enabled": True, **(legacy.get(_cap) or {})}
+            if not isinstance(item, dict) or not nparams:
+                continue
             # The discriminator selectors (op/axis/modality/method/…) identify the kind, not
             # the model/vector_db config — split them out so the config fold doesn't choke on
             # them, and keep them on the node so node_kind still resolves it at build time. For
@@ -317,31 +347,49 @@ def _translate_graph(
             selectors = {k: v for k, v in nparams.items() if k in disc}
             fields = {k: v for k, v in nparams.items() if k not in disc}
             if kind in _MODEL_NODE_FIELDS:
-                if fields:
-                    # A legacy config carries one model per role, so two nodes folding the same
-                    # role would silently clobber. Most often that's a corpus embedder missing
-                    # its ``axis: corpus`` discriminator (so it resolves to text_embedding) —
-                    # name the likely fix rather than run the wrong experiment.
-                    if kind in folded_model_roles:
-                        raise GraphConfigError(
-                            f"two graph nodes resolve to the same model role '{kind}', which a "
-                            f"config can carry only once. Disambiguate the operators — e.g. set "
-                            f"'axis: corpus' on the corpus embedder so it isn't a second "
-                            f"'{kind}'."
-                        )
+                if fields and kind not in folded_model_roles:
+                    # Node-centric config, first node of a role: its model becomes the flat
+                    # ``model.*`` DEFAULT (the shared global pipeline + back-compat). Strip it off
+                    # the node, which then reads that global (and the corpus embedder shares it).
                     folded_model_roles.add(kind)
                     model.update(_map_keys(
                         fields, _MODEL_NODE_FIELDS[kind], f"graph.nodes.{ntype}.params"
                     ))
-                item["params"] = selectors
+                    item["params"] = selectors
+                elif fields:
+                    # A SECOND+ node of the same role keeps its model ON the node — a per-node
+                    # override the executor builds via ``_node_pipeline`` — instead of clobbering
+                    # the single flat field. So one graph can run two distinct text embedders
+                    # (asymmetric query-enc ≠ doc-enc, or an ablation). The flat ``model.*`` holds
+                    # one default per role; nodes without their own model fall back to it.
+                    item["params"] = {**selectors, **fields}
+                else:
+                    item["params"] = selectors
             elif kind == "vector_db":
                 if fields:
                     graph_vdb.update(_vector_db_node_to_config(fields))
                 item["params"] = selectors
             elif kind == "retrieval":
-                if fields:
-                    graph_vdb.update(_retrieval_to_vector_db(fields))
-                item["params"] = selectors
+                # `mode`/`vectors` are per-arm FUNCTIONAL params the search handler reads off the
+                # node (retrieval.py: a hybrid vs sparse arm, an audio-vector arm) — keep them on
+                # the node so two retrieval nodes can differ; fold only the tuning keys
+                # (k/distance/gpu_id/fusion/reranker/mmr) into the shared vector_db config.
+                keep = {k: v for k, v in fields.items() if k in ("mode", "vectors")}
+                fold = {k: v for k, v in fields.items() if k not in ("mode", "vectors")}
+                if fold:
+                    graph_vdb.update(_retrieval_to_vector_db(fold))
+                item["params"] = {**selectors, **keep}
+            elif kind in _FEATURE_NODE_CONFIG:
+                # A feature node carries its capability config as params; fold them into the
+                # sub-config block so the built node stays structural (parity with mode+features).
+                # Node params WIN over the presence-derived enabled:True and any top-level block
+                # (the graph is the spec) — so an explicit `enabled: false` on the node holds.
+                on_node = _FEATURE_NODE_KEEP.get(kind, set())
+                keep = {k: v for k, v in fields.items() if k in on_node}
+                fold = {k: v for k, v in fields.items() if k not in on_node}
+                cap = _FEATURE_NODE_CONFIG[kind]
+                legacy[cap] = {**(legacy.get(cap) or {}), **fold}
+                item["params"] = {**selectors, **keep}
         if graph_vdb:
             legacy["vector_db"] = {**legacy.get("vector_db", {}), **graph_vdb}
         # edges: list of {from, to} → {to: [from, ...]} for build_graph_from_spec
@@ -358,8 +406,8 @@ def _translate_graph(
     # Each entry is {id, <node_type>: <model-str | params>}. Stored on graph_override so the
     # build path (build_graph_for_config / _build_run_graph) calls build_branched_graph.
     if "branches" in graph:
-        if "mode" not in graph:
-            raise GraphConfigError("graph.branches requires graph.mode too.")
+        if "nodes" not in graph:
+            raise GraphConfigError("graph.branches requires graph.nodes (the base to branch over).")
         branches = graph["branches"]
         if not isinstance(branches, list) or not all(
             isinstance(b, dict) and "id" in b for b in branches
@@ -373,7 +421,10 @@ def _translate_graph(
 
 
 # dataset_source node params that are NOT data settings (kept on the node).
-_DATASET_NODE_CONTROL_PARAMS = {"dataset", "role", "fields"}
+# ``fields``/``extra_outputs``/``suppress_outputs`` are transient display-only schema injected for
+# the preview/canvas (the column map + derived/bridge artifacts + transform-superseded outputs) —
+# never persisted back to the run config.
+_DATASET_NODE_CONTROL_PARAMS = {"dataset", "role", "fields", "extra_outputs", "suppress_outputs"}
 
 
 def _synthesize_dataset_entry(
@@ -561,13 +612,19 @@ def legacy_yaml_to_graph_yaml(old: Dict[str, Any]) -> Dict[str, Any]:
         if leftover:
             new["data"] = leftover  # passthrough for unmapped data fields
 
-    # model → graph.mode + nodes.{asr,text_embedding,audio_embedding}
+    # model → explicit graph nodes + nodes.{asr,text_embedding,audio_embedding}
     model = old.pop("model", None)
     nodes: Dict[str, Any] = {}
     if isinstance(model, dict):
         model = dict(model)
         if "pipeline_mode" in model:
-            new["graph"] = {"mode": model.pop("pipeline_mode")}
+            # Retired: a config never carries graph.mode. Expand a legacy pipeline_mode into the
+            # explicit node skeleton (base features) so the migrated config is graph-first. An
+            # explicit graph_override below overrides this. (resolved_node_config overwrites the
+            # graph outright with the real DAG, so this only matters for bare legacy migration.)
+            from ..pipeline.graph.assembly import FeatureSet, assemble_specs
+
+            new["graph"] = {"nodes": assemble_specs(model.pop("pipeline_mode"), FeatureSet())}
 
     # explicit graph override → graph.{nodes,edges}; drop when absent (no null noise)
     override = old.pop("graph_override", None)
@@ -656,7 +713,7 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
     """
     from .serialization import to_nested_dict
     from ..pipeline.graph.modes import build_graph_for_config
-    from ..pipeline.graph.operators import node_kind
+    from ..pipeline.graph.operators import expand_alias, node_kind
 
     # Reuse the migration translator for the non-graph sections + the per-kind resolved-config
     # map (model fields → node params, vector_db → store/retrieval) it already computes; then
@@ -664,6 +721,41 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
     ncfg = legacy_yaml_to_graph_yaml(to_nested_dict(config))
     per_kind = ncfg.pop("nodes", {}) or {}
     ncfg.pop("model", None)
+
+    # Multi-source: lift data.datasets (legacy field names) back to the node-centric top-level
+    # `datasets:` map, or the dataset_source nodes' `dataset` refs won't resolve on reload.
+    _ds_map = (ncfg.get("data") or {}).pop("datasets", None)
+    if _ds_map:
+        inv = _DATA_FIELD_TO_KEY
+        ncfg["datasets"] = {
+            sid: {inv.get(k, k): v for k, v in (entry or {}).items() if v is not None}
+            for sid, entry in _ds_map.items()
+        }
+
+    # Preview-only display schema injected by _attach_dataset_fields — derived on every load,
+    # never persisted. Everything else in n.params is structural and must survive (a hybrid
+    # graph's dense/sparse arms, result_fusion's hybrid flag, a branch's oracle) — the per-kind
+    # blob alone gave every same-kind instance identical params and broke the round-trip.
+    _transient = {"fields", "extra_outputs", "suppress_outputs", "embedding_space"}
+
+    # A BRANCHED graph's expanded DAG cannot round-trip through plain auto-wiring (each branch
+    # was wired in isolation; a reload would cross-bind the @branch instances). Serialize the
+    # pre-expansion spec instead — expansion + CSE are deterministic, so reload rebuilds the
+    # identical graph; the resolved model/vdb params live in the sections/per-kind blocks.
+    override = getattr(config, "graph_override", None) or {}
+    if override.get("branches"):
+        edge_list = [
+            {"from": src, "to": dst}
+            for dst, srcs in (override.get("edges") or {}).items()
+            for src in srcs
+        ]
+        ncfg["graph"] = {
+            "nodes": list(override.get("nodes") or []),
+            "branches": list(override["branches"]),
+            **({"edges": edge_list} if edge_list else {}),
+        }
+        ncfg["nodes"] = {k: v for k, v in per_kind.items() if v}  # per-kind resolved models
+        return ncfg
 
     graph = build_graph_for_config(config)
     nodes = []
@@ -673,6 +765,18 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
         entry: Dict[str, Any] = {"id": n.id, "type": kind}
         # Drop unset fields (None / empty) so a node carries only what was actually resolved.
         params = {k: v for k, v in (per_kind.get(kind) or {}).items() if v not in (None, {}, [])}
+        # `mode` is per-arm (dense/sparse), not a shared retrieval tuning key — the default
+        # `dense` from the global blob must not stamp every arm (the node's own value, unioned
+        # below, is the truth; a non-default global hybrid still passes through).
+        if kind == "retrieval" and params.get("mode") == "dense":
+            params.pop("mode")
+        # The node's OWN structural params win over the shared per-kind blob; skip the
+        # discriminators the friendly `type` already implies (op/axis/level/…).
+        _op, alias_disc = expand_alias(kind, None)
+        params.update({
+            k: v for k, v in (n.params or {}).items()
+            if k not in _transient and (alias_disc or {}).get(k) != v
+        })
         if params:
             entry["params"] = params
         nodes.append(entry)

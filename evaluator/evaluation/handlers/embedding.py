@@ -221,15 +221,26 @@ def _stage_fusion(s: RunState) -> None:
         return
     audio_arr = np.asarray(s.get_artifact("audio_query_vectors"))
     text_arr = np.asarray(text_arr)
+    # The embedding-fusion config is carried on the fusion node (was config.embedding_fusion).
+    fcfg = s.node_overlay(
+        s.embedding_fusion_config,
+        ("enabled", "audio_weight", "text_weight", "fusion_method", "normalize_before_fusion",
+         "require_same_dimensions", "dimension_reduction", "target_dim"),
+        casts={"enabled": bool, "audio_weight": float, "text_weight": float,
+               "normalize_before_fusion": bool, "require_same_dimensions": bool},
+        force={"enabled": True},
+    )
+    if fcfg is not None and not fcfg.enabled:
+        return  # a per-branch {enabled: false} fusion node — retrieval falls back to audio-only
     # (audio↔text alignment is its own embedding_alignment_metrics node now.)
     validate_fusion_config(
-        s.embedding_fusion_config,
+        fcfg,
         audio_dim=audio_arr.shape[1],
         text_dim=text_arr.shape[1],
     )
     with TimingContext("Embedding Fusion", logger):
         fused_embeddings, fusion_meta = fuse_embeddings(
-            audio_arr, text_arr, s.embedding_fusion_config
+            audio_arr, text_arr, fcfg
         )
     # M7: concatenate+PCA fusion fits a dim-reducer on *this* call's query vectors. It is
     # deterministic within a run (random_state=42) but fit per-run; keep it on the bus rather
@@ -250,7 +261,7 @@ def _stage_fusion(s: RunState) -> None:
     )
     logger.info(
         "Using fused embeddings for retrieval (method: %s)",
-        s.embedding_fusion_config.fusion_method,
+        fcfg.fusion_method,
     )
     s.put_artifact("fused_query_vectors", fused_embeddings)
 

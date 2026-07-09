@@ -8,7 +8,17 @@ data:
   num_workers: 0
   test_size: 0.0
 graph:
-  mode: asr_text_retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - asr
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: whisper

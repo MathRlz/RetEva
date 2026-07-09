@@ -8,54 +8,6 @@ from ..config.types import VectorDBType, to_enum
 REFINE_OPS = ("rerank", "mmr", "threshold")
 
 
-# ── Focused sub-configs ──────────────────────────────────────────────
-
-
-@dataclass
-class RerankerConfig:
-    """Reranking settings."""
-    mode: str = "none"  # none | token_overlap | cross_encoder
-    top_k: int = 20
-    weight: float = 0.5
-    enabled: bool = False
-    model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    device: Optional[str] = None
-
-
-@dataclass
-class HybridSearchConfig:
-    """Hybrid (dense + sparse) retrieval settings."""
-    dense_weight: float = 0.5
-    fusion_method: str = "weighted"  # weighted | rrf | max_score
-    rrf_k: int = 60
-    bm25_k1: float = 1.5
-    bm25_b: float = 0.75
-
-
-@dataclass
-class DiversityConfig:
-    """MMR and diversity settings."""
-    use_mmr: bool = False
-    mmr_lambda: float = 0.5
-    diversity_penalty: float = 0.0
-    min_similarity_threshold: Optional[float] = None
-    max_similarity_threshold: Optional[float] = None
-
-
-@dataclass
-class BackendConfig:
-    """Backend-specific connection settings."""
-    chromadb_path: Optional[str] = None
-    chromadb_collection_name: str = "documents"
-    qdrant_url: Optional[str] = None
-    qdrant_path: Optional[str] = None
-    qdrant_collection_name: str = "documents"
-    qdrant_api_key: Optional[str] = None
-
-
-# ── Main config (backward-compatible flat facade) ────────────────────
-
-
 @dataclass
 class VectorDBConfig:
     """
@@ -193,40 +145,3 @@ class VectorDBConfig:
                 raise ValueError(
                     f"refine_ops entries must be one of {REFINE_OPS}, got {bad}"
                 )
-
-    # ── Sub-config accessors (read-only views over flat fields) ──────
-
-    @property
-    def reranker(self) -> RerankerConfig:
-        return RerankerConfig(
-            mode=self.reranker_mode, top_k=self.reranker_top_k,
-            weight=self.reranker_weight, enabled=self.reranker_enabled,
-            model=self.reranker_model, device=self.reranker_device,
-        )
-
-    @property
-    def hybrid(self) -> HybridSearchConfig:
-        return HybridSearchConfig(
-            dense_weight=self.hybrid_dense_weight,
-            fusion_method=self.hybrid_fusion_method,
-            rrf_k=self.rrf_k, bm25_k1=self.bm25_k1, bm25_b=self.bm25_b,
-        )
-
-    @property
-    def diversity(self) -> DiversityConfig:
-        return DiversityConfig(
-            use_mmr=self.use_mmr, mmr_lambda=self.mmr_lambda,
-            diversity_penalty=self.diversity_penalty,
-            min_similarity_threshold=self.min_similarity_threshold,
-            max_similarity_threshold=self.max_similarity_threshold,
-        )
-
-    @property
-    def backend(self) -> BackendConfig:
-        return BackendConfig(
-            chromadb_path=self.chromadb_path,
-            chromadb_collection_name=self.chromadb_collection_name,
-            qdrant_url=self.qdrant_url, qdrant_path=self.qdrant_path,
-            qdrant_collection_name=self.qdrant_collection_name,
-            qdrant_api_key=self.qdrant_api_key,
-        )

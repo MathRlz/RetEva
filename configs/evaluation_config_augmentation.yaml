@@ -10,7 +10,12 @@ data:
   audio_dir: test_audio/
   transcripts_file: test_audio/transcripts.json
 graph:
-  mode: asr_only
+  nodes:
+  - dataset_source
+  - asr
+  - transcription_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: whisper
@@ -24,24 +29,3 @@ runtime:
     log_dir: logs
     console_level: INFO
     file_level: DEBUG
-augmentation:
-  enabled: true
-  add_noise: true
-  noise_type: white
-  snr_db: 15.0
-  speed_perturbation: true
-  speed_range:
-  - 0.9
-  - 1.1
-  pitch_shift: false
-  pitch_semitones_range:
-  - -2
-  - 2
-  volume_change: false
-  volume_range:
-  - 0.8
-  - 1.2
-  codec_simulation: false
-  codec: mp3
-  bitrate: 64
-  n_variants: 3

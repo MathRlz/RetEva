@@ -5,13 +5,49 @@ dataset:
   id: pubmed_qa
   questions: examples/data/pubmedqa/questions.json
   corpus: examples/data/pubmedqa/corpus.json
-  trace_limit: 0          # all 50 questions
+  trace_limit: 0
   batch_size: 4
 data:
   strict_validation: false
   num_workers: 0
 graph:
-  mode: asr_text_retrieval
+  nodes:
+  - dataset_source
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      language: en
+      voice: en_US-lessac-medium
+      sample_rate: 16000
+      seed: 42
+      output_dir: examples/data/pubmedqa/audio
+  - corpus_embedding
+  - vector_db
+  - asr
+  - id: query_correction
+    type: query_correction
+    params:
+      method: kb
+      use_default_rules: true
+      kb_max_distance: 1
+  - id: query_optimization
+    type: query_optimization
+    params:
+      method: rewrite
+      use_local_server: true
+      local_server_url: http://localhost:11434/v1/chat/completions
+      model: llama3.1
+      temperature: 0.3
+      max_iterations: 2
+      use_initial_context: false
+      timeout_s: 30
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: seamless_m4t
@@ -38,30 +74,6 @@ runtime:
   logging:
     console_level: INFO
     file_level: DEBUG
-# Improve the spoken query between ASR and retrieval (chain: optimized > corrected > raw).
-query_correction:
-  enabled: true
-  method: kb              # fuzzy-snap mis-transcribed medical terms (no LLM)
-  use_default_rules: true
-  kb_max_distance: 1
-query_optimization:
-  enabled: true
-  method: rewrite         # LLM reformulation before embedding
-  use_local_server: true
-  local_server_url: http://localhost:11434/v1/chat/completions   # Ollama
-  model: llama3.1         # set to a model you've `ollama pull`-ed
-  temperature: 0.3
-  max_iterations: 2
-  use_initial_context: false   # no retrieved context exists yet at this stage
-  timeout_s: 30
-audio_synthesis:
-  enabled: true
-  provider: mms
-  language: en
-  voice: en_US-lessac-medium
-  sample_rate: 16000
-  seed: 42
-  output_dir: examples/data/pubmedqa/audio
-checkpoint_enabled: true
-checkpoint_interval: 100
-resume_from_checkpoint: true
+  checkpoint_enabled: true
+  checkpoint_interval: 100
+  resume_from_checkpoint: true

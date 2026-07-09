@@ -9,12 +9,6 @@ from .factory import (
 from .protocols import (
     ASRPipelineProtocol,
     AudioEmbeddingPipelineProtocol,
-    BatchSearchResults,
-    CacheStats,
-    EmbeddingPipeline,
-    RetrievalPayload,
-    SearchResult,
-    SearchResults,
     RetrievalPipelineProtocol,
     TextEmbeddingPipelineProtocol,
 )
@@ -68,18 +62,11 @@ __all__ = [
     "AudioSynthesizer",
     "AudioAugmenter",
     # Protocols
-    "EmbeddingPipeline",
     "TextEmbeddingPipelineProtocol",
     "AudioEmbeddingPipelineProtocol",
     "ASRPipelineProtocol",
     "RetrievalPipelineProtocol",
-    "RetrievalPayload",
-    "SearchResult",
-    "SearchResults",
-    "BatchSearchResults",
     "ScoredRetrievalResult",
-    # Type aliases
-    "CacheStats",
     # Factory functions
     "check_backend_dependencies",
     "create_pipeline_from_config",

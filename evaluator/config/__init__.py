@@ -34,7 +34,7 @@ from .vector_db import VectorDBConfig
 from .device_pool import DevicePoolConfig
 from .tracking import TrackingConfig
 from .service_runtime import ServiceRuntimeConfig
-from .evaluation import EvaluationConfig, FeaturesConfig, preflight_check
+from .evaluation import EvaluationConfig, preflight_check
 from .templates import ConfigTemplates
 
 # Import utilities and helpers
@@ -77,7 +77,6 @@ __all__ = [
     "TrackingConfig",
     "ServiceRuntimeConfig",
     "EvaluationConfig",
-    "FeaturesConfig",
     "ConfigTemplates",
     # Utilities
     "validate_device_string",

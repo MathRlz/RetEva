@@ -155,51 +155,6 @@ class EvaluationResults:
 
         return result
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EvaluationResults":
-        """Create EvaluationResults from dictionary.
-
-        Accepts structured format with `_config` and `_metadata`.
-
-        Args:
-            data: Dictionary containing results data. Can be either:
-                - {"_config": {...}, "_metadata": {...}, "MRR": 0.75, ...}
-
-        Returns:
-            EvaluationResults instance.
-
-        Raises:
-            ValueError: If data format is invalid or missing required fields.
-
-        Example:
-            >>> data = {
-            ...     "MRR": 0.75,
-            ...     "WER": 0.12,
-            ...     "_config": {"experiment_name": "test"},
-            ...     "_metadata": {"num_samples": 100}
-            ... }
-            >>> results = EvaluationResults.from_dict(data)
-        """
-        # Extract metadata and config
-        metadata = data.get("_metadata", {})
-        config_data = data.get("_config")
-
-        # Extract metrics (everything except _config and _metadata)
-        metrics = {k: v for k, v in data.items() if not k.startswith("_")}
-
-        if config_data is None:
-            raise ValueError("Missing _config section in result data")
-        if isinstance(config_data, dict):
-            config = EvaluationConfig.from_dict(config_data)
-        else:
-            raise ValueError(f"Invalid _config format: {type(config_data)}")
-
-        return cls(
-            metrics=metrics,
-            config=config,
-            metadata=metadata,
-        )
-
     def save(self, path: Union[str, Path], indent: int = 2) -> None:
         """Save results to JSON file.
 
@@ -219,34 +174,6 @@ class EvaluationResults:
 
         with open(path, "w") as f:
             json.dump(data, f, indent=indent)
-
-    @classmethod
-    def load(cls, path: Union[str, Path]) -> "EvaluationResults":
-        """Load results from JSON file.
-
-        Args:
-            path: File path to load from.
-
-        Returns:
-            EvaluationResults instance.
-
-        Raises:
-            FileNotFoundError: If file doesn't exist.
-            ValueError: If file format is invalid.
-
-        Example:
-            >>> results = EvaluationResults.load("results/my_eval.json")
-            >>> print(results.metrics["MRR"])
-        """
-        path = Path(path)
-
-        if not path.exists():
-            raise FileNotFoundError(f"Results file not found: {path}")
-
-        with open(path, "r") as f:
-            data = json.load(f)
-
-        return cls.from_dict(data)
 
     def __str__(self) -> str:
         """Pretty print results for human-readable output.

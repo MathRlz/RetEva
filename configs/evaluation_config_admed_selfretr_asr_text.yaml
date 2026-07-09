@@ -8,19 +8,29 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: admed_voice
-  path: null                # admed_voice location; null = ADMED_VOICE_PATH / EVALUATOR_DATA_DIR env
-  split: both               # train / test / both (admed has no validation split)
+  path: null
+  split: both
   batch_size: 32
 data:
   num_workers: 4
   test_size: 0.0
 graph:
-  mode: asr_text_retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - asr
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: whisper
     name: openai/whisper-medium
-    adapter: null            # optional: a Polish medical ASR adapter dir improves transcription
+    adapter: null
     device: cuda:0
   text_embedding:
     model: jina_v4

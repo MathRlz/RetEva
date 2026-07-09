@@ -11,7 +11,26 @@ data:
   strict_validation: true
   num_workers: 0
 graph:
-  mode: asr_text_retrieval
+  nodes:
+  - dataset_source
+  - id: tts
+    type: tts
+    params:
+      provider: espeak
+      voice: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: data/pubmed_qa/audio
+  - corpus_embedding
+  - vector_db
+  - asr
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - build_query_traces
+  - finalize
 nodes:
   asr:
     model: whisper
@@ -37,13 +56,6 @@ runtime:
   logging:
     console_level: INFO
     file_level: DEBUG
-audio_synthesis:
-  enabled: false
-  provider: espeak
-  voice: en
-  sample_rate: 16000
-  seed: 42
-  output_dir: data/pubmed_qa/audio
-checkpoint_enabled: true
-checkpoint_interval: 100
-resume_from_checkpoint: true
+  checkpoint_enabled: true
+  checkpoint_interval: 100
+  resume_from_checkpoint: true

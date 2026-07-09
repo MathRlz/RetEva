@@ -1,7 +1,6 @@
 """RAG (Retrieval-Augmented Generation) components for search and retrieval."""
 
-from .sparse import BM25Retriever
-from .hybrid import HybridRetriever, reciprocal_rank_fusion
+from .hybrid import reciprocal_rank_fusion
 from .reranker import BaseReranker, CrossEncoderReranker
 from .strategies import (
     DistanceMetric,
@@ -10,15 +9,10 @@ from .strategies import (
     mmr_search,
     mmr_rerank,
     threshold_filter,
-    threshold_filter_with_fallback,
 )
 
 __all__ = [
-    # Sparse retrieval
-    "BM25Retriever",
-
     # Hybrid retrieval
-    "HybridRetriever",
     "reciprocal_rank_fusion",
 
     # Reranking
@@ -32,5 +26,4 @@ __all__ = [
     "mmr_search",
     "mmr_rerank",
     "threshold_filter",
-    "threshold_filter_with_fallback",
 ]

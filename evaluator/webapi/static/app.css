@@ -63,7 +63,7 @@ details.step > summary::-webkit-details-marker { display: none; }
 details.step > summary::before { content: "\25B8"; display: inline-block; width: 1em; color: #94a3b8; transition: transform .15s; }
 details.step[open] > summary::before { transform: rotate(90deg); }
 
-/* ── Shared DAG view (builder + Config&Run preview) — BUILDER_UX.md §3.4 ── */
+/* ── Shared DAG view (builder + Config&Run preview) ──────────────────────── */
 :root {
   --dag-src: #2e7d32;       --dag-src-bg: #e8f5e9;
   --dag-model: #1565c0;     --dag-model-bg: #e3f2fd;
@@ -165,6 +165,11 @@ details.step[open] > summary::before { transform: rotate(90deg); }
 /* optional-input edges: present but de-emphasized (data spine stays crisp) */
 .drawflow .connection.dag-opt-edge .main-path {
   stroke-dasharray: 5 5; opacity: .35; stroke-width: 1.5px; }
+
+/* fallback-producer edges: an input with several producers reads the NEWEST at runtime;
+   earlier producers are real-but-fallback bindings — drawn, but visually secondary */
+.drawflow .connection.dag-fallback-edge .main-path {
+  stroke-dasharray: 3 6; opacity: .3; stroke-width: 1.5px; }
 
 #param-panel input.invalid { border-color: #c62828; outline: 1px solid #c62828; }
 

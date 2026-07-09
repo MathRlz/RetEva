@@ -11,7 +11,29 @@ data:
   strict_validation: true
   num_workers: 0
 graph:
-  mode: asr_text_retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - asr
+  - text_embedding
+  - id: retrieval
+    type: retrieval
+    params:
+      mode: dense
+  - id: retrieval_sparse
+    type: retrieval
+    params:
+      mode: sparse
+  - id: result_fusion
+    type: result_fusion
+    params:
+      hybrid: true
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - build_query_traces
+  - finalize
 vector_db:
   bm25_k1: 1.5
   bm25_b: 0.75
@@ -49,13 +71,6 @@ runtime:
   logging:
     console_level: INFO
     file_level: DEBUG
-audio_synthesis:
-  enabled: false
-  provider: espeak
-  voice: en
-  sample_rate: 16000
-  seed: 42
-  output_dir: data/pubmed_qa/audio
-checkpoint_enabled: true
-checkpoint_interval: 100
-resume_from_checkpoint: true
+  checkpoint_enabled: true
+  checkpoint_interval: 100
+  resume_from_checkpoint: true

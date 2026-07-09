@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .assembly import FeatureSet, assemble_specs
 from .branches import build_branched_graph
 from .registry import (
+    ARTIFACT_REFERENCE_TRANSCRIPTION,
     StageGraph,
     node_model_field,
     validate_graph_artifacts,
@@ -81,10 +82,12 @@ def build_stage_graph(
     refine_method: str = "rewrite_with_context",
     refine_context_top_k: int = 3,
     query_opt_method: str = "rewrite",
+    audio_synthesis_enabled: bool = False,
 ) -> StageGraph:
     """Build execution DAG for currently supported pipeline modes (kwargs → FeatureSet)."""
     resolve_graph_template(mode)  # validates the mode
     features = FeatureSet(
+        audio_synthesis_enabled=audio_synthesis_enabled,
         embedding_fusion_enabled=embedding_fusion_enabled,
         result_fusion_enabled=result_fusion_enabled,
         query_opt_enabled=query_opt_enabled,
@@ -108,7 +111,9 @@ def build_stage_graph(
     return graph
 
 
-def _dataset_fields_for(config: Any, params: Optional[dict]) -> Optional[dict]:
+def _dataset_fields_for(
+    config: Any, params: Optional[dict], has_tts: bool = False
+) -> Optional[dict]:
     """The declared column schema for a dataset_source node instance.
 
     Multi-source nodes (``params.dataset``) resolve their `datasets:` entry overlaid on
@@ -136,15 +141,60 @@ def _dataset_fields_for(config: Any, params: Optional[dict]) -> Optional[dict]:
     out = {"fields": dict(descriptor.fields)}
     if descriptor.embedding_space:
         out["embedding_space"] = descriptor.embedding_space
+    extra = _derived_source_outputs(descriptor, config, has_tts)
+    if extra:
+        out["extra_outputs"] = extra
     return out
 
 
+def _derived_source_outputs(descriptor: Any, config: Any, has_tts: bool) -> Tuple[str, ...]:
+    """Artifacts the runtime source publishes that aren't literal dataset columns, so the
+    preview wires the nodes the run wires from the static source outputs:
+    - a self-retrieval ``corpus`` (audio datasets retrieve against their own items — no corpus
+      column exists), and
+    - the TTS-bridge ASR ``reference_transcription`` (the synthesized speech's reference IS the
+      question text; published whenever a tts node bridges text→audio).
+    """
+    # Self-retrieval corpus is descriptor-level (shared with the builder picker via
+    # descriptor.derived_outputs); the TTS-bridge reference is graph-gated (a tts node exists —
+    # the graph is the spec, not a config.audio_synthesis flag).
+    extra: List[str] = list(descriptor.derived_outputs)
+    if (
+        ARTIFACT_REFERENCE_TRANSCRIPTION not in set(descriptor.fields.values())
+        and ARTIFACT_REFERENCE_TRANSCRIPTION not in extra
+        and descriptor.supports_generation
+        and has_tts
+    ):
+        extra.append(ARTIFACT_REFERENCE_TRANSCRIPTION)
+    return tuple(extra)
+
+
 def _attach_dataset_fields(node_spec: Any, config: Any) -> list:
-    """Inject ``params.fields`` (the column schema) into dataset_source spec entries.
+    """Inject ``params.fields`` (the column schema) into dataset_source spec entries, and mark
+    ``query_audio`` suppressed when a tts node in the same graph is its real producer.
 
     Runs before wiring so ``_effective_outputs`` (and every DAG display surface) sees
     per-dataset columns. Entries may be node-type strings or {id, type, params} dicts.
     """
+    from .operators import node_kind
+
+    def _kind(e):
+        return node_kind(
+            e if isinstance(e, str) else (e.get("type") or e.get("id")),
+            None if isinstance(e, str) else e.get("params"),
+        )
+
+    kinds = {_kind(e) for e in node_spec}
+    # A transform that RE-PRODUCES a query artifact is its real producer, so the dataset_source
+    # must not also advertise it (its port would dangle — the consumer's edge resolves to the
+    # transform — and it would show an input the dataset lacks). tts owns query_audio (synthesized
+    # from the question). asr owns query_text (the hypothesis) UNLESS a tts node consumes the
+    # source's query_text first (the TTS bridge, where the question text feeds tts).
+    superseded = []
+    if "tts" in kinds:
+        superseded.append("query_audio")
+    if "asr" in kinds and "tts" not in kinds:
+        superseded.append("query_text")
     out = []
     for entry in node_spec:
         if isinstance(entry, str):
@@ -156,9 +206,17 @@ def _attach_dataset_fields(node_spec: Any, config: Any) -> list:
             out.append(entry)
             continue
         params = dict(spec.get("params") or {})
-        injected = _dataset_fields_for(config, params)
+        changed = False
+        injected = _dataset_fields_for(config, params, has_tts="tts" in kinds)
         if injected and "fields" not in params:
             params.update(injected)
+            changed = True
+        existing = tuple(params.get("suppress_outputs") or ())
+        new_suppress = tuple(a for a in superseded if a not in existing)
+        if new_suppress:
+            params["suppress_outputs"] = (*existing, *new_suppress)
+            changed = True
+        if changed:
             spec["params"] = params
             out.append(spec)
         else:
@@ -181,42 +239,72 @@ def _wire_mode_graph(
     the source of the run's reference_transcription binding). A mode-less explicit DAG labels
     "custom"."""
     override = graph_override or {}
-    if override.get("nodes") and not override.get("branches"):
+    branches = override.get("branches")
+    if override.get("nodes"):
         nodes = override["nodes"]
         if attach_fields:
             nodes = _attach_dataset_fields(nodes, config)
+        if branches:
+            return build_branched_graph(
+                nodes, branches, mode=mode or "custom", edges=override.get("edges")
+            )
         return build_graph_from_spec(
             nodes, mode=mode or "custom", edges=override.get("edges")
         )
     if mode is None:
         raise ValueError(
-            "a config needs a template (graph.mode) or an explicit graph.nodes to build from."
+            "a config needs an explicit graph.nodes to build from (or a builder template name)."
         )
     base = assemble_specs(mode, features)
     if attach_fields:
         base = _attach_dataset_fields(base, config)
-    if override.get("branches"):
-        return build_branched_graph(base, override["branches"], mode=mode)
+    if branches:
+        return build_branched_graph(base, branches, mode=mode)
     return build_graph_from_spec(base, mode=mode)
 
 
 def _config_template(config: Any) -> Optional[str]:
-    """The graph template a config selects (``graph_override['template']``, set from
-    ``graph.mode``). ``None`` for an explicit-graph config — the run derives the label instead."""
+    """The graph template a config selects (``graph_override['template']``, back-compat
+    ``model.pipeline_mode`` / ConfigTemplates only). ``None`` for every explicit-graph config —
+    the run derives the label from the node kinds instead."""
     override = getattr(config, "graph_override", None) or {}
     template = override.get("template")
     return str(template) if template else None
 
 
+def label_from_graph(graph_override: Optional[dict]) -> Optional[str]:
+    """Derive the run/leaderboard mode LABEL from an explicit graph's node kinds — the graph is
+    the spec (no ``graph.mode``). Mirrors ``detect_graph_template``'s pipeline logic on nodes so
+    audio_emb stays distinguishable from audio_text fusion: audio_embedding + text_embedding ⇒
+    ``audio_text_retrieval``; audio_embedding alone ⇒ ``audio_emb_retrieval``; asr + retrieval ⇒
+    ``asr_text_retrieval``; asr alone ⇒ ``asr_only``. ``None`` when no query head is present (a
+    custom graph — the run then derives a 'custom' label)."""
+    from .operators import node_kind
+
+    kinds = set()
+    for n in (graph_override or {}).get("nodes") or []:
+        if isinstance(n, str):
+            t, p = n, {}
+        else:
+            t, p = n.get("type") or n.get("id"), n.get("params") or {}
+        kinds.add(node_kind(t, p))
+    if "audio_embedding" in kinds:
+        return "audio_text_retrieval" if "text_embedding" in kinds else "audio_emb_retrieval"
+    if "asr" in kinds:
+        return "asr_text_retrieval" if "retrieval" in kinds else "asr_only"
+    return None
+
+
 def build_graph_for_config(config: Any) -> StageGraph:
-    """Build the execution DAG for a config: an explicit ``graph.nodes`` if present, else the
-    config's graph *template* (``graph.mode``) expanded with its feature flags. Single source for
+    """Build the execution DAG for a config: the explicit ``graph.nodes`` (every config), else a
+    back-compat template reference expanded with its feature flags. Single source for
     preview + CLI + the factory's build plan. Duck-typed (no config import). The run uses
     :func:`build_run_graph`, which sources its feature flags from the built pipelines instead."""
+    override = getattr(config, "graph_override", None)
     return _wire_mode_graph(
-        _config_template(config),
+        _config_template(config) or label_from_graph(override),
         _features_from_config(config),
-        graph_override=getattr(config, "graph_override", None),
+        graph_override=override,
         config=config,
         attach_fields=True,
     )
@@ -328,4 +416,8 @@ def _features_from_config(config: Any) -> FeatureSet:
         rag_rounds=int(getattr(rag, "rounds", 1) or 1),
         refine_method=str(getattr(rag, "refine_method", "rewrite_with_context")),
         refine_context_top_k=int(getattr(rag, "refine_context_top_k", 3) or 3),
+        audio_synthesis_enabled=bool(
+            getattr(config, "audio_synthesis", None)
+            and getattr(config.audio_synthesis, "enabled", False)
+        ),
     )

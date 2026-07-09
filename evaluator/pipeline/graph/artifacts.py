@@ -123,6 +123,13 @@ ARTIFACT_QUERY_TRACES = "query_traces"
 # Generated-answer scores (answer_metrics node): reference_answer × generated_answer.
 ARTIFACT_ANSWER_SCORES = "answer_scores"
 
+# Plumbing artifacts the simplified UI hides from a meaningful node's input ports when no rendered
+# node produces them — bundles whose PRODUCER is always-hidden reporting plumbing (not user-authored
+# data): ``query_traces`` (fed to the judge by the hidden build_query_traces node) and ``metrics``
+# (the judge's vestigial ordering input from the hidden report node). Data-spine intermediates like
+# corpus_vectors are NOT here — their producer (corpus_embedding) is a normal, shown node.
+STRUCTURAL_ARTIFACTS = frozenset({ARTIFACT_METRICS, ARTIFACT_QUERY_TRACES})
+
 SOURCE_ARTIFACTS = frozenset(
     {
         ARTIFACT_QUERY_AUDIO,

@@ -77,19 +77,7 @@ def _run_asr_phase(
     return hypotheses, ground_truth, asr_hyps_for_wer, relevance, query_ids
 
 
-@register_stage_handler("convert", time_key="asr_s")
-def _stage_convert(s: RunState) -> None:
-    """The ``convert`` operator (modality change): dispatch by op to ASR (audio→text) or
-    TTS (text→audio). Bodies unchanged; tts lives in the audio handlers."""
-    from .audio import _stage_tts
-    from ._dispatch import dispatch_operator
-
-    return dispatch_operator("convert", {
-        "asr": _stage_asr,
-        "tts": _stage_tts,
-    }, s)
-
-
+@register_stage_handler("asr", time_key="asr_s")
 def _stage_asr(s: RunState) -> None:
     """ASR (or oracle bypass): produce query texts + relevance for ASR modes.
 

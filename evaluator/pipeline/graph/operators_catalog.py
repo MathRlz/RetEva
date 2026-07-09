@@ -99,25 +99,45 @@ register_stage_node(
 )
 
 
-# ── operator: convert (modality change) — asr (A→T) / tts (T→A) ──────
-# asr is a managed MODEL (device/offload); tts runs its own TTS backend and is a
-# transform — so `category`/`model_field` are field-dependent (callable). Resolved
-# byte-identically to the two former nodes.
-def _convert_is_tts(params):
-    return (params or {}).get("op") == "tts"
-
+# ── asr (A→T) and tts (T→A): two first-class model nodes ─────────────
+# The former `convert` operator collapsed both behind an `op` discriminator; they are different
+# MODELS' nodes, so each is its own node type with a plain (non-field-resolved) contract.
+# asr is a managed MODEL (device/offload); tts runs its own TTS backend and is a transform.
+register_stage_node(
+    "asr",
+    category="model",
+    domain="transcription",
+    model_field="model.asr_model_type",
+    inputs=(ARTIFACT_QUERY_AUDIO,),
+    outputs=(ARTIFACT_QUERY_TEXT,),
+    # asr's spoken-transcription ground truth (``reference_transcription``, what its query_text
+    # is scored against by WER/CER) is an optional input wired from the source.
+    optional_inputs=(ARTIFACT_REFERENCE_TRANSCRIPTION,),
+    param_spec={
+        # oracle: the ASR branch uses the reference transcriptions instead of running ASR (R2).
+        "oracle": {"kind": "bool", "default": False},
+    },
+)
 
 register_stage_node(
-    "convert",
-    category=lambda p: "transform" if _convert_is_tts(p) else "model",
-    domain=lambda p: "ingest" if _convert_is_tts(p) else "transcription",
-    model_field=lambda p: None if _convert_is_tts(p) else "model.asr_model_type",
-    inputs=lambda p: (ARTIFACT_QUERY_TEXT,) if _convert_is_tts(p) else (ARTIFACT_QUERY_AUDIO,),
-    outputs=lambda p: (ARTIFACT_QUERY_AUDIO,) if _convert_is_tts(p) else (ARTIFACT_QUERY_TEXT,),
+    "tts",
+    category="transform",
+    domain="ingest",
+    inputs=(ARTIFACT_QUERY_TEXT,),
+    outputs=(ARTIFACT_QUERY_AUDIO,),
     param_spec={
-        "op": {"kind": "select", "choices": ["asr", "tts"]},
-        # oracle: the ASR branch uses the reference transcriptions instead of running ASR (R2).
-        "oracle": {"kind": "bool", "default": False, "show_if": {"op": ["asr"]}},
+        # tts synthesis params (were config.audio_synthesis; now carried on the tts node) — the
+        # provider mirrors the @register_tts_model registry; add a name when one is registered.
+        "provider": {"kind": "select", "choices": ["piper", "mms", "m4t", "xtts_v2"],
+                     "default": "piper"},
+        "voice": {"kind": "text", "default": "en_US-lessac-medium"},
+        "language": {"kind": "text", "default": "en"},
+        "sample_rate": {"kind": "number", "default": 16000},
+        "speed": {"kind": "number", "default": 1.0},
+        "pitch": {"kind": "number", "default": 1.0},
+        "volume": {"kind": "number", "default": 1.0},
+        "seed": {"kind": "number", "default": 42},
+        "output_dir": {"kind": "text", "default": "prepared_benchmarks/audio"},
     },
 )
 
@@ -212,6 +232,16 @@ def _combine_param_spec(params):
     return {
         "level": {"kind": "select", "choices": ["embedding", "result", "set"],
                   "default": "embedding"},
+        # embedding-fusion params (were config.embedding_fusion; now carried on the fusion node)
+        "audio_weight": {"kind": "number", "default": 0.5, "show_if": {"level": ["embedding"]}},
+        "text_weight": {"kind": "number", "default": 0.5, "show_if": {"level": ["embedding"]}},
+        "fusion_method": {"kind": "select",
+                          "choices": ["weighted", "concatenate", "max_pool", "average"],
+                          "default": "weighted", "show_if": {"level": ["embedding"]}},
+        "normalize_before_fusion": {"kind": "bool", "default": True,
+                                    "show_if": {"level": ["embedding"]}},
+        "require_same_dimensions": {"kind": "bool", "default": False,
+                                    "show_if": {"level": ["embedding"]}},
         # result-fusion params (the rank-fusion of two retrieved sets)
         "hybrid": {"kind": "bool", "default": False, "show_if": {"level": ["result"]}},
         "method": {"kind": "select", "choices": list_fusions(),
@@ -409,7 +439,11 @@ def _search_inputs(params):
 def _search_optional(params):
     if _is_fanout(params):
         return ()
-    return (QUERY_TEXT_CHAIN, ARTIFACT_REFERENCE_TRANSCRIPTION)
+    # `query_text`/`reference_transcription` are functional (the lexical query for sparse/hybrid +
+    # audio_text scoring); `relevant_docs` is retrieval's ground truth — an optional input wired
+    # from the source (consumed by the derived retrieval_metrics node; the search handler reads it
+    # only for the off-by-default diagnostic logger).
+    return (QUERY_TEXT_CHAIN, ARTIFACT_REFERENCE_TRANSCRIPTION, ARTIFACT_RELEVANT_DOCS)
 
 
 def _search_param_spec(params):
@@ -488,6 +522,11 @@ register_stage_node(
         # fetch_k pool when an mmr node follows.
         "k": {"kind": "number"},
         "top_k": {"kind": "number", "show_if": {"op": ["rerank"]}},
+        # rerank tuning the handler reads via `_node_reranking` (model is the model picker):
+        # the dense↔rerank blend weight + the reranker's device. (mmr's lambda / threshold's
+        # cutoff are global config, NOT node-settable — so they are intentionally absent.)
+        "weight": {"kind": "number", "show_if": {"op": ["rerank"]}},
+        "device": {"kind": "device", "show_if": {"op": ["rerank"]}},
     },
 )
 # metrics/answer_gen/finalize use optional_inputs to encode ordering: metrics after
@@ -544,6 +583,31 @@ register_stage_node(
                    "choices": ["transcription", "retrieval", "answer", "alignment",
                                "judge", "report"]},
         "trace": {"kind": "bool", "default": False},
+        # judge params (were config.judge; now carried on the answer_judge node)
+        "enabled": {"kind": "bool", "default": False, "show_if": {"family": ["judge"]}},
+        "model": {"kind": "text", "default": "gpt-4o-mini", "show_if": {"family": ["judge"]}},
+        "judge_mode": {"kind": "select", "choices": ["retrieval", "answer_quality", "both"],
+                       "default": "both", "show_if": {"family": ["judge"]}},
+        "judge_aspects": {"kind": "json", "show_if": {"family": ["judge"]}},
+        "score_aggregation": {"kind": "select", "choices": ["average", "weighted", "min", "max"],
+                              "default": "average", "show_if": {"family": ["judge"]}},
+        "aspect_weights": {"kind": "json", "show_if": {"family": ["judge"]}},
+        "reference_mode": {"kind": "select", "choices": ["free", "graded"],
+                           "default": "free", "show_if": {"family": ["judge"]}},
+        "pass_threshold": {"kind": "number", "default": 0.5, "show_if": {"family": ["judge"]}},
+        "max_cases": {"kind": "number", "default": 50, "show_if": {"family": ["judge"]}},
+        "temperature": {"kind": "number", "default": 0.0, "show_if": {"family": ["judge"]}},
+        "timeout_s": {"kind": "number", "default": 60, "show_if": {"family": ["judge"]}},
+        "include_doc_text": {"kind": "bool", "default": True, "show_if": {"family": ["judge"]}},
+        "judge_top_k": {"kind": "number", "default": 5, "show_if": {"family": ["judge"]}},
+        "use_local_server": {"kind": "bool", "default": False, "show_if": {"family": ["judge"]}},
+        "local_server_url": {"kind": "text", "show_if": {"family": ["judge"]}},
+        "api_base": {"kind": "text", "default": "https://api.openai.com/v1/chat/completions",
+                     "show_if": {"family": ["judge"]}},
+        "api_key_env": {"kind": "text", "default": "OPENAI_API_KEY",
+                        "show_if": {"family": ["judge"]}},
+        "system_prompt": {"kind": "text", "show_if": {"family": ["judge"]}},
+        "user_prompt_template": {"kind": "text", "show_if": {"family": ["judge"]}},
     },
 )
 # ── operator: generate (was answer_gen) — query (+ context?) → answers ──
@@ -551,18 +615,36 @@ register_stage_node(
     "generate",
     category="transform",
     domain="generation",
-    # The query is the only hard requirement: `retrieved` is OPTIONAL *context* — present →
-    # RAG (grounded in the retrieved docs), absent → closed-book QA (a no-corpus dataset has
-    # no retrieval node, so no `retrieved` artifact). The effective (most-processed) query
-    # text drives generation either way; in retrieval modes the optional `retrieved` still
-    # orders answer_gen after retrieval via its producer binding (parity-preserving).
+    # The query (`query_text` chain) is the only hard requirement: `retrieved` is OPTIONAL
+    # *context* — present → RAG (grounded in the retrieved docs), absent → closed-book QA (a
+    # no-corpus dataset has no retrieval node, so no `retrieved` artifact). The optional
+    # `retrieved` also orders answer_gen after retrieval via its producer binding. `short_answers`
+    # is the answer's ground truth — an optional input wired from the source (the derived
+    # answer_metrics node scores the generated answer against it). The handler reads the query from
+    # `query_text` only (the dead `metrics` edge + non-asr `reference_transcription` fallback gone).
     inputs=(QUERY_TEXT_CHAIN,),
     outputs=(ARTIFACT_GENERATED_ANSWERS,),
-    optional_inputs=(
-        ARTIFACT_RETRIEVED,
-        ARTIFACT_METRICS,
-        ARTIFACT_REFERENCE_TRANSCRIPTION,
-    ),
+    optional_inputs=(ARTIFACT_RETRIEVED, ARTIFACT_SHORT_ANSWERS),
+    # answer-gen params (were config.answer_generation; now carried on the answer_gen node)
+    param_spec={
+        "enabled": {"kind": "bool", "default": False},
+        "method": {"kind": "select", "choices": ["simple", "chain_of_thought", "multi_query"],
+                   "default": "simple"},
+        "model": {"kind": "text", "default": "gpt-4o-mini"},
+        "temperature": {"kind": "number", "default": 0.0},
+        "context_docs": {"kind": "number", "default": 3},
+        "context_max_chars": {"kind": "number", "default": 600},
+        "max_cases": {"kind": "number", "default": 0},
+        "timeout_s": {"kind": "number", "default": 120},
+        "compute_rouge": {"kind": "bool", "default": True},
+        "use_local_server": {"kind": "bool", "default": False},
+        "local_server_url": {"kind": "text"},
+        "api_base": {"kind": "text", "default": "https://api.openai.com/v1/chat/completions"},
+        "api_key_env": {"kind": "text", "default": "OPENAI_API_KEY"},
+        "system_prompt": {"kind": "text"},
+        "prompt_template": {"kind": "text"},
+        "reference_metadata_field": {"kind": "text", "default": "long_answer"},
+    },
 )
 # answer_metrics / build_query_traces / answer_judge = the `measure` operator with
 # family:answer / trace:true / family:judge (see the measure registration above).

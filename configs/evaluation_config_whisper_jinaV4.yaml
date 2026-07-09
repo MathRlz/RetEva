@@ -8,9 +8,17 @@ data:
   num_workers: 0
   test_size: 0.0
 graph:
-  mode: asr_text_retrieval
-model:
-  audio_emb_adapter_path: null
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - asr
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: whisper
@@ -44,6 +52,6 @@ runtime:
     log_dir: logs
     console_level: INFO
     file_level: DEBUG
-checkpoint_enabled: true
-checkpoint_interval: 50
-resume_from_checkpoint: true
+  checkpoint_enabled: true
+  checkpoint_interval: 50
+  resume_from_checkpoint: true

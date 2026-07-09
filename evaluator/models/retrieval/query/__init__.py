@@ -21,7 +21,6 @@ from .optimization import (
     decompose_query,
     generate_multi_queries,
     combine_retrieval_results,
-    clear_llm_cache,
 )
 
 # Import prompts if they exist
@@ -42,7 +41,6 @@ __all__ = [
     "decompose_query",
     "generate_multi_queries",
     "combine_retrieval_results",
-    "clear_llm_cache",
 ]
 
 if _has_prompts:

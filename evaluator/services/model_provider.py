@@ -41,7 +41,6 @@ ASRKey = Tuple[str, Optional[str], Optional[str], str]
 TextKey = Tuple[str, Optional[str], str]
 AudioKey = Tuple[str, Optional[str], Optional[str], int, float, str]
 RerankerKey = Tuple[str, Optional[str], Optional[str], int, int]
-TTSKey = Tuple[str, str, str, int]
 LLMServerKey = Tuple[str, str, int, str, int]
 logger = get_logger(__name__)
 
@@ -60,7 +59,6 @@ class ModelServiceProvider:
         self._text_services: Dict[TextKey, FactoryModelService] = {}
         self._audio_services: Dict[AudioKey, FactoryModelService] = {}
         self._reranker_services: Dict[RerankerKey, FactoryModelService[Any]] = {}
-        self._tts_services: Dict[TTSKey, FactoryModelService] = {}
         self._llm_server_services: Dict[LLMServerKey, LLMServerService] = {}
         # Soft-CPU offload warm pool (Roadmap 2c): models released under the
         # ``on_finish_soft_cpu`` policy are parked on host RAM (warm) instead of freed, so a
@@ -247,7 +245,6 @@ class ModelServiceProvider:
             self._text_services,
             self._audio_services,
             self._reranker_services,
-            self._tts_services,
         ):
             for key, service in list(bucket.items()):
                 if service._instance is model:  # service identity check only
@@ -368,26 +365,6 @@ class ModelServiceProvider:
         return service.get()
 
     @staticmethod
-    def _create_tts_backend(config):
-        provider_name = (config.provider or "piper").lower()
-        if provider_name == "piper":
-            from ..models.tts.piper_tts import PiperTTS
-
-            return PiperTTS(config)
-        if provider_name in {"xtts", "xtts_v2", "xtts-v2"}:
-            from ..models.tts.xtts_v2_tts import XTTSv2TTS
-
-            return XTTSv2TTS(config)
-        if provider_name in {"mms", "mms_tts", "mms-tts"}:
-            from ..models.tts.mms_tts import MMSTTS
-
-            return MMSTTS(config)
-        raise ValueError(
-            f"Unknown TTS provider: {provider_name}. "
-            f"Supported providers: piper, xtts_v2, mms"
-        )
-
-    @staticmethod
     def _create_llm_server_backend(config):
         server = factory_create_llm_server(
             backend=config.backend,
@@ -411,7 +388,6 @@ class ModelServiceProvider:
             self._text_services,
             self._audio_services,
             self._reranker_services,
-            self._tts_services,
         ):
             if offload:
                 for service in bucket.values():

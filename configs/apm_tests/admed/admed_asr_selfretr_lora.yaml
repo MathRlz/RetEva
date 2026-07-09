@@ -6,19 +6,29 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: admed_voice
-  path: /home/student5/datasets/admed_voice                # <- admed_voice dataset location
-  split: test               # test = speaker-disjoint holdout (admed has no native split)
+  path: /home/student5/datasets/admed_voice
+  split: test
   batch_size: 32
 data:
   num_workers: 4
-  test_size: 0.3            # the test split = a 30% speaker-disjoint holdout
+  test_size: 0.3
 graph:
-  mode: asr_text_retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - asr
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: whisper
     name: openai/whisper-medium
-    adapter: /home/student5/models/medical-transcribe-pl/natural_anonym_synth_cv_fl/            # <- your trained Whisper LoRA/PEFT adapter directory
+    adapter: /home/student5/models/medical-transcribe-pl/natural_anonym_synth_cv_fl/
     device: cuda:0
   text_embedding:
     model: jina_v4

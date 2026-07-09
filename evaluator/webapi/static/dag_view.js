@@ -1,11 +1,19 @@
 /* Shared DAG rendering for the builder (edit mode) and the Config&Run preview
- * (read-only). One rendering architecture, two modes — see BUILDER_UX.md.
+ * (read-only). One rendering architecture, two modes — see evaluator-architecture.md §12.1.
  * No build step: plain script exposing window.DagView. */
 (function () {
   'use strict';
 
   const DRAWFLOW_JS = 'https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.js';
   const DRAWFLOW_CSS = 'https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.css';
+
+  // Plumbing artifacts the simplified view hides from a node's input ports — derived bundles /
+  // ordering signals, not user-meaningful data (mirrors pipeline STRUCTURAL_ARTIFACTS). Hidden
+  // only when nothing in the CURRENTLY-RENDERED graph produces them: so the judge reads
+  // "answer + documents" in the simplified graph / builder, but the full DAG (where
+  // build_query_traces + report ARE drawn) keeps those ports and their edges.
+  const STRUCTURAL_ARTIFACTS = ['metrics', 'query_traces'];
+  let producedInView = null;  // Set of artifacts the current drawGraph render produces
 
   /* Load Drawflow once (pages that already include it skip the fetch). */
   function ensureDrawflow(cb, onError) {
@@ -40,10 +48,16 @@
    * query-text / query-vectors — is ONE port that accepts any alternative, not N dangling
    * ports); else one port per flat input/optional_input (palette drops / legacy specs). */
   function inputPorts(spec) {
-    if (Array.isArray(spec.input_ports)) return spec.input_ports;
-    return (spec.inputs || []).map(a => ({ label: a, names: [a], optional: false }))
-      .concat((spec.optional_inputs || []).map(a =>
-        ({ label: a, names: [a], optional: true })));
+    const ports = Array.isArray(spec.input_ports) ? spec.input_ports
+      : (spec.inputs || []).map(a => ({ label: a, names: [a], optional: false }))
+        .concat((spec.optional_inputs || []).map(a =>
+          ({ label: a, names: [a], optional: true })));
+    if (!producedInView) return ports;  // no render context yet → show all
+    // Drop a port that carries ONLY structural plumbing none of the rendered nodes produces
+    // (e.g. the judge's metrics/query_traces in the simplified graph). Edge-safe: edges match
+    // by artifact name, and the dropped ports have no producer to draw an edge from.
+    return ports.filter(p => !p.names.every(
+      n => STRUCTURAL_ARTIFACTS.indexOf(n) >= 0 && !producedInView.has(n)));
   }
 
   /* Node card: id, model line, labeled port columns (optional inputs italic + ?).
@@ -112,7 +126,11 @@
   function effectiveSpec(n, catalogue) {
     const base = (catalogue && catalogue[n.type || n.stage]) ||
                  { inputs: [], outputs: [], optional_inputs: [], category: 'transform' };
-    const pick = (k, d) => (n[k] !== undefined && n[k] !== null ? n[k]
+    // A carried contract is authoritative: only fall back to the catalogue tile when the key is
+    // truly ABSENT (undefined). An explicit `null` is meaningful — e.g. the model-free tts node
+    // resolves `family: null`; coalescing that null to a base default once made a loaded
+    // model-free node render a model picker.
+    const pick = (k, d) => (n[k] !== undefined ? n[k]
                             : (base[k] !== undefined ? base[k] : d));
     return {
       type: n.type || n.stage,
@@ -130,23 +148,36 @@
     };
   }
 
-  /* Estimated card width (px) for level spacing — content-driven sizing means the
-   * real width is only known after render; this tracks the CSS (10px labels, 18-char
-   * ellipsis cap, two port columns) closely enough for column placement. */
-  function estimateWidth(spec, params) {
-    const cap = s => Math.min((s || '').length, 18);
-    const inMax = Math.max(0,
-      ...inputPorts(spec).map(p => cap(p.label) + (p.optional ? 1 : 0)));
-    const outMax = Math.max(0, ...spec.outputs.map(cap));
-    const model = params && params.model
-      ? cap(params.model + (params.size ? ' · ' + params.size : '')) : 0;
-    return Math.max(170, (inMax + outMax) * 6 + 48, model * 7 + 24, cap(spec.type) * 8);
+  /* Measure each node's REAL rendered footprint (content-driven width + the variable height that
+   * ports / ground-truth rows / dataset columns add) by rendering its card off-screen with the
+   * SAME classes + filtered ports the canvas uses. Layout then spaces cards by actual size, not an
+   * estimate — which is what stops a tall card from overlapping its neighbour. Returns {id:{w,h}}.
+   * Must run AFTER producedInView is set (so measured ports == rendered ports). */
+  function measureNodes(nodes, catalogue) {
+    const host = document.createElement('div');
+    host.className = 'drawflow';  // so `.drawflow .drawflow-node` CSS (max-content width) applies
+    host.style.cssText = 'position:absolute; visibility:hidden; left:-99999px; top:0;';
+    document.body.appendChild(host);
+    const sizes = {};
+    (nodes || []).forEach(n => {
+      const spec = effectiveSpec(n, catalogue);
+      const el = document.createElement('div');
+      el.className = 'drawflow-node cat-' + (spec.category || 'transform');
+      el.style.position = 'static';  // flow in the host so each reports its own content box
+      el.innerHTML = '<div class="drawflow_content_node">' +
+        nodeHtml(n.id, spec, n.params || {}, n.columns, spec.label) + '</div>';
+      host.appendChild(el);
+      sizes[n.id] = { w: el.offsetWidth || 170, h: el.offsetHeight || 120 };
+    });
+    document.body.removeChild(host);
+    return sizes;
   }
 
-  /* Level-based layout: x per topological level (spacing from the widest card in the
-   * previous level), y per row. Rows within a level are ordered by the barycenter of
-   * their producers' rows (one-pass crossing reduction — BUILDER_UX.md §3.4). */
-  function layoutByLevels(levels, nodes, catalogue) {
+  /* Level-based layout: x per topological level (advanced by the level's widest MEASURED card), y
+   * by stacking each row's MEASURED height + a gap (so cards never overlap, whatever their size).
+   * Rows within a level are ordered by the barycenter of their producers' rows (crossing
+   * reduction). `sizes` = measureNodes() output; falls back to a default box if a node is absent. */
+  function layoutByLevels(levels, nodes, sizes) {
     const byId = {};
     (nodes || []).forEach(n => { byId[n.id] = n; });
     const rowOf = {};
@@ -166,28 +197,31 @@
       scored.forEach((s, ri) => { rowOf[s.id] = ri; });
       return scored.map(s => s.id);
     });
+    const sz = id => (sizes && sizes[id]) || { w: 170, h: 120 };
     const pos = {};
     let x = 30;
     ordered.forEach(lvl => {
-      let widest = 150;
-      lvl.forEach((id, ri) => {
-        pos[id] = { x, y: 30 + ri * 135 };
-        const n = byId[id];
-        if (n) widest = Math.max(widest, estimateWidth(effectiveSpec(n, catalogue), n.params));
+      let widest = 170, y = 30;
+      lvl.forEach(id => {
+        pos[id] = { x, y };
+        y += sz(id).h + 30;                  // next row below this card + a gap (no overlap)
+        widest = Math.max(widest, sz(id).w);
       });
-      x += widest + 90;  // card + gutter
+      x += widest + 90;                      // next level past the widest card + a gutter
     });
     return pos;
   }
 
-  /* Edge pairs to draw for a consumer: newest bound producer per artifact —
-   * except merge nodes (fusion), where every producer feeds the result. */
+  /* Edge triples [artifact, producer, isFallback] to draw for a consumer: EVERY binding is a
+   * real data dependency and gets an edge (hiding one left the earlier producer's port looking
+   * dangling — e.g. dataset_source.query_text feeding text_embedding as the fallback under
+   * asr's hypothesis). At runtime the NEWEST bound producer per artifact wins, so the last
+   * binding is the primary edge and earlier same-artifact bindings render as faded fallbacks. */
   function edgePairs(node) {
-    const type = node.type || node.stage;
-    if (type === 'fusion') return (node.bindings || []);
+    const bindings = node.bindings || [];
     const newest = {};
-    (node.bindings || []).forEach(([art, prod]) => { newest[art] = prod; }); // last wins
-    return Object.entries(newest);
+    bindings.forEach(([art, prod]) => { newest[art] = prod; }); // last wins = runtime read
+    return bindings.map(([art, prod]) => [art, prod, newest[art] !== prod]);
   }
 
   /* Center of a rendered port dot in precanvas coordinates. */
@@ -202,12 +236,14 @@
   }
 
   /* Artifact label at the edge midpoint (halo pill) + arrow glyph at the consumer
-   * anchor (BUILDER_UX.md §3.4). Suppressed on short edges — the port labels already
+   * anchor. Suppressed on short edges — the port labels already
    * tell the story there. Appended to the transformed precanvas so they pan/zoom along. */
   function decorateEdge(editor, art, fromDf, outIdx, toDf, inIdx, optional) {
     const conn = editor.precanvas && editor.precanvas.querySelector(
       `.connection.node_in_node-${toDf}.node_out_node-${fromDf}` +
       `.output_${outIdx}.input_${inIdx}`);
+    // a fallback edge (earlier producer of a multi-producer input) stays quiet: no label/arrow
+    if (conn && conn.classList.contains('dag-fallback-edge')) return;
     if (optional) {
       // de-emphasize: ordering/GT side-channels must not drown the data spine
       if (conn) conn.classList.add('dag-opt-edge');
@@ -235,9 +271,16 @@
   /* Render a whole graph {nodes:[{id, type|stage, params?, bindings?}], levels}
    * onto a Drawflow editor. Returns {nodeId: drawflowId}. */
   function drawGraph(editor, graph, catalogue) {
-    const pos = layoutByLevels(graph.levels || [], graph.nodes || [], catalogue);
+    // Which artifacts the nodes being rendered produce — drives inputPorts' structural-port
+    // hiding (a metrics/query_traces port stays only when its producer is on screen).
+    producedInView = new Set();
+    (graph.nodes || []).forEach(n => (effectiveSpec(n, catalogue).outputs || [])
+      .forEach(o => producedInView.add(o)));
+    // Measure real card sizes FIRST (with producedInView set, so measured ports == rendered ports),
+    // then place by measured footprint so cards never overlap.
+    const sizes = measureNodes(graph.nodes || [], catalogue);
+    const pos = layoutByLevels(graph.levels || [], graph.nodes || [], sizes);
     const dfIds = {};
-    const edges = [];
     (graph.nodes || []).forEach(n => {
       const type = n.type || n.stage;
       // skip genuinely-unknown nodes (no catalogue tile AND no carried contract)
@@ -261,7 +304,7 @@
       if (!dfIds[n.id]) return;
       const spec = effectiveSpec(n, catalogue);
       const ports = inputPorts(spec);
-      edgePairs(n).forEach(([art, prod]) => {
+      edgePairs(n).forEach(([art, prod, isFallback]) => {
         const pNode = (graph.nodes || []).find(x => x.id === prod);
         const pSpec = pNode && effectiveSpec(pNode, catalogue);
         if (!pSpec || !dfIds[prod]) return;
@@ -269,12 +312,16 @@
         // a collapsed port accepts any of its OneOf alternatives → match by membership
         const inIdx = ports.findIndex(p => p.names.indexOf(art) >= 0) + 1;
         if (outIdx > 0 && inIdx > 0) {
-          const optional = ports[inIdx - 1].optional;  // wired via an optional port
           try {
             editor.addConnection(dfIds[prod], dfIds[n.id],
                                  'output_' + outIdx, 'input_' + inIdx);
-            edges.push({ art, fromDf: dfIds[prod], outIdx,
-                         toDf: dfIds[n.id], inIdx, optional });
+            if (isFallback) {
+              // the runtime reads the newest producer; earlier bindings are real-but-fallback
+              const conn = editor.precanvas && editor.precanvas.querySelector(
+                `.connection.node_in_node-${dfIds[n.id]}.node_out_node-${dfIds[prod]}` +
+                `.output_${outIdx}.input_${inIdx}`);
+              if (conn) conn.classList.add('dag-fallback-edge');
+            }
           } catch (e) { /* tolerate duplicate/odd connections */ }
         }
       });
@@ -284,8 +331,8 @@
     const realign = () => (graph.nodes || []).forEach(n => {
       if (dfIds[n.id]) portTitles(dfIds[n.id], effectiveSpec(n, catalogue));
     });
-    const refreshAll = () => { realign(); refreshEdges(editor, dfIds, edges); };
-    editor._dagRefresh = () => refreshEdges(editor, dfIds, edges);  // drag: edges only
+    const refreshAll = () => { realign(); refreshEdges(editor); };
+    editor._dagRefresh = () => refreshEdges(editor);  // drag / connection add+remove
     if (window.requestAnimationFrame) window.requestAnimationFrame(refreshAll);
     setTimeout(refreshAll, 150);
     // …and again while a node is dragged, so edge labels/arrows track the moving node
@@ -320,37 +367,60 @@
     el.addEventListener('touchend', settle);
   }
 
-  /* Recompute every connection path from the current node geometry, then redraw the
-   * edge decorations (labels/arrows) from the settled positions. Idempotent. */
-  function refreshEdges(editor, dfIds, edges) {
-    Object.values(dfIds).forEach(id => {
-      try { editor.updateConnectionNodes('node-' + id); } catch (e) { /* noop */ }
+  /* The editor's live connection store for the current module (Drawflow keeps it here; the
+   * builder reads the same path in exportSpec). Null before the editor is started. */
+  function moduleData(editor) {
+    const df = editor.drawflow && editor.drawflow.drawflow;
+    const mod = df && (df[editor.module] || df.Home);
+    return (mod && mod.data) || null;
+  }
+
+  /* The current connections as decoration descriptors, derived LIVE from the connection store —
+   * so an interactively added edge gains a label and a deleted one loses it (no static list to
+   * drift). `art` = the producer's artifact on that output port; `optional` = consumer port is
+   * optional. A connection is `{node: toDf, output: 'input_N'}` under `outputs.output_M`. */
+  function liveEdges(editor) {
+    const data = moduleData(editor);
+    const out = [];
+    if (!data) return out;
+    Object.keys(data).forEach(fromDf => {
+      const node = data[fromDf];
+      const spec = node.data && node.data._form;
+      const outs = node.outputs || {};
+      Object.keys(outs).forEach(outKey => {
+        const outIdx = parseInt(outKey.split('_')[1], 10);
+        const art = (spec && spec.outputs && spec.outputs[outIdx - 1]) || '';
+        (outs[outKey].connections || []).forEach(c => {
+          const toDf = String(c.node);
+          const inIdx = parseInt(String(c.output).split('_')[1], 10);
+          const toSpec = data[toDf] && data[toDf].data && data[toDf].data._form;
+          const ports = toSpec ? inputPorts(toSpec) : [];
+          const optional = !!(ports[inIdx - 1] && ports[inIdx - 1].optional);
+          out.push({ art, fromDf, outIdx, toDf, inIdx, optional });
+        });
+      });
     });
+    return out;
+  }
+
+  /* Recompute every connection path from the current node geometry, then redraw the edge
+   * decorations (labels/arrows) from the LIVE connections. Idempotent. */
+  function refreshEdges(editor) {
+    const data = moduleData(editor);
+    if (data) {
+      Object.keys(data).forEach(id => {
+        try { editor.updateConnectionNodes('node-' + id); } catch (e) { /* noop */ }
+      });
+    }
     if (editor.precanvas) {
       editor.precanvas.querySelectorAll('.dag-edge-label, .dag-edge-arrow')
         .forEach(el => el.remove());
     }
-    edges.forEach(e =>
+    liveEdges(editor).forEach(e =>
       decorateEdge(editor, e.art, e.fromDf, e.outIdx, e.toDf, e.inIdx, e.optional));
   }
 
-  /* Read-only inspect panel: stage, artifacts, configured model + params. */
-  function renderInspect(panel, info) {
-    let rows = `<dt>node</dt><dd>${info.label || info.id} ` +
-               `<small>${info.id}${info.stage ? ' · ' + info.stage : ''}</small></dd>`;
-    rows += `<dt>artifacts</dt><dd>${(info.inputs || []).join(', ') || '·'} → ` +
-            `${(info.outputs || []).join(', ') || '·'}</dd>`;
-    if (info.columns && info.columns.length) {
-      rows += `<dt>columns</dt><dd>${info.columns
-        .map(c => `${c.name}: ${c.type}`).join(', ')}</dd>`;
-    }
-    Object.entries(info.config || {}).forEach(([k, v]) => {
-      rows += `<dt>${k}</dt><dd>${typeof v === 'object' ? JSON.stringify(v) : v}</dd>`;
-    });
-    panel.innerHTML = `<dl class="dag-detail">${rows}</dl>`;
-  }
-
-  /* ── Zoom & pan (BUILDER_UX.md §3.4 / B4c) ──────────────────────────── */
+  /* ── Zoom & pan ─────────────────────────────────────────────────────── */
 
   function updateZoomClass(editor, canvasEl) {
     /* edge artifact labels hide below 75% zoom (CSS .dag-zoom-small) */
@@ -403,7 +473,7 @@
   }
 
   window.DagView = {
-    ensureDrawflow, nodeHtml, portTitles, inputPorts, layoutByLevels, drawGraph,
-    renderInspect, attachZoom, zoomFit,
+    ensureDrawflow, nodeHtml, portTitles, inputPorts, drawGraph,
+    attachZoom, zoomFit,
   };
 })();

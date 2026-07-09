@@ -104,15 +104,11 @@ class RetrievalPipeline:
 
     @staticmethod
     def _parse_distance_metric(metric: str) -> DistanceMetric:
-        """Parse distance metric string to enum."""
-        metric_lower = metric.lower()
-        if metric_lower == "cosine":
-            return DistanceMetric.COSINE
-        elif metric_lower == "euclidean":
-            return DistanceMetric.EUCLIDEAN
-        elif metric_lower in ("dot_product", "dot"):
-            return DistanceMetric.DOT_PRODUCT
-        else:
+        """Parse a distance-metric string to the enum (``dot`` aliases ``dot_product``)."""
+        key = metric.lower()
+        try:
+            return DistanceMetric("dot_product" if key == "dot" else key)
+        except ValueError:
             raise ValueError(
                 f"Unknown distance metric: {metric}. Choose from: cosine, euclidean, dot_product"
             )
@@ -414,16 +410,6 @@ class RetrievalPipeline:
         (the two halves the DAG runs as the ``retrieval`` and ``rerank`` nodes)."""
         candidates = self.retrieve_candidates(query_embeddings, k, query_texts)
         return self.refine_candidates(candidates, query_embeddings, k, query_texts)
-
-    def save(self, path: str) -> None:
-        """Save the index to disk."""
-        with TimingContext(f"Saving vector store to {path}", logger):
-            self.vector_store.save(path)
-
-    def load(self, path: str) -> None:
-        """Load the index from disk."""
-        with TimingContext(f"Loading vector store from {path}", logger):
-            self.vector_store.load(path)
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """

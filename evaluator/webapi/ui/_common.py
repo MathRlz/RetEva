@@ -14,8 +14,6 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from evaluator import list_presets
-
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
 
@@ -28,12 +26,6 @@ def make_page(templates: Jinja2Templates):
         )
 
     return page
-
-
-def _default_preset() -> str:
-    """First available config preset (the Config page loads prefilled from it)."""
-    presets = list_presets()
-    return presets[0] if presets else ""
 
 
 def _graph_view_from_config(config_dict: dict):

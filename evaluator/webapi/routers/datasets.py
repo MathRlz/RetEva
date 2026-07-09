@@ -21,7 +21,8 @@ def build_datasets_router() -> APIRouter:
         desc = get_descriptor(dataset_id)
         if desc is None:
             known = ", ".join(list_registered_datasets())
-            raise HTTPException(status_code=404, detail=f"Unknown dataset '{dataset_id}'. Known: {known}")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown dataset '{dataset_id}'. Known: {known}")
         from evaluator.config.graph_config import _DATA_FIELD_TO_KEY
         from evaluator.pipeline.artifacts import artifact_modality, is_registered
 
@@ -50,6 +51,10 @@ def build_datasets_router() -> APIRouter:
                 }
                 for name, artifact in (desc.fields or {}).items()
             ],
+            # Derived (non-column) outputs the source also publishes — the picker adds these to
+            # the node's extra_outputs so a picked source matches the config-preview (e.g. a
+            # self-retrieval corpus). Keeps builder ≡ preview.
+            "derived_outputs": list(desc.derived_outputs),
             # Required settings as the builder's node-param keys (the node-centric
             # YAML vocabulary) — the UI hardcodes nothing.
             "required_settings": [

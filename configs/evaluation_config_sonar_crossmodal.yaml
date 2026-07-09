@@ -11,7 +11,25 @@ data:
   strict_validation: false
   num_workers: 0
 graph:
-  mode: audio_text_retrieval
+  nodes:
+  - dataset_source
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      language: en
+      voice: en_US-lessac-medium
+      sample_rate: 16000
+      seed: 42
+      output_dir: examples/data/pubmed_qa_small/audio
+  - corpus_embedding
+  - vector_db
+  - audio_embedding
+  - retrieval
+  - retrieval_metrics
+  - metrics
+  - build_query_traces
+  - finalize
 nodes:
   asr:
     model: null
@@ -42,14 +60,6 @@ runtime:
   logging:
     console_level: INFO
     file_level: DEBUG
-audio_synthesis:
-  enabled: true
-  provider: mms
-  language: en
-  voice: en_US-lessac-medium
-  sample_rate: 16000
-  seed: 42
-  output_dir: examples/data/pubmed_qa_small/audio
-checkpoint_enabled: true
-checkpoint_interval: 100
-resume_from_checkpoint: true
+  checkpoint_enabled: true
+  checkpoint_interval: 100
+  resume_from_checkpoint: true

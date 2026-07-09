@@ -8,9 +8,46 @@ data:
   num_workers: 4
   test_size: 0.0
 graph:
-  mode: asr_text_retrieval
-model:
-  audio_emb_adapter_path: null
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - asr
+  - id: query_optimization
+    type: query_optimization
+    params:
+      method: rewrite
+      use_local_server: true
+      local_server_url: http://localhost:11434/v1/chat/completions
+      model: mistral:7b-instruct
+      api_key_env: DUMMY_KEY
+      temperature: 0.3
+      max_iterations: 2
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - build_query_traces
+  - id: answer_judge
+    type: answer_judge
+    params:
+      use_local_server: true
+      local_server_url: http://localhost:11434/v1/chat/completions
+      model: mistral:7b-instruct
+      api_key_env: DUMMY_KEY
+      temperature: 0.0
+      max_cases: 50
+      judge_aspects:
+      - relevance
+      - correctness
+      - completeness
+      score_aggregation: weighted
+      aspect_weights:
+        relevance: 0.5
+        correctness: 0.3
+        completeness: 0.2
+  - finalize
 nodes:
   asr:
     model: whisper
@@ -44,9 +81,9 @@ runtime:
     log_dir: logs
     console_level: INFO
     file_level: DEBUG
-checkpoint_enabled: true
-checkpoint_interval: 50
-resume_from_checkpoint: true
+  checkpoint_enabled: true
+  checkpoint_interval: 50
+  resume_from_checkpoint: true
 llm_server:
   enabled: true
   backend: ollama
@@ -56,29 +93,3 @@ llm_server:
   auto_start: true
   gpu_layers: -1
   timeout_s: 60
-query_optimization:
-  enabled: true
-  method: rewrite
-  use_local_server: true
-  local_server_url: http://localhost:11434/v1/chat/completions
-  llm_model: mistral:7b-instruct
-  llm_api_key_env: DUMMY_KEY
-  llm_temperature: 0.3
-  max_iterations: 2
-judge:
-  enabled: true
-  use_local_server: true
-  local_server_url: http://localhost:11434/v1/chat/completions
-  model: mistral:7b-instruct
-  api_key_env: DUMMY_KEY
-  temperature: 0.0
-  max_cases: 50
-  judge_aspects:
-  - relevance
-  - accuracy
-  - completeness
-  score_aggregation: weighted
-  aspect_weights:
-    relevance: 0.5
-    accuracy: 0.3
-    completeness: 0.2

@@ -47,9 +47,6 @@ class FactoryModelService(Generic[T]):
         self._instance = None
         logger.info("service.stop label=%s", self.label)
 
-    def health(self) -> bool:
-        return self._instance is not None
-
     def get(self) -> T:
         self.start()
         assert self._instance is not None
@@ -112,14 +109,6 @@ class LLMServerService:
             logger.info("service.stop label=%s", self.label)
         self._instance = None
         self._owns_process = False
-
-    def health(self) -> bool:
-        if self._instance is None:
-            return False
-        return bool(self._instance.health_check().is_healthy)
-
-    def owns_process(self) -> bool:
-        return self._owns_process
 
     def get(self) -> Any:
         self.start()

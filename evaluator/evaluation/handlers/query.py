@@ -36,26 +36,16 @@ def _augment_one_text(id_text, *, augmenter, base_seed, node_id):
 
 
 def _node_correction_config(s: "RunState") -> Any:
-    """The correction config for the current node: a transient `QueryCorrectionConfig` built
-    from `current_node.params` (per-branch divergence, R2) when present, else the global one.
-    """
-    params = s.node_params
-    # Only a real per-node override builds a transient config — not the operator
-    # discriminator fields the alias injects ({op: correct, axis: query}), which would
-    # otherwise mask the global config with defaults (parity break).
-    _keys = ("enabled", "method", "replacements", "use_default_rules", "kb_terms",
-             "kb_max_distance")
-    if not (params and any(k in params for k in _keys)):
-        return s.query_correction_config
-    from ...config.query_correction import QueryCorrectionConfig
-
-    return QueryCorrectionConfig(
-        enabled=bool(params.get("enabled", True)),
-        method=params.get("method", "rule"),
-        replacements=params.get("replacements", {}) or {},
-        use_default_rules=bool(params.get("use_default_rules", True)),
-        kb_terms=params.get("kb_terms", []) or [],
-        kb_max_distance=int(params.get("kb_max_distance", 1)),
+    """The correction config for the current node: the GLOBAL config with any
+    `current_node.params` overlaid (per-branch divergence, R2). Overlaying — not rebuilding
+    from scratch — keeps the global LLM backend (model/api_base/api_key_env/temperature/…)
+    when a node overrides only e.g. `method`; the operator discriminator fields the alias
+    injects ({op: correct, axis: query}) are ignored by the allowlist."""
+    return s.node_overlay(
+        s.query_correction_config,
+        ("enabled", "method", "replacements", "use_default_rules", "kb_terms",
+         "kb_max_distance"),
+        casts={"enabled": bool, "use_default_rules": bool, "kb_max_distance": int},
     )
 
 

@@ -69,7 +69,6 @@ def _reference_transcriptions(s: Any) -> list:
 
 
 # Retrieval-debug formatting constants.
-LOG_DIVIDER = "=" * 50
 DEBUG_SAMPLE_LIMIT = 3
 MATCH_SYMBOL = "✓"
 MISS_SYMBOL = "✗"

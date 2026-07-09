@@ -3,14 +3,22 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: admed_voice
-  path: null                # admed_voice location; null = ADMED_VOICE_PATH / EVALUATOR_DATA_DIR env
-  split: both               # train / test / both (admed has no validation split)
+  path: null
+  split: both
   batch_size: 32
 data:
   num_workers: 4
   test_size: 0.0
 graph:
-  mode: audio_text_retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - audio_embedding
+  - retrieval
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: null
@@ -46,6 +54,6 @@ runtime:
     log_dir: logs
     console_level: INFO
     file_level: DEBUG
-checkpoint_enabled: true
-checkpoint_interval: 50
-resume_from_checkpoint: true
+  checkpoint_enabled: true
+  checkpoint_interval: 50
+  resume_from_checkpoint: true

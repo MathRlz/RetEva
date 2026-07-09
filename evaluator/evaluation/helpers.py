@@ -9,8 +9,11 @@ This module contains utility functions used across evaluation functions:
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
-from ..pipeline import RetrievalPayload
-from ..models.retrieval.contracts import ScoredRetrievalResult, normalize_search_results
+from ..models.retrieval.contracts import (
+    RetrievalPayload,
+    ScoredRetrievalResult,
+    normalize_search_results,
+)
 
 # Human-readable labels live with the templates (``graph.templates.GRAPH_TEMPLATES``) — the single
 # source — since the four names are graph templates now.
@@ -28,7 +31,7 @@ def detect_graph_template(
     Single source of truth for mode detection shared by every evaluation engine.
     Pure — performs no logging — so callers control their own log output.
 
-    ``configured_mode`` (the config's explicit ``pipeline_mode``) takes precedence: the
+    ``configured_mode`` (the config's resolved graph label) takes precedence: the
     factory builds pipelines *for* that mode, and pipeline-presence detection alone cannot
     tell ``audio_emb_retrieval`` cross-modal (audio query + text corpus → both an audio AND a
     text pipeline) from ``audio_text_retrieval`` fusion. Detection is the fallback when no
@@ -98,42 +101,10 @@ def collate_fn(batch):
     return batch
 
 
-def asr_collate_fn(batch):
-    """Collate function that groups audio data for audio embedding mode.
-
-    Returns a dictionary with:
-    - audio_arrays: List of audio tensors
-    - sampling_rates: List of sampling rates
-    - transcriptions: List of ground truth texts
-    - language: Language code from first batch item
-    """
-    import torch
-
-    audio_arrays = []
-    sampling_rates = []
-    transcriptions = []
-
-    for item in batch:
-        audio = item["audio_array"]
-        if not isinstance(audio, torch.Tensor):
-            audio = torch.tensor(audio)
-        audio_arrays.append(audio)
-        sampling_rates.append(item["sampling_rate"])
-        transcriptions.append(item["transcription"])
-
-    return {
-        "audio_arrays": audio_arrays,
-        "sampling_rates": sampling_rates,
-        "transcriptions": transcriptions,
-        "language": batch[0].get("language", None),
-    }
-
-
 __all__ = [
     "detect_graph_template",
     "_payload_to_key",
     "_search_results_to_keys",
     "_build_relevant_from_item",
     "collate_fn",
-    "asr_collate_fn",
 ]

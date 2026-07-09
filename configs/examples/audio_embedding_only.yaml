@@ -8,7 +8,15 @@ data:
   num_workers: 4
   test_size: 0.0
 graph:
-  mode: audio_text_retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - audio_embedding
+  - retrieval
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   asr:
     model: null

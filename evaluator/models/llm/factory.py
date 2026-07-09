@@ -20,7 +20,7 @@ def create_server(
     Create an LLM server instance.
 
     Args:
-        backend: Backend type ("ollama", "vllm", "llamacpp")
+        backend: Backend type ("ollama")
         model: Model name or path
         host: Server host
         port: Server port
@@ -36,22 +36,6 @@ def create_server(
         from .ollama import OllamaServer
         return OllamaServer(model, host, port, gpu_layers, **kwargs)
 
-    elif backend == "vllm":
-        try:
-            from llm_server.vllm_server import VLLMServer
-            return VLLMServer(model, host, port, gpu_layers, **kwargs)
-        except ImportError:
-            logger.warning("vLLM backend not available. Install with: pip install vllm")
-            return None
-
-    elif backend == "llamacpp":
-        try:
-            from llm_server.llamacpp import LlamaCppServer
-            return LlamaCppServer(model, host, port, gpu_layers, **kwargs)
-        except ImportError:
-            logger.warning("llama.cpp backend not available. Install with: pip install llama-cpp-python")
-            return None
-
     else:
-        logger.error(f"Unknown backend: {backend}. Supported: ollama, vllm, llamacpp")
+        logger.error(f"Unknown backend: {backend}. Supported: ollama")
         return None

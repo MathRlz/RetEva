@@ -23,24 +23,6 @@ from typing import Any, Callable, Iterable, Iterator, List, Sequence, Tuple
 
 import numpy as np
 
-# Separator between a parent id and a fan-out suffix (``q42·aug0``). Recoverable lineage.
-LINEAGE_SEP = "·"
-
-
-def child_id(parent: str, suffix: Any) -> str:
-    """Mint a lineage child id, e.g. ``child_id("q42", "aug0") == "q42·aug0"``."""
-    return f"{parent}{LINEAGE_SEP}{suffix}"
-
-
-def parent_id(item_id: str) -> str:
-    """Immediate parent of a (possibly nested) lineage id; itself if it has no parent."""
-    return item_id.rsplit(LINEAGE_SEP, 1)[0] if LINEAGE_SEP in item_id else item_id
-
-
-def root_id(item_id: str) -> str:
-    """Original ancestor id (strips all lineage suffixes)."""
-    return item_id.split(LINEAGE_SEP, 1)[0]
-
 
 class ItemSet:
     """An ordered set of ``ids`` with a ``values`` column aligned 1:1.
@@ -71,16 +53,6 @@ class ItemSet:
         self._index_cache: dict = None
 
     # ── constructors ──────────────────────────────────────────────────
-    @classmethod
-    def from_pairs(cls, pairs: Iterable[Tuple[str, Any]]) -> "ItemSet":
-        """Build from ``(id, value)`` pairs (values become a list)."""
-        ids: List[str] = []
-        values: List[Any] = []
-        for item_id, value in pairs:
-            ids.append(str(item_id))
-            values.append(value)
-        return cls(ids, values)
-
     @classmethod
     def empty(cls) -> "ItemSet":
         return cls([], [])
@@ -132,9 +104,6 @@ class ItemSet:
     def value_for(self, item_id: str) -> Any:
         return self._row(self._index[item_id])
 
-    def to_dict(self) -> dict:
-        return {item_id: self._row(i) for i, item_id in enumerate(self._ids)}
-
     # ── transforms (ids preserved) ────────────────────────────────────
     def with_values(self, values: Any) -> "ItemSet":
         """Same ids, new aligned ``values`` (the output of a transform node)."""
@@ -157,30 +126,6 @@ class ItemSet:
         """Keep items where ``keep(id, value)`` is truthy (order preserved)."""
         rows = [i for i, item_id in enumerate(self._ids) if keep(item_id, self._row(i))]
         return ItemSet([self._ids[i] for i in rows], self._take(rows))
-
-    def drop(self, ids: Iterable[str]) -> "ItemSet":
-        """Drop the given ids (a failed-item / sparsity operation); order preserved."""
-        drop_set = {str(i) for i in ids}
-        rows = [i for i, item_id in enumerate(self._ids) if item_id not in drop_set]
-        return ItemSet([self._ids[i] for i in rows], self._take(rows))
-
-    def keep(self, ids: Iterable[str]) -> "ItemSet":
-        """Keep only the given ids (order preserved by this set's order)."""
-        keep_set = {str(i) for i in ids}
-        rows = [i for i, item_id in enumerate(self._ids) if item_id in keep_set]
-        return ItemSet([self._ids[i] for i in rows], self._take(rows))
-
-    # ── fan-out (cardinality up, with lineage) ────────────────────────
-    def fanout(self, fn: Callable[[str, Any], Iterable[Tuple[Any, Any]]]) -> "ItemSet":
-        """Expand each item into children. ``fn(id, value) -> [(suffix, child_value), …]``;
-        child ids are ``child_id(id, suffix)``. Values become a list."""
-        new_ids: List[str] = []
-        new_vals: List[Any] = []
-        for i, item_id in enumerate(self._ids):
-            for suffix, child_value in fn(item_id, self._row(i)):
-                new_ids.append(child_id(item_id, suffix))
-                new_vals.append(child_value)
-        return ItemSet(new_ids, new_vals)
 
     # ── join (align two sets by id) ───────────────────────────────────
     def align(self, other: "ItemSet") -> Tuple[List[str], List[Any], List[Any]]:

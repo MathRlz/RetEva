@@ -1,7 +1,6 @@
 """Retrieval components for dense, sparse, and hybrid search."""
 
-from .rag.sparse import BM25Retriever
-from .rag.hybrid import HybridRetriever, reciprocal_rank_fusion
+from .rag.hybrid import reciprocal_rank_fusion
 from .rag.reranker import BaseReranker, CrossEncoderReranker
 from .strategy import (
     CoreRetrievalConfig,
@@ -12,7 +11,6 @@ from .strategy import (
 from .contracts import (
     ScoredRetrievalResult,
     normalize_search_results,
-    normalize_batch_search_results,
 )
 from .rag.strategies import (
     DistanceMetric,
@@ -21,7 +19,6 @@ from .rag.strategies import (
     mmr_search,
     mmr_rerank,
     threshold_filter,
-    threshold_filter_with_fallback,
 )
 from .fusion_registry import (
     FUSION_REGISTRY,
@@ -31,8 +28,6 @@ from .fusion_registry import (
 )
 
 __all__ = [
-    "BM25Retriever",
-    "HybridRetriever",
     "reciprocal_rank_fusion",
     "BaseReranker",
     "CrossEncoderReranker",
@@ -42,7 +37,6 @@ __all__ = [
     "RetrievalStrategyConfig",
     "ScoredRetrievalResult",
     "normalize_search_results",
-    "normalize_batch_search_results",
     # Advanced strategies
     "DistanceMetric",
     "compute_similarity",
@@ -50,7 +44,6 @@ __all__ = [
     "mmr_search",
     "mmr_rerank",
     "threshold_filter",
-    "threshold_filter_with_fallback",
     "FUSION_REGISTRY",
     "fuse_hybrid_results",
     "register_fusion",

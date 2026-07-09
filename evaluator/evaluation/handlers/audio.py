@@ -10,6 +10,7 @@ import time
 
 from ...logging_config import get_logger
 from ..executor.state import RunState
+from ..stage_registry import register_stage_handler
 from ..audio_refs import audio_refs_from_questions
 
 logger = get_logger(__name__)
@@ -117,6 +118,7 @@ def _stage_augment_audio(s: RunState) -> None:
     )
 
 
+@register_stage_handler("tts", self_timed=True)  # tracks its own tts_s below
 def _stage_tts(s: RunState) -> None:
     """Synthesize query audio from the dataset's text (TTS bridge). Synthesizes only
     the genuinely-missing clips (cached / on-disk hits skipped); no-op when nothing is
@@ -129,9 +131,19 @@ def _stage_tts(s: RunState) -> None:
     from ...pipeline.audio.prepare import synthesize_missing_query_audio
 
     _t = time.perf_counter()
+    tts_cfg = s.node_overlay(
+        s.config.audio_synthesis,
+        ("enabled", "provider", "voice", "language", "sample_rate", "speed", "pitch", "volume",
+         "seed", "output_dir", "cache_dir", "skip_cache", "api_key"),
+        casts={"enabled": bool, "sample_rate": int, "speed": float, "pitch": float,
+               "volume": float, "seed": int, "skip_cache": bool},
+        force={"enabled": True},
+    )
+    if tts_cfg is not None and not tts_cfg.enabled:
+        return  # a per-branch {enabled: false} tts node — no synthesis on this branch
     synthesize_missing_query_audio(
         questions,
-        s.config.audio_synthesis,
+        tts_cfg,
         log=logger,
         cache_manager=s.cache_manager,
     )

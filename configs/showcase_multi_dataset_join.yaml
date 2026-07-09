@@ -28,24 +28,33 @@ dataset:
 data:
   num_workers: 0
 graph:
-  mode: asr_text_retrieval
   nodes:
-    - id: corpus_src
-      type: dataset_source
-      params: {dataset: docs}
-    - id: qa_src
-      type: dataset_source
-      params: {dataset: qa}
-    - id: corpus_embedding
-      type: corpus_embedding
-      params: {dataset: docs}
-    - vector_db
-    - tts
-    - asr
-    - text_embedding
-    - retrieval
-    - metrics
-    - finalize
+  - id: corpus_src
+    type: dataset_source
+    params:
+      dataset: docs
+  - id: qa_src
+    type: dataset_source
+    params:
+      dataset: qa
+  - id: corpus_embedding
+    type: corpus_embedding
+    params:
+      dataset: docs
+  - vector_db
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      voice: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/showcase/audio
+  - asr
+  - text_embedding
+  - retrieval
+  - metrics
+  - finalize
 nodes:
   asr:
     model: whisper
@@ -61,10 +70,3 @@ runtime:
     enabled: true
   logging:
     console_level: WARNING
-audio_synthesis:
-  enabled: true
-  provider: mms
-  voice: en
-  sample_rate: 16000
-  seed: 42
-  output_dir: evaluation_results/showcase/audio

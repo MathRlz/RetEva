@@ -54,24 +54,7 @@ class RunContext:
         with self._lock:
             return self._store.get((node_id, name), default)
 
-    def outputs_of(self, node_id: str) -> Dict[str, Any]:
-        """All artifacts produced by ``node_id`` as ``{output_name: value}``."""
-        with self._lock:
-            return {
-                name: value
-                for (nid, name), value in self._store.items()
-                if nid == node_id
-            }
-
     def slots(self) -> Iterator[_Slot]:
         """Iterate a snapshot of the ``(producer_id, output_name)`` slots stored."""
         with self._lock:
             return iter(list(self._store.keys()))
-
-    def __len__(self) -> int:
-        with self._lock:
-            return len(self._store)
-
-    def __contains__(self, slot: _Slot) -> bool:
-        with self._lock:
-            return slot in self._store

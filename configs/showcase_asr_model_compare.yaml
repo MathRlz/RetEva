@@ -16,12 +16,35 @@ dataset:
 data:
   num_workers: 0
 graph:
-  mode: asr_text_retrieval
   branches:
-    - id: whisper_base
-      asr: {model: whisper, size: base}
-    - id: whisper_tiny
-      asr: {model: whisper, size: tiny}
+  - id: whisper_base
+    asr:
+      model: whisper
+      size: base
+  - id: whisper_tiny
+    asr:
+      model: whisper
+      size: tiny
+  nodes:
+  - dataset_source
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      voice: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/showcase/audio
+  - corpus_embedding
+  - vector_db
+  - asr
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - build_query_traces
+  - finalize
 nodes:
   asr:
     model: whisper
@@ -39,10 +62,3 @@ runtime:
     enabled: true
   logging:
     console_level: WARNING
-audio_synthesis:
-  enabled: true
-  provider: mms
-  voice: en
-  sample_rate: 16000
-  seed: 42
-  output_dir: evaluation_results/showcase/audio

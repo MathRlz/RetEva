@@ -77,7 +77,7 @@ def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> 
     Raises:
         ConfigurationError: If validate=True and validation fails.
     """
-    from .evaluation import FeaturesConfig, _FEATURE_SUBCONFIGS
+    from .evaluation import _FEATURE_SUBCONFIGS
 
     # Create a copy to avoid modifying the original
     config_dict = dict(config_dict)
@@ -100,13 +100,16 @@ def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> 
     _merge_section_into(config_dict, config_dict.pop("runtime", None))
     _merge_section_into(config_dict, config_dict.pop("experiment", None))
 
-    # Accept the canonical nested `features:` block AND legacy flat feature
-    # keys (judge:, embedding_fusion:, ...) by flattening the former into the
-    # latter; nested values win over any stray flat key.
-    features_dict = config_dict.pop("features", None)
-    if isinstance(features_dict, dict):
-        for key, value in features_dict.items():
-            config_dict[key] = value
+    # Hard cut-over: no `features:` grouping. Each capability is a top-level sub-config, enabled
+    # by its NODE being in the graph (the spec). A stray features: block is a migration error.
+    if "features" in config_dict:
+        from ..errors import ConfigurationError
+
+        raise ConfigurationError(
+            "The `features:` block is no longer supported — a capability is enabled by its node in "
+            "the graph. Put its settings on the node (e.g. `{id: tts, type: tts, params: {...}}`) "
+            "or as a top-level block (audio_synthesis:, judge:, …). See any configs/*.yaml."
+        )
 
     # Build plain sub-configs from registry — no duplication when adding new ones
     sub_configs: Dict[str, Any] = {
@@ -148,28 +151,26 @@ def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> 
 
     sub_configs["llm"] = llm_config
 
-    # Assemble the optional features into one FeaturesConfig (#7). The three
-    # LLM-derived features inherit the shared backend defaults; the rest are
-    # plain sub-configs.
-    features = FeaturesConfig(
-        audio_synthesis=AudioSynthesisConfig(
-            **(config_dict.get("audio_synthesis") or {})
-        ),
-        augmentation=AudioAugmentationConfig(**(config_dict.get("augmentation") or {})),
-        answer_generation=AnswerGenerationConfig(
-            **_merge_llm(config_dict.get("answer_generation") or {})
-        ),
-        judge=JudgeConfig(**_merge_llm(config_dict.get("judge") or {})),
-        query_optimization=QueryOptimizationConfig(**_merge_llm(_qo_raw)),
-        query_correction=QueryCorrectionConfig(
-            **_merge_llm(config_dict.get("query_correction") or {})
-        ),
-        embedding_fusion=EmbeddingFusionConfig(
-            **(config_dict.get("embedding_fusion") or {})
-        ),
-        rag=RagFlowConfig(**(config_dict.get("rag") or {})),
+    # The optional capability sub-configs — each a top-level field on EvaluationConfig. The three
+    # LLM-derived features inherit the shared backend defaults; the rest are plain sub-configs.
+    sub_configs["audio_synthesis"] = AudioSynthesisConfig(
+        **(config_dict.get("audio_synthesis") or {})
     )
-    sub_configs["features"] = features
+    sub_configs["augmentation"] = AudioAugmentationConfig(
+        **(config_dict.get("augmentation") or {})
+    )
+    sub_configs["answer_generation"] = AnswerGenerationConfig(
+        **_merge_llm(config_dict.get("answer_generation") or {})
+    )
+    sub_configs["judge"] = JudgeConfig(**_merge_llm(config_dict.get("judge") or {}))
+    sub_configs["query_optimization"] = QueryOptimizationConfig(**_merge_llm(_qo_raw))
+    sub_configs["query_correction"] = QueryCorrectionConfig(
+        **_merge_llm(config_dict.get("query_correction") or {})
+    )
+    sub_configs["embedding_fusion"] = EmbeddingFusionConfig(
+        **(config_dict.get("embedding_fusion") or {})
+    )
+    sub_configs["rag"] = RagFlowConfig(**(config_dict.get("rag") or {}))
 
     # device_pool is optional
     device_pool_dict = config_dict.get("device_pool")

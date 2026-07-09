@@ -12,7 +12,7 @@ from typing import Callable, List, Dict, Any, Optional, Tuple
 
 from ....logging_config import get_logger
 from ....config import QueryOptimizationConfig
-from ....llm.client import LLMClient, _cache as _llm_cache, _cache_key
+from ....llm.client import LLMClient, _cache_key
 from .prompts import (
     get_rewrite_prompt,
     get_hyde_prompt,
@@ -441,9 +441,3 @@ def combine_retrieval_results(
             f"Registered: {', '.join(list_combine_strategies())}"
         )
     return fn(results_list, k=k, rrf_k=rrf_k, weights=weights)
-
-
-def clear_llm_cache():
-    """Clear the LLM call cache."""
-    _llm_cache.clear()
-    logger.info("Cleared LLM cache")

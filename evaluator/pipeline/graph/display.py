@@ -3,7 +3,7 @@
 `display_label(stage, params)` turns a node's type + fields into the friendly name shown in
 the graph preview, the CLI ``graph`` print and the web builder — so the *vocabulary* can
 shrink to generic operators later while the *view* keeps the read-it-from-the-diagram
-legibility (``DAG_OPERATOR_ABSTRACTION.md`` §4). Today the node ``stage`` is still the legacy
+legibility (evaluator-architecture.md §9). Today the node ``stage`` is still the legacy
 name; once nodes carry an operator ``stage`` + discriminator fields this resolves the label
 from those fields instead (the keying is intentionally params-aware already).
 """

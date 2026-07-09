@@ -10,15 +10,13 @@ from evaluator.services import ModelServiceProvider
 from evaluator.webapi.form_builder import (
     config_to_canvas_spec,
     create_config_options,
-    deep_merge_dict,
-    graph_preview,
     graph_render_payload,
-    load_config,
     nested_config,
     prepare_run_config,
     render_node,
     required_model_fields_for,
 )
+from evaluator.webapi.form_config import _deep_merge
 from evaluator.webapi.schemas import (
     ConfigCreateRequest,
     ErrorResponse,
@@ -40,7 +38,7 @@ def build_config_router(
 
     @router.get("/api/config/options", summary="Config form options")
     def config_options() -> Dict[str, Any]:
-        """Return presets, pipeline modes, dataset types, model choices, and defaults for the config builder UI."""
+        """Presets, pipeline modes, dataset types, model choices + defaults for the config UI."""
         return create_config_options(provider_factory)
 
     @router.get("/api/config/schema", summary="Config schema for wizard UI")
@@ -98,13 +96,6 @@ def build_config_router(
         except ImportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @router.post("/api/graph/preview", summary="Preview pipeline DAG")
-    def graph_preview_endpoint(payload: EvaluationJobRequest) -> Dict[str, Any]:
-        """Return stage graph nodes and levels for the given config (ConfigurationError →
-        400 via the app-level handler)."""
-        config = load_config(payload.config, auto_devices=payload.auto_devices)
-        return graph_preview(config)
-
     @router.get("/api/graph/nodes", summary="Stage-node catalogue for the builder")
     def graph_nodes_endpoint() -> Dict[str, Any]:
         """The registered node types + I/O contract that the visual builder palette offers (E2)."""
@@ -142,60 +133,6 @@ def build_config_router(
         # field-aware contract (ports/label/family/switches) per node so the canvas renders an
         # operator by its discriminator fields — the shared render_node shape.
         return graph_render_payload(graph, lambda n: render_node(n, dict(n.params or {})))
-
-    @router.post("/api/graph/build", summary="Build + validate a canvas graph spec")
-    def graph_build_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Build the DAG from a builder canvas spec ``{mode, nodes:[{id,type,params}],
-        edges:[{from,to}]}`` and return its topological levels — or a 400 with the error (E4).
-        ``edges`` ([{from,to}]) is folded into the ``{to: [from,…]}`` shape the builder expects.
-
-        Also returns edit-time *advice* (P3): ``warnings`` (embedding-space mismatches — the same
-        check the Run path enforces, surfaced here so the user sees it while editing rather than
-        only at submit) and ``metrics`` (which metrics will auto-inject given the graph's produced
-        artifacts), so the canvas previews them live.
-        """
-        from ...pipeline import build_graph_from_spec
-
-        nodes = payload.get("nodes") or []
-        mode = payload.get("mode") or "asr_text_retrieval"
-        edges: Dict[str, list] = {}
-        for e in payload.get("edges") or []:
-            if e.get("from") and e.get("to"):
-                edges.setdefault(e["to"], []).append(e["from"])
-        branches = payload.get("branches") or []
-        try:
-            if branches:
-                # Variant set (P5/§8): expand + CSE-collapse so the response shows
-                # the REAL run shape (@branch ids, shared prefix run once).
-                from ...pipeline.graph.branches import build_branched_graph
-
-                graph = build_branched_graph(
-                    nodes, branches, mode=mode, edges=edges or None
-                )
-            else:
-                graph = build_graph_from_spec(nodes, mode=mode, edges=edges)
-        except Exception as exc:  # noqa: BLE001 — surface any build error as 400
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        # Edit-time advice (non-blocking). Embedding-space mismatch is a *warning* here (§4.1 P1,
-        # per-node overrides only — no run config) so the user sees it while editing; the run
-        # path still hard-validates. Metric-applicability: which metrics land given the graph's
-        # produced artifacts (scored + the dataset_source's gt columns).
-        from ...config import EvaluationConfig
-        from ...evaluation.metric_registry import applicable_metrics
-        from ...evaluation.validation import check_embedding_spaces
-        from ...pipeline.graph import _effective_outputs
-
-        warnings = check_embedding_spaces(graph, EvaluationConfig())
-        produced: set = set()
-        for n in graph.nodes:
-            produced.update(_effective_outputs(n.stage, n.params))
-        metrics = [m.name for m in applicable_metrics(produced, collect_all=True)]
-        payload = graph_render_payload(
-            graph, lambda n: {"id": n.id, "stage": n.stage, "depends_on": list(n.depends_on)}
-        )
-        payload["warnings"] = warnings
-        payload["metrics"] = metrics
-        return payload
 
     @router.post(
         "/api/graph/from-config",
@@ -251,6 +188,7 @@ def build_config_router(
         name = str(payload.get("experiment_name") or "builder_export").strip() or "builder_export"
         # deep-copy: lift_single_source_dataset strips the dataset_source node in place
         graph = copy.deepcopy({k: spec[k] for k in _GRAPH_SPEC_KEYS if k in spec})
+        graph.pop("mode", None)  # the canvas label is derived from nodes, not exported as a key
         if not graph.get("nodes"):
             raise HTTPException(status_code=400, detail="The graph has no nodes to export.")
         # Keep only edges the auto-wiring wouldn't recreate, so bindings don't accumulate across
@@ -306,7 +244,7 @@ def build_config_router(
         else:
             base_config = EvaluationConfig()
 
-        merged = deep_merge_dict(
+        merged = _deep_merge(
             nested_config(base_config), dict(payload.config_patch)
         )
         config = EvaluationConfig.from_dict(merged)

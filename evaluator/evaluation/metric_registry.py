@@ -82,43 +82,20 @@ def list_metrics() -> List[MetricSpec]:
     return [_METRIC_REGISTRY[name] for name in sorted(_METRIC_REGISTRY)]
 
 
-def applicable_metrics(
-    available: Sequence[str],
-    *,
-    default: Optional[Sequence[str]] = None,
-    collect_all: bool = False,
-) -> List[MetricSpec]:
-    """The metric specs that can run given the ``available`` artifact names.
-
-    ``collect_all`` → every metric whose inputs are all present. Otherwise only those in
-    ``default`` (the dataset's ``evaluation_mode`` set) whose inputs are present.
-    """
+def applicable_metrics(available: Sequence[str]) -> List[MetricSpec]:
+    """The metric specs whose inputs are all present in ``available``."""
     have = set(available)
-    out: List[MetricSpec] = []
-    for spec in list_metrics():
-        if not set(spec.inputs) <= have:
-            continue
-        if collect_all or default is None or spec.name in set(default):
-            out.append(spec)
-    return out
+    return [spec for spec in list_metrics() if set(spec.inputs) <= have]
 
 
-def compute_metrics(
-    artifacts: Mapping[str, ItemSet],
-    *,
-    default: Optional[Sequence[str]] = None,
-    collect_all: bool = False,
-) -> Dict[str, ItemSet]:
+def compute_metrics(artifacts: Mapping[str, ItemSet]) -> Dict[str, ItemSet]:
     """Run every applicable metric over the available keyed ``artifacts``.
 
-    Returns ``{metric_name: item_scores}``. The applicable set is chosen by
-    :func:`applicable_metrics` (default mode set, or all satisfiable with ``collect_all``).
-    This is what a per-branch metrics node calls; the ``aggregate`` node then reduces the
-    returned ``item_scores`` to scalars + cross-branch deltas.
+    Returns ``{metric_name: item_scores}`` (the metrics whose inputs are all present). This is
+    what a per-branch metrics node calls; the ``aggregate`` node then reduces the returned
+    ``item_scores`` to scalars + cross-branch deltas.
     """
-    specs = applicable_metrics(
-        list(artifacts.keys()), default=default, collect_all=collect_all
-    )
+    specs = applicable_metrics(list(artifacts.keys()))
     return {spec.name: compute_metric(spec, artifacts) for spec in specs}
 
 

@@ -51,7 +51,6 @@ class Modality(str, Enum):
     RESULTS = "results"  # ranked retrieval results
     INDEX = "index"  # a searchable vector index
     SCORES = "scores"  # per-item metric scores
-    REPORT = "report"  # the aggregated result object
 
 
 @dataclass(frozen=True)

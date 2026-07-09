@@ -6,7 +6,7 @@ public signatures; the heavy logic lives here.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from ..config.types import enum_to_str
 from ..errors import ConfigurationError
@@ -61,6 +61,18 @@ def validate(config: Any) -> List[str]:
     Raises:
         ConfigurationError: If validation fails with unrecoverable errors.
     """
+    errors, warnings = collect_problems(config)
+    if errors:
+        raise ConfigurationError(
+            "Configuration validation failed:\n  - " + "\n  - ".join(errors)
+        )
+    return warnings
+
+
+def collect_problems(config: Any) -> Tuple[List[str], List[str]]:
+    """Run all config checks and RETURN ``(errors, warnings)`` without raising — for the UI's
+    non-blocking validate: the preview/forms load even with errors so the user can fix the nodes
+    and validate again. :func:`validate` is the raising wrapper used on the run path."""
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -73,12 +85,7 @@ def validate(config: Any) -> List[str]:
         _validate_gpu_memory(config, warnings, cuda_count)
     _validate_data_params(config, errors, warnings)
     _validate_dataset_compat(config, warnings)
-
-    if errors:
-        raise ConfigurationError(
-            "Configuration validation failed:\n  - " + "\n  - ".join(errors)
-        )
-    return warnings
+    return errors, warnings
 
 
 def _validate_template(config, errors):
@@ -237,16 +244,42 @@ def _validate_data_params(config, errors, warnings):
             f"vector_db.reranker_top_k must be positive, got: {config.vector_db.reranker_top_k}. "
             f"Tip: use reranker_top_k=20 or reranker_top_k=50."
         )
+    # Multi-source configs keep paths under data.datasets[role] (the builder/Config&Run shape),
+    # not the top-level data.*; validate those entries too so an edited path is checked.
+    for role, entry in (getattr(config.data, "datasets", None) or {}).items():
+        get = entry.get if isinstance(entry, dict) else (lambda k: getattr(entry, k, None))
+        for key, label in (("questions_path", "Questions"), ("corpus_path", "Corpus")):
+            path = get(key)
+            if path is not None and not Path(path).exists():
+                errors.append(f"{label} path does not exist: '{path}' (dataset '{role}').")
 
 
 def _validate_dataset_compat(config, warnings):
-    """Warn when the dataset doesn't support the chosen pipeline mode."""
-    try:
-        from ..datasets.descriptor import resolve_dataset_descriptor
+    """Warn when the dataset doesn't support the chosen pipeline mode / audio generation.
 
-        descriptor = resolve_dataset_descriptor(config.data)
+    The builder & Config&Run shape keeps the dataset under ``data.datasets[role]`` (a 1-entry map
+    for a single-source graph) and the mode in ``graph_override`` rather than ``graph_template`` —
+    so resolve the *real* descriptor from the single map entry and run the mode-independent checks
+    (audio-generation); the mode-compat check needs a known mode, so it runs only for the flat
+    config shape. Genuinely multi-source maps (>1 entry) have no single descriptor — skipped."""
+    try:
+        from ..datasets.descriptor import get_descriptor, resolve_dataset_descriptor
+
+        datasets = getattr(config.data, "datasets", None)
         mode = enum_to_str(config.graph_template)
-        if not descriptor.supports_pipeline_mode(mode):
+        if datasets:
+            if len(datasets) > 1:
+                return  # genuinely multi-source: no single descriptor/mode to check against
+            entry = next(iter(datasets.values()))
+            name = entry.get("dataset_name") if isinstance(entry, dict) \
+                else getattr(entry, "dataset_name", None)
+            descriptor = get_descriptor(name) if name else None
+            mode = None  # builder graphs carry the mode in graph_override, not graph_template
+        else:
+            descriptor = resolve_dataset_descriptor(config.data)
+        if descriptor is None:
+            return
+        if mode and mode != "None" and not descriptor.supports_pipeline_mode(mode):
             warnings.append(
                 f"Pipeline mode '{mode}' is not in the compatible modes for dataset "
                 f"'{descriptor.id}': {', '.join(descriptor.compatible_pipeline_modes)}. "

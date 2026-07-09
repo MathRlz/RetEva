@@ -80,12 +80,6 @@ class StageNode:
     # Empty for plain inputs. ``s.input(key)`` reads the highest-priority candidate a
     # bound producer actually published.
     input_aliases: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
-    # Optional per-input *role* tags ((artifact, producer_id, role)), parallel to ``bindings``
-    # (operator-abstraction): lets a generic node interpret an input by role —
-    # comparison-by-edge for ``measure`` (expected/actual). Empty for every node that doesn't
-    # opt in, so it is excluded from the CSE key (cse.py reads only ``bindings``) and existing
-    # graphs are byte-identical.
-    binding_roles: Tuple[Tuple[str, str, str], ...] = ()
     # Per-instance config (duplicate/arbitrary nodes); None for single-instance modes.
     params: Optional[dict] = field(default=None, compare=False, hash=False)
 
@@ -155,23 +149,34 @@ def _effective_outputs(stage: str, params: Optional[dict]) -> Tuple[str, ...]:
     if node_kind(stage, params) != "dataset_source":
         return _resolve(ndef.outputs, params)
     fields = (params or {}).get("fields") or {}
+    # Derived/bridge artifacts the runtime source publishes but the column schema can't name
+    # (self-retrieval corpus, TTS-bridge reference_transcription) — advertised so the preview
+    # wires the nodes the run wires from the static outputs.
+    extra = (params or {}).get("extra_outputs") or ()
+    # Artifacts a transform node in the SAME graph re-produces (query_audio when a tts node
+    # synthesizes it), so the source is not their real producer — dropped so the port doesn't
+    # dangle (the consumer's edge resolves to the transform) and the source doesn't show an input
+    # the dataset lacks. Injected by ``_attach_dataset_fields`` (it has the whole node list).
+    suppress = set((params or {}).get("suppress_outputs") or ())
     _full: Tuple[str, ...] = _resolve(ndef.outputs, params)  # the source's full output set
     base: Tuple[str, ...] = _full
-    if fields:
-        # Declared column schema: dedupe artifact names, keep registered-output order
-        # first (stable wiring), then any extra registered-elsewhere artifacts.
-        declared = list(dict.fromkeys(fields.values()))
+    if fields or extra:
+        # Declared column schema (+ derived outputs): dedupe artifact names, keep registered-
+        # output order first (stable wiring), then any extra registered-elsewhere artifacts.
+        declared = list(dict.fromkeys(list(fields.values()) + list(extra)))
         base = tuple(
             [a for a in _full if a in declared]
             + [a for a in declared if a not in _full]
         )
+    if suppress:
+        base = tuple(a for a in base if a not in suppress)
     role = (params or {}).get("role") or DATASET_ROLE_BOTH
     if role == DATASET_ROLE_BOTH:
         return base
     if role not in _DATASET_SOURCE_ROLE_OUTPUTS:
         allowed = sorted([*_DATASET_SOURCE_ROLE_OUTPUTS, DATASET_ROLE_BOTH])
         raise ValueError(f"Unknown dataset_source role '{role}'. Allowed: {allowed}")
-    narrowed = _DATASET_SOURCE_ROLE_OUTPUTS[role]
+    narrowed = tuple(a for a in _DATASET_SOURCE_ROLE_OUTPUTS[role] if a not in suppress)
     if fields:
         # Fields narrow within the role slice; an empty intersection means the
         # schema doesn't describe this usage (e.g. a corpus-role source resolved
@@ -310,6 +315,20 @@ def node_category(stage: str, params: Optional[dict] = None) -> str:
 def node_domain(stage: str, params: Optional[dict] = None) -> str:
     """A node instance's declared domain, resolving a callable (operator) domain."""
     return _resolve(get_stage_node_def(stage).domain, params)
+
+
+def is_structural(stage: str, params: Optional[dict] = None) -> bool:
+    """Whether a node is *plumbing* the user never authors — auto-derived into the execution DAG
+    and hidden from the builder palette/canvas: the ``measure`` comparison + report + trace nodes
+    and the ``sink`` finalize/aggregate/persistence nodes. The one exception is the LLM judge
+    (``answer_judge``), which is a user-facing Model, not plumbing. One declaration consumed by both
+    the palette filter and the derive step (the UI-graph ↔ execution-DAG separation)."""
+    from .operators import expand_alias, node_kind  # lazy: avoid an import cycle
+
+    operator, _eff = expand_alias(stage, dict(params or {}))
+    if operator not in ("measure", "sink"):
+        return False
+    return node_kind(stage, params) != "answer_judge"
 
 
 def node_model_field(stage: str, params: Optional[dict] = None) -> Optional[str]:

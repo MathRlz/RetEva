@@ -17,7 +17,7 @@ from ..helpers import _payload_to_key
 from ..answer_gen import generate_answers
 from ..executor.state import RunState
 from .retrieval import _retrieved_from_bus
-from ._common import is_asr_text_retrieval, retrieval_ran
+from ._common import retrieval_ran
 
 logger = get_logger(__name__)
 
@@ -47,17 +47,31 @@ def _generate_answer_details(
     """Answer-GENERATION node: generate answers (if enabled); return query_id → detail map
     (the SAME detail dicts stored in ``results['answer_generation']``, so the answer_metrics
     node can enrich them in place). Scoring is the answer_metrics node's job."""
-    cfg = s.answer_gen_config
+    cfg = s.node_overlay(
+        s.answer_gen_config,
+        ("enabled", "method", "model", "api_base", "api_key_env", "temperature", "max_cases",
+         "timeout_s", "context_docs", "context_max_chars", "compute_rouge", "use_local_server",
+         "local_server_url", "system_prompt", "prompt_template", "reference_metadata_field"),
+        casts={"enabled": bool, "temperature": float, "max_cases": int, "timeout_s": int,
+               "context_docs": int, "context_max_chars": int, "compute_rouge": bool,
+               "use_local_server": bool},
+        force={"enabled": True},
+    )
     if cfg is None or not getattr(cfg, "enabled", False):
         return {}
 
     s.cb("phase_5_answer_gen", 0, s.total, "Phase 5: Answer generation")
-    # Bus-only (M1d-2): the effective (most-processed) query in ASR modes (QUERY_TEXT_CHAIN).
-    query_texts = (
-        s.input("query_text", default=[])
-        if is_asr_text_retrieval(s)
-        else s.get_artifact("reference_transcription", default=[])
-    )
+    # Bus-only (M1d-2): the effective (most-processed) query is the QUERY_TEXT_CHAIN. Single
+    # honest source (the old non-asr `reference_transcription` fallback was removed) — so an
+    # audio-only graph WITHOUT an ASR node has no text query. Make that LOUD instead of silently
+    # emitting zero answers: the query is query_text-only by design; add an ASR node to supply it.
+    query_texts = s.input("query_text", default=[])
+    if not query_texts:
+        logger.warning(
+            "Answer generation enabled but no query_text on the bus — producing 0 answers. "
+            "The query is query_text-only; an audio-only graph needs an ASR node to supply it."
+        )
+        return {}
     answer_results = generate_answers(
         traces_data=(query_ids, all_relevant, results_with_scores),
         all_query_texts=query_texts,
@@ -142,10 +156,10 @@ def _build_query_traces(
 
 
 def _run_judge(
-    s: "RunState", results, all_relevant, per_query_recall5, retrieved_keys
+    s: "RunState", results, all_relevant, per_query_recall5, retrieved_keys, cfg
 ) -> None:
-    """Judge node: run the LLM judge over query traces (if enabled) + calibration."""
-    cfg = s.judge_config
+    """Judge node: run the LLM judge over query traces (if enabled) + calibration. ``cfg`` is the
+    node-overlaid judge config (its params carried on the answer_judge node)."""
     if cfg is None or not getattr(cfg, "enabled", False):
         return
     if "query_traces" not in results:
@@ -267,13 +281,26 @@ def _stage_answer_judge(s: RunState) -> None:
     rubric + calibrates against IR metrics. Present only when the judge is enabled."""
     if not retrieval_ran(s):
         return
+    cfg = s.node_overlay(
+        s.judge_config,
+        ("enabled", "model", "api_base", "api_key_env", "temperature", "max_cases", "timeout_s",
+         "judge_mode", "judge_aspects", "score_aggregation", "aspect_weights", "reference_mode",
+         "pass_threshold", "include_doc_text", "judge_top_k", "use_local_server",
+         "local_server_url", "system_prompt", "user_prompt_template"),
+        casts={"enabled": bool, "temperature": float, "max_cases": int, "timeout_s": int,
+               "pass_threshold": float, "judge_top_k": int, "include_doc_text": bool,
+               "use_local_server": bool},
+        force={"enabled": True},
+    )
+    if cfg is not None and not cfg.enabled:
+        return  # a per-branch {enabled: false} judge node — skip this branch's judging
     _, retrieved_keys, _ids = _retrieved_from_bus(s)
-    _run_judge(s, s.results, s.metrics_all_relevant, s.per_query_recall5, retrieved_keys)
+    _run_judge(s, s.results, s.metrics_all_relevant, s.per_query_recall5, retrieved_keys, cfg)
     details = (s.results.get("llm_judge") or {}).get("details") or []
-    _publish_judge_scores(s, details)
+    _publish_judge_scores(s, details, cfg)
 
 
-def _publish_judge_scores(s: RunState, details: list) -> None:
+def _publish_judge_scores(s: RunState, details: list, cfg=None) -> None:
     """Publish the per-query judge outputs as keyed ItemSets so the (reference-free) judge
     metrics score them through the normal path: ``judge_scores`` (overall), ``judge_pass``
     (1.0/0.0 → judge_pass_rate), and ``judge_aspect_<a>`` for each configured aspect. The
@@ -286,7 +313,7 @@ def _publish_judge_scores(s: RunState, details: list) -> None:
         "judge_pass",
         ItemSet(ids, [1.0 if d["judge"]["verdict"] == "PASS" else 0.0 for d in details]),
     )
-    for aspect in s.judge_config.judge_aspects:
+    for aspect in (cfg if cfg is not None else s.judge_config).judge_aspects:
         pairs = [
             (str(d["query_id"]), d["judge"]["aspect_scores"][aspect])
             for d in details if aspect in d["judge"]["aspect_scores"]

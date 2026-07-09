@@ -243,30 +243,3 @@ def threshold_filter(
         Filtered list of (payload, score) tuples
     """
     return [(payload, score) for payload, score in results if score >= min_score]
-
-
-def threshold_filter_with_fallback(
-    results: List[Tuple[Any, float]],
-    min_score: float = 0.5,
-    min_results: int = 1,
-) -> List[Tuple[Any, float]]:
-    """Filter results below threshold, but ensure minimum number of results.
-
-    If filtering would return fewer than min_results, returns the top min_results
-    regardless of threshold.
-
-    Args:
-        results: List of (payload, score) tuples
-        min_score: Minimum score threshold
-        min_results: Minimum number of results to return
-
-    Returns:
-        Filtered list of (payload, score) tuples
-    """
-    filtered = threshold_filter(results, min_score)
-
-    if len(filtered) >= min_results:
-        return filtered
-
-    # Return top min_results if threshold filtering is too aggressive
-    return results[:min_results]

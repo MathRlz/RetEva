@@ -1,0 +1,17 @@
+{# Shared validation problems fragment (non-blocking). Rendered by /ui/config-preview +
+   /ui/validate-graph (Config & Run) AND /ui/validate-builder (the builder) — one styled module.
+   `errors`/`warnings` are required; `summary` (an "ok" headline, e.g. "Valid ✓ — N levels") and
+   `metrics` (the metric names that will auto-inject) are optional extras the builder passes. #}
+{% if errors %}
+<div class="error-box">
+  <strong>⚠ {{ errors | length }} problem{{ '' if errors | length == 1 else 's' }} to fix before
+    running — adjust the parameters below, then “Validate” again:</strong>
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+{% for w in warnings %}<p class="warn">⚠ {{ w }}</p>{% endfor %}
+{% if summary and not errors %}<p class="ok">{{ summary }}</p>{% endif %}
+{% if metrics %}<p class="muted" style="font-size:11px">metrics:
+  {% for m in metrics %}<span class="chip">{{ m }}</span>{% endfor %}</p>
+{% endif %}
+{% if not errors and not warnings and not summary %}<p class="ok">Config valid ✓</p>{% endif %}

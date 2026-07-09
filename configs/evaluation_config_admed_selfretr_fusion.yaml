@@ -10,22 +10,32 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: admed_voice
-  path: null                # admed_voice location; null = ADMED_VOICE_PATH / EVALUATOR_DATA_DIR env
-  split: both               # train / test / both (admed has no validation split)
+  path: null
+  split: both
   batch_size: 32
 data:
   num_workers: 4
   test_size: 0.0
 graph:
-  mode: audio_text_retrieval
-embedding_fusion:
-  enabled: true               # fuse audio + text query vectors, then a single retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - asr
+  - audio_embedding
+  - text_embedding
+  - fusion
+  - retrieval
+  - embedding_alignment_metrics
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   audio_embedding:
     model: attention_pool
     size: medium
-    dim: 2048                 # must match the text embedder's dim (jina_v4 = 2048)
-    model_path: null          # <- the trained attention-pool alignment weights
+    dim: 2048
+    model_path: null
     device: cuda:0
   text_embedding:
     model: jina_v4

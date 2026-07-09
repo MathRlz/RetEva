@@ -112,7 +112,12 @@ class AudioTranscriptionDataset(EvalDataset):
     requires_audio = True
     requires_text = False
     evaluation_mode = "transcription"
-    native_pipeline_modes = ("asr_only", "asr_text_retrieval")
+    # Transcription is the native task, but the audio queries + a corpus derived from the
+    # transcriptions make cross-modal audio retrieval a legitimate experiment too (apm_jina,
+    # clap_admed, *_selfretr_audio_emb/fusion), so the audio-retrieval modes are compatible.
+    native_pipeline_modes = (
+        "asr_only", "asr_text_retrieval", "audio_text_retrieval", "audio_emb_retrieval",
+    )
 
 
 class AudioRetrievalDataset(EvalDataset):

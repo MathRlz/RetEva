@@ -15,22 +15,28 @@ dataset:
 data:
   num_workers: 0
 graph:
-  mode: asr_text_retrieval
   nodes:
-    - dataset_source
-    - corpus_embedding
-    - vector_db
-    - tts
-    - id: noise
-      type: augment_audio
-      params:
-        add_noise: true
-        snr_db: 5.0
-    - asr
-    - text_embedding
-    - retrieval
-    - metrics
-    - finalize
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      voice: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/showcase/audio
+  - id: noise
+    type: augment_audio
+    params:
+      add_noise: true
+      snr_db: 5.0
+  - asr
+  - text_embedding
+  - retrieval
+  - metrics
+  - finalize
 nodes:
   asr:
     model: whisper
@@ -45,13 +51,6 @@ nodes:
     k: 5
 runtime:
   cache:
-    enabled: false   # noisy clips must not collide with clean transcription cache entries
+    enabled: false
   logging:
     console_level: WARNING
-audio_synthesis:
-  enabled: true
-  provider: mms
-  voice: en
-  sample_rate: 16000
-  seed: 42
-  output_dir: evaluation_results/showcase/audio

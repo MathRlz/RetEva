@@ -16,23 +16,29 @@ dataset:
 data:
   num_workers: 0
 graph:
-  mode: asr_text_retrieval
   nodes:
-    - dataset_source
-    - corpus_embedding
-    - vector_db
-    - tts
-    - asr
-    - text_embedding
-    - retrieval
-    - metrics
-    - finalize
-    - aggregate
-    - leaderboard_sink
-    - id: dataset_sink
-      type: dataset_sink
-      params:
-        output_dir: evaluation_results/showcase/exported_dataset
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      voice: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/showcase/audio
+  - asr
+  - text_embedding
+  - retrieval
+  - metrics
+  - finalize
+  - aggregate
+  - leaderboard_sink
+  - id: dataset_sink
+    type: dataset_sink
+    params:
+      output_dir: evaluation_results/showcase/exported_dataset
 nodes:
   asr:
     model: whisper
@@ -48,10 +54,3 @@ runtime:
     enabled: true
   logging:
     console_level: WARNING
-audio_synthesis:
-  enabled: true
-  provider: mms
-  voice: en
-  sample_rate: 16000
-  seed: 42
-  output_dir: evaluation_results/showcase/audio

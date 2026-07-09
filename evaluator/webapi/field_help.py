@@ -6,7 +6,6 @@ template can look up ``field_help.get(name)`` directly.
 """
 
 FIELD_HELP = {
-    "pipeline_mode": "Graph template to start from (asr_text_retrieval, audio_emb_retrieval, …).",
     "retrieval_mode": "dense = embedding similarity · sparse = BM25 keywords · hybrid = fuse both.",
     "reranker_mode": "Re-score the top-k: none · token_overlap · cross_encoder.",
     "vector_db_type": "Index backend: inmemory (small) · faiss (fast) · chromadb/qdrant (server).",

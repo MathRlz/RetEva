@@ -63,10 +63,12 @@ area is tracked inline in §13 (the completed task-trackers were retired once th
    terminal sink nodes then persist it.
 6. **One config, one core.** The full `EvaluationConfig` *is* the experiment; every entry point
    (CLI, webapi, API) runs the same execution core.
-7. **The graph is the spec.** What runs is the node graph — it drives both pipeline construction
-   and handler behaviour. A *named template* (`graph.mode` → `graph_override['template']`) is
-   optional sugar that assembles a default graph at config-creation time; there is no
-   `pipeline_mode` runtime field, and a config carrying an explicit `graph.nodes` needs no template.
+7. **The graph is the spec.** What runs is the explicit node graph — it drives both pipeline
+   construction and handler behaviour. A config carries `graph.nodes` (+ optional `edges`/`branches`)
+   and nothing else graph-wise: there is no `graph.mode` template and no `features:` block (both are
+   rejected), no `pipeline_mode` runtime field. Every capability is a node; its settings ride on that
+   node; the run label is *derived* from the node kinds (`label_from_graph`). Named templates survive
+   only as a builder skeleton (`pipeline/graph/templates.py`), never referenced by a config.
 
 ---
 
@@ -765,11 +767,12 @@ binding `β(v, x)` is the ordered list of earlier producers `p` with `x ∈ Out*
 **Build** (`build_graph_from_spec`): auto-wire each node to producers of its required + present-
 optional inputs (`edges` add ordering not implied by data); `validate_graph_artifacts` checks
 every required input is satisfiable in topological order; `topological_levels()` yields
-deterministic levels and detects cycles. `build_graph_for_config` uses an explicit `graph.nodes`
-override, else expands the config's **graph template** (`graph_override['template']`, set from
-`graph.mode`) with its feature flags. The run uses the sibling `build_run_graph` (same assembly
-tail, `_wire_mode_graph`), which sources its feature flags from the *built pipelines* + run
+deterministic levels and detects cycles. `build_graph_for_config` wires the config's explicit
+`graph.nodes` (with `graph.branches` expanded + CSE-collapsed when present); its `mode` label is
+*derived* from the node kinds (`label_from_graph`). The run uses the sibling `build_run_graph` (same
+assembly tail, `_wire_mode_graph`), which sources its feature flags from the *built pipelines* + run
 features rather than the config. There is no `pipeline_mode` field — the graph is the spec.
+(`assemble_specs`/templates remain, but only as the builder skeleton — a config never selects one.)
 
 **Execute** (`run_from_bundle` → `run_graph`, `evaluation/executor/`). `run_graph(dataset,
 context, *, service_provider, offload_policy, eval_config, load_info, graph_override)` takes an
@@ -814,27 +817,30 @@ registration (both required + validated): **category** — the data-flow *role*
 and execution (`stages_in_category("model")` is the device/offload-managed set); and **domain** —
 the functional *area* (`ingest` / `query` / `transcription` / `embedding` / `retrieval` /
 `refine` / `fusion` / `generation` / `robustness` / `scoring` / `reporting` / `export`), used for
-UI grouping + DAG coloring + docs. The catalogue below is **drift-guarded** against the registry
-by `tests/test_node_catalogue_doc.py`.
+UI grouping + DAG coloring + docs.
 
-**Operator vocabulary (the registered node types).** The DAG is built from **11 generic
-operators** (`pipeline/graph/operators.py`, `DAG_OPERATOR_ABSTRACTION.md`); a **field**
+**Operator vocabulary (the registered node types).** The DAG is built from **12
+operators** (`pipeline/graph/operators.py`); a **field**
 selects the specific behavior, so the registry holds one node type per op-shape instead of one
-per parameter combination. The classic node names (`asr`, `text_embedding`, `rerank`, …) are
-**load-time aliases** (`ALIASES`): authoring `{type: corpus_embedding}` or `nodes.rerank:`
-expands at the wiring chokepoint (`wiring._normalize_spec_item`) to `(operator, fields)` while
+per parameter combination. `asr` and `tts` are **first-class node types** (two different models'
+nodes — no `op` discriminator; the type IS the behavior). The remaining classic node names
+(`text_embedding`, `rerank`, …) are **load-time aliases** (`ALIASES`): authoring
+`{type: corpus_embedding}` or `nodes.rerank:` expands at the wiring chokepoint
+(`wiring._normalize_spec_item`) to `(operator, fields)` while
 **keeping the node id** = the legacy name (so keyed artifacts + branch ids are stable). Ports /
 category / domain / model_field are **field-resolved** (`registry._resolve` over a per-instance
 `params`); `node_kind(operator, params)` is the reverse, used wherever runtime still keys on a
-concrete kind (device map, offload, V[s] validation, handler dispatch). The catalogue below is
-**drift-guarded** against the registry by `tests/test_node_catalogue_doc.py`.
+concrete kind (device map, offload, V[s] validation, handler dispatch). (The retired `convert`
+operator is accepted as a back-compat spelling: `{type: convert, params: {op: …}}` resolves to
+the first-class type and the `op` field is dropped.)
 
-<!-- node-catalogue:begin (keep operator names in sync with pipeline/graph/operators_catalog.py — tests/test_node_catalogue_doc.py) -->
+<!-- node-catalogue:begin (keep operator names in sync with pipeline/graph/operators_catalog.py) -->
 
 | Operator | Category | Selecting fields | Collapses (legacy nodes) |
 |----------|----------|------------------|--------------------------|
 | `source` | source | `union`, `role`, `dataset`, `fields` | dataset_source, dataset_union |
-| `convert` | model / transform* | `op` (asr/tts) | asr, tts |
+| `asr` | model | — | (first-class: audio → text hypothesis) |
+| `tts` | transform | — | (first-class: text → synthesized audio) |
 | `transform` | transform | `op` (correct/optimize/refine/perturb), `axis`, `modality` | query_correction, query_optimization, query_refine, augmenter, augment_audio |
 | `embed` | model | `axis` (query/corpus), `modality` (text/audio) | text_embedding, audio_embedding, corpus_embedding |
 | `combine` | transform | `level` (embedding/result/set) | fusion, result_fusion, corpus_merge |
@@ -847,8 +853,8 @@ concrete kind (device map, offload, V[s] validation, handler dispatch). The cata
 
 <!-- node-catalogue:end -->
 
-`*` `convert` and `measure` carry a **callable category** (convert: model for asr, transform for
-tts; measure: metric, or transform for the `trace` builder). Each operator's per-field artifact
+`*` `measure` carries a **callable category** (metric, or transform for the `trace` builder).
+Each operator's per-field artifact
 contract (the exact consumes → produces) is declared per operator in
 `pipeline/graph/operators_catalog.py` (the `register_stage_node` blocks) and field-resolved by
 `pipeline/graph/registry.py`; the friendly per-instance label (e.g. `embed{axis:corpus}` →
@@ -874,6 +880,7 @@ whisper tiny/base/small/medium/large-v2/large-v3 — and `CHOICES` for enumerate
 |------|------------------------------------|
 | `dataset_source` | `dataset` (picker: registered dataset id, or a datasets-map id), `role` (both/questions/corpus), + the picked dataset's required settings |
 | `asr` | `oracle` (bool — this branch uses reference transcriptions, R2) |
+| `tts` | `provider` (piper/mms/m4t/xtts_v2 — mirrors the TTS registry), `voice`, `language`, `sample_rate`, `speed`, `pitch`, `volume`, `seed`, `output_dir` (the synthesis config rides the node) |
 | `retrieval` | `k`, `mode` (dense/sparse/hybrid), `distance`, `gpu_id`, `vectors` (pin one stream — result-fusion / per-hop) |
 | `vector_db` | `store` (inmemory/faiss/faiss_gpu/chromadb/qdrant) + conditional backend fields via `show_if` — `gpu_id` (faiss_gpu), `path` (chromadb), `url`/`collection` (qdrant/chromadb) |
 | `rerank` | `mode` (none/token_overlap/cross_encoder), `k`, `top_k`; model picker from the Reranker registry |
@@ -894,14 +901,13 @@ not default form fields.
 
 **Graph templates** (the former pipeline *modes*) are assembled declaratively
 (`pipeline/graph/assembly.py:assemble_specs`, driven by a `FeatureSet` dataclass of ~14 capability
-flags derived from the config — no hardcoded per-template node list). A template is a
-config-creation **skeleton**, not a runtime field: a config selects one via `graph.mode` (a
-build-time `graph_override['template']` reference; `pipeline/graph/templates.py` also serves them to
-the web canvas and can emit an embeddable `{nodes, edges}` block via `template_graph_spec`) or
-carries an explicit `graph.nodes`. The executed graph then
-drives both building (`factory._graph_build_plan`) and handler behaviour — there is no
-`pipeline_mode`; `GraphTemplateSpec`/`resolve_graph_template` only validate a template name + its
-required model fields. The named templates are `asr_only`, `asr_text_retrieval`,
+flags — no hardcoded per-template node list). A template is now a **builder skeleton only**: a config
+never selects one. `pipeline/graph/templates.py` serves them to the web canvas and can emit an
+embeddable `{nodes, edges}` block via `template_graph_spec`, which the builder fills in; the saved
+config is an explicit `graph.nodes` list. The executed graph drives both building
+(`factory._graph_build_plan`) and handler behaviour — there is no `pipeline_mode`;
+`GraphTemplateSpec`/`resolve_graph_template` only validate a template name + its required model
+fields for the builder. The named templates are `asr_only`, `asr_text_retrieval`,
 `audio_emb_retrieval`, `audio_text_retrieval`; feature flags slot in the optional nodes:
 `tts`, `augment_audio`, `query_correction`, `query_optimization`, `query_refine`,
 `multi_query_retrieval`, `rerank`/`mmr`/`threshold`, `fusion`/`result_fusion`,
@@ -910,12 +916,13 @@ required model fields. The named templates are `asr_only`, `asr_text_retrieval`,
 
 **Composable / iterative RAG.** A RAG flow is a sequence of pure nodes — improve the query →
 embed → retrieve → reformulate on the retrieved docs → retrieve again. The loop is a strict
-DAG, so it is **unrolled** into distinct instances rather than cycled: `config.rag.rounds=N`
-(`RagFlowConfig`) emits `text_embedding@h1, retrieval@h1, query_refine@h1, text_embedding@h2,
-…, retrieval@hN`. No per-hop artifact names are needed — `_wire_nodes` binds each instance
+DAG, so it is **unrolled** into distinct instances rather than cycled: the config lists the hops
+explicitly — `text_embedding@h1, retrieval@h1, query_refine@h1, text_embedding@h2,
+…, retrieval@hN` (the builder-skeleton path derives the same list from `rag.rounds`).
+No per-hop artifact names are needed — `_wire_nodes` binds each instance
 only to **prior** producers and the `one_of` chains read the highest-priority *published*
 variant, so hop `k`'s embedder automatically picks `refine@h(k-1)`'s `refined_query_text` and
-hop `k`'s retrieval picks its own hop's vectors. `rounds=1` is byte-identical to a single
+hop `k`'s retrieval picks its own hop's vectors. One hop is byte-identical to a single
 pass. The RAG-fusion fan-out (`decompose`/`multi_query`) — whose sub-query count is
 runtime-variable and so cannot be static nodes — is the one explicit composite,
 `multi_query_retrieval` (`query_text → retrieved`); it replaces the old in-handler
@@ -935,17 +942,17 @@ datasets:                                   # multi-source; or single `dataset:`
   docs: { corpus: corpus.json, role: corpus }
   qa:   { questions: q.json, role: questions }
 graph:
-  mode: asr_text_retrieval                  # a graph template; or explicit { nodes:[…], edges:[…] }
-nodes:
+  nodes: [dataset_source, corpus_embedding, vector_db, asr, query_correction,  # the explicit spec
+          text_embedding, retrieval, answer_gen, answer_metrics, metrics, finalize]
+  branches:                                 # expand+CSE (§8); each overrides only diffs
+    - { id: ref,  asr: { oracle: true },  query_correction: { enabled: false } }
+    - { id: asr,  asr: whisper,           query_correction: { enabled: false } }
+    - { id: corr, asr: whisper,           query_correction: { enabled: true, method: rule } }
+nodes:                                      # per-node model config, keyed by graph node id
   asr:            { model: whisper, size: large }
   text_embedding: { model: labse }
   vector_db:      { store: faiss }              # canonical store home
   retrieval:      { k: 5, mode: hybrid, reranker: { enabled: true } }
-  answer_gen:     { enabled: true }
-branches:                                   # expand+CSE (§8); each overrides only diffs
-  - { id: ref,  query_text: reference }
-  - { id: asr,  asr: whisper }
-  - { id: corr, asr: whisper, query_correction: rules }
 runtime: { cache: { enabled: true }, tracking: { backend: mlflow }, parallel_enabled: true }
 ```
 
@@ -1026,7 +1033,65 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
   schema (sizes/choices/defaults via `/api/models/{family}/{type}/params`) — no model list or
   param map is hardcoded in the UI. What each node lets the user set is specified in §9
   ("Builder-settable params"): minimal node forms, model fields only after model selection
-  (model-author-declared, §11), node switches from `register_stage_node(param_spec=…)`.
+  (model-author-declared, §11), node switches from `register_stage_node(param_spec=…)`. The
+  authoring surface (builder + Config&Run) is the **simplified UI** of §12.1.
+
+### 12.1 Simplified authoring UI — the UI-graph ↔ execution-DAG split
+
+**Why.** Authoring the *full* execution DAG node-by-node is too much: a meaningful pipeline is ~10
+operations but the runnable graph also carries ~8 plumbing node-types (per-comparison metrics, the
+`metrics` report, `build_query_traces`, `finalize`, aggregate, sinks, the `tts` bridge) the user
+never configures, and a config is easier tweaked through forms than raw YAML. So the web surface
+separates a **UI graph** (only the *meaningful* operations a user composes) from the **execution
+DAG** (the full wired graph), **without changing the runtime** — the m1c byte-parity gate stays green
+because the run sees the same graph either way. This is purely an authoring/display + derive layer.
+
+**The boundary is one predicate.** `pipeline/graph/registry.py:is_structural(stage, params)` (True
+for the `measure`/`sink` plumbing except the `answer_judge`, which is a Model) is declared once and
+consumed by the palette filter, the canvas/preview node-strip, and the build-time derive. Meaningful
+= field→model→output + vector DB + RAG-opt + judge; structural = everything derived.
+
+**Builder** (`/ui/builder`, `templates/builder.html` + Drawflow). The canvas seeds the mode template
+with structural nodes **stripped** (`meaningfulOnly`), so the user authors meaningful ops only.
+Layout (2026-06): a full-width canvas with a top toolbar (mode + Reload/Export/Validate/Run; LLM /
+branches / load-save / exported-spec tucked into dropdowns), a **category-dropdown palette** (grouped
+by user-facing `section`, structural hidden), and the per-node param panel below the canvas. The
+source node advertises the *chosen dataset's real fields* (`params.fields` → `_effective_outputs`).
+The simplified graph is **explicit**: every meaningful node is a normal node with real input/output
+ports the user connects, and **ground truth is a real (optional) input port** wired from the source —
+retrieval ← `relevant_docs`, asr ← `reference_transcription`, answer_gen ← `short_answers` — not a
+declared annotation. The corpus embedder is **nothing special** — it's `embed{axis:corpus}`, the
+sibling of `text_embedding` (`embed{axis:query}`); no node gets bespoke auto-derivation or hiding.
+**Only** the auto-created reporting plumbing (the metric-comparison / report / finalize / trace nodes
+the user never writes — the `is_structural` set) is hidden, revealed via "View full DAG"; the data
+spine (embedders, vector_db, retrieval, GT inputs) is all visible + wireable. (The LLM judge reads a
+`query_traces` bundle whose producer is hidden plumbing, so the simplified view drops its
+`metrics`/`query_traces` ports — `STRUCTURAL_ARTIFACTS` — when nothing rendered produces them.)
+
+**Derive at build (Approach B).** `webapi/form_config.py:graph_spec_to_config_dict` keeps the
+meaningful nodes verbatim (so per-node models survive — the alternative, folding them into shared
+config fields, collapsed the embedding-space-mismatch invariant) and **appends** the structural
+plumbing that `assemble_specs(mode, inferred_features)` would add (`_complete_with_plumbing` +
+`_infer_features`, deduped by `node_kind`). Appended nodes carry no edges and auto-wire by data-flow
+(`build_graph_from_spec`), so the canvas graph runs as the full, byte-identical execution DAG. The
+read-only preview defaults to the simplified graph with a power-user "View full DAG" toggle.
+
+**Config & Run** (`/ui/config`, `ui/config.py`). Choose a saved config (`get_preset`) → its pipeline
+preview (`graph_preview`, default-simplified via the `structural` flag) → an **editable per-node
+form** for each meaningful node, seeded from `config_to_canvas_spec` → **Validate** / **Run with
+changes** (`/ui/run-graph` → `graph_spec_to_config_dict`) / **Run preset as-is** / **Open in
+builder**. Editing is param-only here (topology lives in the builder).
+
+**One form renderer.** `static/node_form.js` (`window.NodeForm`) renders a node's full param form
+(model family + size + the model's `Params` schema + advanced fields + the operator's `node_params` +
+dataset picker, with discriminator re-resolution) from a **host adapter**
+(`{params, spec, setParam, setExtraParam, refetch}`). The builder binds a Drawflow host; Config & Run
+binds a plain-object host — one registry-driven renderer, no duplication, no drift.
+
+**Non-blocking validation.** `config/validation.py:collect_problems` returns `(errors, warnings)`
+without raising (the raising `validate` is the run-path wrapper). The Config&Run preview loads even
+for an invalid config (`from_dict(validate=False)`); problems show in a panel the user clears by
+fixing the nodes and re-validating. The run path still hard-validates.
 
 ---
 
@@ -1038,7 +1103,7 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
 |-----|----|
 | Dataset | subclass an ABC in `datasets/types.py`, implement `from_config` (+ `__len__`/`__getitem__`/`get_corpus`), `@register_eval_dataset(id=…)`; `supports_generation=True` unlocks audio via TTS |
 | Model | impl under `models/<family>/`, decorate with the registry decorator |
-| Node type | `register_stage_node(...)` (contract, `pipeline/graph/operators_catalog.py`) + `@register_stage_handler(...)` (executable, `evaluation/handlers/`). The two are cross-checked by `stage_registry.validate_node_handler_consistency` (a drift-guard test fails if one is added without the other) |
+| Node type | `register_stage_node(...)` (contract, `pipeline/graph/operators_catalog.py`) + `@register_stage_handler(...)` (executable, `evaluation/handlers/`). A missing handler for a registered node fails pre-flight (`validate_graph_handlers`, run before dispatch) |
 | Metric | `register_metric(name, inputs=…)` (GT optional): `metric(*artifacts) → item_scores`; declared inputs drive auto-injection; `aggregate` reduces |
 | Augmentation | a type-preserving node `X → X` |
 | Corrector | `@register_corrector("name")` on `(texts, config, client?) → texts` in `evaluation/query_correction.py`; select via the node's `method` param |
@@ -1059,7 +1124,7 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
 | Metric-spec registry + aggregate/report reducer | `evaluation/metric_registry.py`, `evaluation/aggregate.py` |
 | Shared metric-reduction utilities (both report paths) | `evaluation/handlers/metrics.py` (`_branch_scores`, `_run_provenance`, `_attach_report`, `_retrieval_wer_impact`) |
 | Per-branch scope markers (drives `_NodeView` isolation) | `evaluation/executor/state.py:per_branch_field_names` |
-| Deterministic e2e parity-gate snapshot | `scripts/report_snapshot.py` |
+| Deterministic e2e parity-gate check | `m1c_check.py` (repo root; run in `amazing_curie`) |
 | One execution core (validate → pipelines → evaluate; the dataset loads in-graph) | `services/evaluation_service.py:_run_core` |
 | Pre-flight validation chain (determinism, cost budget, V[s] config+graph, store backends) | `evaluation/validation.py:run_pre_flight` |
 | Audio bricks (tts, augment_audio) + the audio-ref bus | `evaluation/handlers/audio.py`, `evaluation/audio_refs.py` |
@@ -1086,6 +1151,7 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
 | ~~LRU+TTL model cache + soft-CPU offload~~ (`on_finish_soft_cpu`, 2c, §12) · ~~quantization knob~~ (1a, §11) · ~~warm-up batch sizing~~ (1b, §11) | `[impl]` (2026-06-17). Async CPU stages (4b, §9) `[impl]`: the order-preserving, determinism-neutral `parallel_map` primitive + `cpu_stage_executor` knob (sync/thread/process), now wired into the per-item WER/CER map (`handlers/metrics.py:_asr_item_scores`, the first GIL-bound stage) — a mock-equivalence test proves thread/process give a byte-identical report to the default sync, and the container gate confirms `--cpu_stage_executor process` == sync byte-for-byte (full report incl. scores + CIs) on the real e2e. Wiring the remaining stages (correction/augmentation) follows the same picklable-pure-fn pattern. |
 | ~~MLflow/W&B export bridge~~ (`analysis/tracking_export.py`, 1d, §8) · ~~item replay by query id~~ (`evaluator replay`, 2d, §14) | `[impl]` (2026-06-17) |
 | ~~APM weight loading + whiten/ABTT correctness~~ (`models/a2e/attention_pool.py`, `postprocessing.py`, §4.1) | `[impl]` (2026-06-17): the encoder is loaded from the checkpoint's `audio_enc.*` so it matches training (size mismatch → loud error), a missing pooling/projection weight raises instead of silently using random init, and ABTT is L2-normalized to match the training transform (whitening is not). Verified against `apm_new/apm` + an end-to-end load on a real whisper-large encoder in `amazing_curie`. |
+| ~~Simplified authoring UI (UI-graph ↔ execution-DAG split): meaningful-graph builder (full-width canvas, dropdown palette), Config&Run editable per-node forms, shared `node_form.js`, non-blocking `collect_problems` validate~~ — §12.1 | `[impl]` (2026-06-23): authoring shows only meaningful ops; the structural plumbing is derived at build (`graph_spec_to_config_dict`), byte-parity unchanged |
 | Per-node offload of branch models | `⊘ deferred` (memory opt) |
 
 The completed task-trackers and audit docs that drove the `[impl]` work have been retired
@@ -1255,42 +1321,54 @@ descriptor. Select it with `dataset.id: my_text_retrieval` (+ `questions` / `cor
 ### 15.3 Build experiments by composing nodes
 
 An experiment **is** its config: a node-centric YAML that mirrors the DAG (§10). The `to_legacy_dict`
-loader (`config/graph_config.py`) is the one chokepoint that translates it. A run picks its node set
-two ways — a **named template** (the common case) or an **explicit graph** (full control).
+loader (`config/graph_config.py`) is the one chokepoint that translates it. **A config is an explicit
+graph** — `graph.nodes` (+ optional `edges`/`branches`) IS the spec. There is no `graph.mode`
+template and no `features:` block in a config (both are rejected); every capability is a node, its
+settings ride on that node, and the run label is derived from the node kinds (`label_from_graph`).
+Named templates survive only as a **builder skeleton** (`pipeline/graph/templates.py` → the web
+canvas / `template_graph_spec`), never referenced by a config file.
 
-**(a) Named template + per-node settings.** `graph.mode` picks a template skeleton; `nodes.<type>`
-blocks carry each node's model + params; optional features (correction, rerank, mmr, fusion,
-answer_gen, judge, audio/corpus augmentation) slot in from config flags (`assembly.py:FeatureSet`,
-§9). The real `configs/showcase_hybrid_rerank_mmr.yaml`:
+**(a) The graph is the spec.** Each entry is a bare type string (id = type) or `{id, type, params}`.
+A model-bearing node's params (or a `nodes.<type>` map) carry its model; a **feature node** carries
+its capability config as params — the loader folds those into the sub-config so the built node stays
+structural, and the node's presence enables the capability. `graph.edges` adds ordering not implied
+by data (auto-wiring handles data edges by artifact name). The real
+`configs/showcase_hybrid_rerank_mmr.yaml`:
 
 ```yaml
 experiment: {name: showcase_hybrid_rerank_mmr, output_dir: evaluation_results/showcase}
 dataset:  {id: pubmed_qa, questions: …/questions.json, corpus: …/corpus.json, trace_limit: 5}
-graph:    {mode: asr_text_retrieval}
-nodes:
+graph:
+  nodes:                                    # the nodes ARE the spec — no mode, no features:
+    - dataset_source
+    - {id: tts, type: tts, params: {provider: mms, voice: en, sample_rate: 16000, seed: 42}}
+    - corpus_embedding
+    - vector_db
+    - asr
+    - text_embedding
+    - {id: retrieval,        type: retrieval,     params: {mode: dense}}   # dense arm
+    - {id: retrieval_sparse, type: retrieval,     params: {mode: sparse}}  # sparse arm
+    - {id: result_fusion,    type: result_fusion, params: {hybrid: true}}  # rank-fuse the two
+    - rerank
+    - mmr
+    - transcription_metrics
+    - retrieval_metrics
+    - metrics
+    - finalize
+nodes:                                      # per-node model config (mirrors the graph node ids)
   asr:            {model: whisper, size: base, device: cuda:0}
   text_embedding: {model: labse, device: cuda:0}
   vector_db:      {store: inmemory}
-  retrieval:                      # dense + sparse fused, then reranked, then diversified
-    k: 5
-    mode: hybrid
-    fusion:   {method: rrf, rrf_k: 60}
-    reranker: {enabled: true, mode: token_overlap, top_k: 10}
-    mmr:      {enabled: true, lambda: 0.7}
+  retrieval:      {k: 5}
 compute_confidence_intervals: true
-audio_synthesis: {enabled: true, provider: mms, voice: en, sample_rate: 16000}
 ```
 
-**(b) Explicit graph — arbitrary nodes + edges.** Replace the implicit node list with your own under
-`graph.nodes` — **no template needed**; the graph itself drives building + behaviour (the run derives
-a display label from the built pipelines). A node is a bare type string (id = type) or
-`{id, type, params}`; `graph.edges` adds ordering not implied by data (auto-wiring handles the data
-edges by artifact name). This is how the **same node type appears multiple times** with
-distinct params — corpus-side robustness (`augmenter` with `axis: docs`), two retrievals fused by
-`result_fusion`, a `rerank → mmr → threshold` refine chain, or multi-source graphs:
+The **same node type appears multiple times** with distinct params — two retrieval arms fused by
+`result_fusion` above, corpus-side robustness (`augmenter` with `axis: docs`), a
+`rerank → mmr → threshold` refine chain, or multi-source graphs:
 
 ```yaml
-graph:                                      # no template — the nodes ARE the spec
+graph:
   nodes:
     - {id: corpus_src, type: dataset_source, params: {dataset: docs, role: corpus}}
     - {id: qa_src,     type: dataset_source, params: {dataset: qa,   role: questions}}
@@ -1304,42 +1382,52 @@ graph:                                      # no template — the nodes ARE the 
     - finalize
 ```
 
-**(c) Branches — variant comparison with auto-CSE.** `graph.branches` declares N variants over a
-shared template; each is `{id, <node>: <override>}`. Branches expand to per-branch node instances
+**(c) Branches — variant comparison with auto-CSE.** `graph.branches` declares N variants over the
+explicit `graph.nodes` base; each is `{id, <node>: <override>}`. Branches expand to per-branch node instances
 (`asr@whisper_base`, …), the **un-overridden shared prefix collapses to one run via CSE** (so the
 corpus is embedded once), and a terminal `aggregate` fans in every branch → per-branch metrics +
 **paired statistics** (Wilcoxon / Cohen's d / CIs, §8). The real `showcase_asr_model_compare.yaml`:
 
 ```yaml
 graph:
-  mode: asr_text_retrieval
+  nodes: [dataset_source, tts, corpus_embedding, vector_db, asr, text_embedding,
+          retrieval, transcription_metrics, retrieval_metrics, metrics, finalize]
   branches:
     - {id: whisper_base, asr: {model: whisper, size: base}}
     - {id: whisper_tiny, asr: {model: whisper, size: tiny}}
 ```
 
-**(d) Iterative RAG.** `config.rag.rounds = N` (`RagFlowConfig`) unrolls the loop into distinct hop
-instances `text_embedding@h1, retrieval@h1, query_refine@h1, text_embedding@h2, …` — no per-hop
-artifact names needed: the `one_of` chains read the newest published variant, so hop *k*'s embedder
-automatically picks hop *k−1*'s `refined_query_text` (§9).
+**(d) Iterative RAG.** Unroll the loop as explicit hop instances — `text_embedding@h1,
+retrieval@h1, query_refine@h1, text_embedding@h2, …` — no per-hop artifact names needed: the
+`one_of` chains read the newest published variant, so hop *k*'s embedder automatically picks hop
+*k−1*'s `refined_query_text` (§9).
 
-**What you can author** (composition → experiment; bracketed file is a runnable showcase):
+**What you can author** (composition → experiment; the pointer is a runnable showcase config or
+the expressiveness test pinning the shape — `tests/test_expressiveness.py` proves each of these
+builds from an explicit `graph.nodes` config with the right wiring):
 
-| Experiment | Node composition | Showcase |
-|------------|------------------|----------|
+| Experiment | Node composition | Covered by |
+|------------|------------------|--------------------------|
 | Plain spoken retrieval | `dataset_source → corpus_embedding → vector_db → tts → asr → text_embedding → retrieval → metrics` | `evaluation_config_pubmed_qa_*.yaml` |
 | Hybrid retrieval | `… → retrieval(mode: hybrid, fusion.method: rrf)` (dense+sparse, one node) | `evaluation_config_pubmed_qa_hybrid_rrf.yaml` |
 | Hybrid + rerank + MMR | `… → retrieval(reranker, mmr)` (or explicit `rerank → mmr → threshold` chain) | `showcase_hybrid_rerank_mmr.yaml` |
+| Refine-chain reorder / cascade | explicit `threshold → rerank → mmr → rerank@2` (declared order wins; repeats cascade) | `test_refine_chain_reorder_cascade_threshold` |
 | Query-text robustness | `… → asr → augmenter(axis: query) → text_embedding → …` | `showcase_robustness_augmenter.yaml` |
 | Corpus robustness | `… → augmenter(axis: docs) → corpus_embedding → …` | `showcase_corpus_robustness.yaml` |
 | Audio robustness | `… → tts → augment_audio(snr_db, …) → asr → …` | `showcase_audio_robustness.yaml` |
 | Model A/B (paired stats) | `branches: [{asr: base}, {asr: tiny}]` + CSE + `aggregate` | `showcase_asr_model_compare.yaml`, `e2e_pubmed_qa_branched.yaml` |
 | Reference vs ASR branch | `branches: [{asr: {oracle: true}}, {asr: {}}]` | `e2e_pubmed_qa_branched.yaml` |
-| Multi-dataset join | `dataset_source(role: corpus)` + `dataset_source(role: questions)` (or `dataset_union`) | `showcase_multi_dataset_join.yaml` |
-| Query optimization / correction | `… → asr → query_optimization(rewrite/hyde)` or `query_correction(rule/kb/llm) → text_embedding` | flags in config (§4/§6) |
-| Iterative RAG | `rag.rounds: N` → unrolled `…@h1 → query_refine@h1 → …@h2` | `RagFlowConfig` (§9) |
-| RAG answer + judge | `… → retrieval → answer_gen → answer_metrics → answer_judge` | `evaluation_config_pubmed_qa_hybrid_judge.yaml` |
-| Report sinks / leaderboard | `… → metrics → aggregate → leaderboard_sink + dataset_sink` | `showcase_report_sinks.yaml` |
+| Multi-dataset join | `dataset_source(role: corpus)` + `dataset_source(role: questions)` | `showcase_multi_dataset_join.yaml` |
+| Query-set union | two `dataset_source(role: questions)` → `dataset_union` → one pipeline | `test_dataset_union_two_question_sources` |
+| Multi-corpus index | two `corpus_embedding` → `corpus_merge` → `vector_db` (union indexed once) | `test_corpus_merge_two_corpora_one_index` |
+| Query optimization / correction | `… → asr → query_optimization(rewrite/hyde)` or `query_correction(rule/kb/llm) → text_embedding` (feature params on the node) | `evaluation_config_m4t_asr.yaml` |
+| RAG-fusion fan-out | `… → asr → multi_query_retrieval(method: decompose/multi_query, combine_strategy)` | `test_multi_query_retrieval_composite` |
+| Iterative RAG | explicit hops `…@h1 → query_refine@h1 → …@h2` (see (d)) | `test_iterative_rag_hops_explicit` |
+| RAG answer + judge | `… → retrieval → answer_gen → answer_metrics → answer_judge` | `test_rag_generation_scoring_and_judge_chain` |
+| Closed-book QA | `dataset_source → answer_gen → answer_metrics` (no corpus/retrieval — `retrieved` is optional context) | `test_closed_book_generation_no_retrieval` |
+| Embed-free retrieval (precomputed vectors) | `dataset_source(query_vectors/corpus_vectors columns) → vector_db → retrieval` | `test_precomputed_vector_columns_embed_free_graph` |
+| Cross-modal result fusion | `audio_embedding` + `text_embedding` → two `retrieval(vectors: …)` arms → `result_fusion` | `test_cross_modal_result_fusion_pinned_arms` |
+| Report sinks / leaderboard | `… → metrics → aggregate → leaderboard_sink + tracking_sink + dataset_sink` | `showcase_report_sinks.yaml`, `test_all_three_report_sinks` |
 
 **Preview before running** (no models loaded): `evaluator graph --config <yaml>` (or
 `--preset <name>`) prints the topological levels + each node's `inputs → outputs [deps]`;

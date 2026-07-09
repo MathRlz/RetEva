@@ -10,23 +10,31 @@ experiment:
   output_dir: evaluation_results
 dataset:
   id: admed_voice
-  path: null                # admed_voice location; null = ADMED_VOICE_PATH / EVALUATOR_DATA_DIR env
-  split: both               # train / test / both (admed has no validation split)
+  path: null
+  split: both
   batch_size: 32
 data:
   num_workers: 4
   test_size: 0.0
 graph:
-  mode: audio_emb_retrieval
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - audio_embedding
+  - retrieval
+  - retrieval_metrics
+  - metrics
+  - finalize
 nodes:
   audio_embedding:
-    model: attention_pool      # Whisper-encoder audio -> emb_dim, aligned to the text space
-    size: medium               # Whisper-medium encoder (matches v1's ASR)
-    dim: 2048                  # must match the text embedder's dim (jina_v4 = 2048)
-    model_path: null           # <- the trained attention-pool alignment weights
+    model: attention_pool
+    size: medium
+    dim: 2048
+    model_path: null
     device: cuda:0
   text_embedding:
-    model: jina_v4             # corpus side: embeds the transcription text (the "documents")
+    model: jina_v4
     name: jinaai/jina-embeddings-v4
     device: cuda:1
   vector_db:

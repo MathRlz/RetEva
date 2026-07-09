@@ -16,7 +16,6 @@ from .helpers import (
     _search_results_to_keys,
     _build_relevant_from_item,
     collate_fn,
-    asr_collate_fn,
 )
 
 from .executor import run_graph, run_from_bundle
@@ -40,5 +39,4 @@ __all__ = [
     "_search_results_to_keys",
     "_build_relevant_from_item",
     "collate_fn",
-    "asr_collate_fn",
 ]

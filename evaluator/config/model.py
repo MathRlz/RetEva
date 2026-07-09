@@ -8,6 +8,11 @@ class ModelConfig:
     """
     Configuration for model selection and device assignment.
 
+    One scalar per role (asr / text_emb / audio_emb). In the node-centric graph these are the
+    **default** model for each role — used by a graph node that doesn't carry its own ``model`` —
+    not a hard one-per-role limit: a node can override per-instance (the executor builds it via
+    ``_node_pipeline``), so a graph may run two distinct same-role models.
+
     Each model component accepts **either** a ``size`` shorthand (resolved via
     the registry's Params.SIZES mapping) **or** an explicit ``model_name``.
     ``model_name`` always wins when both are given.
@@ -57,9 +62,9 @@ class ModelConfig:
     # clear warning + full precision). Default None = today's behaviour.
     quantization: Optional[str] = None
 
-    # NB: there is no ``pipeline_mode`` — the graph is the spec. A config selects a *template*
-    # (``graph: {mode: …}`` → ``graph_override['template']``) or carries an explicit
-    # ``graph: {nodes}``; ``pipeline/graph/modes._config_template`` resolves it.
+    # NB: there is no ``pipeline_mode`` — the graph is the spec. A config carries an explicit
+    # ``graph: {nodes}``; the run label derives from the node kinds (``label_from_graph``).
+    # (``graph_override['template']`` survives only for legacy flat-dict back-compat.)
 
     def quantization_for(self, family: str) -> Optional[str]:
         """Resolve the quantization strategy for ``family`` ('asr'/'text_emb'/'audio_emb'):

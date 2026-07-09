@@ -4,17 +4,17 @@
   {# no class attribute: drawflow's fixed-mode pan requires classList[0] to be its own
    'parent-drawflow' — a custom first class disables canvas dragging #}
   <div id="dag-preview-canvas"></div>
-  <div id="dag-fallback">
-    {% for level in levels %}
-    <div class="graph-level">
-      {% for node in level %}<span class="graph-node">{{ node }}</span>{% endfor %}
-    </div>
-    {% endfor %}
-  </div>
   <div class="row">
+    {# Config & Run only (preset_name set): run the preset unchanged, alongside Open in builder. #}
+    {% if preset_name %}
+    <button hx-post="/ui/run-preset" hx-vals='{"name": "{{ preset_name }}"}'
+            hx-target="#run-output" hx-indicator="#run-ind" type="button">Run preset as-is</button>
+    <span id="run-ind" class="htmx-indicator muted">starting…</span>
+    {% endif %}
     <button id="dag-open-builder" type="button">Open in builder</button>
+    <button id="dag-toggle-full" type="button" class="secondary"
+            title="Show the derived execution nodes (metrics, report, finalize, …)">View full DAG</button>
   </div>
-  <div id="dag-inspect" class="muted"><em>click a node to inspect its model + params</em></div>
   {# preview_json is pre-escaped server-side for script context ("</" -> "<\/");
      autoescape would entity-encode quotes, which browsers do NOT decode inside
      <script> -> JSON.parse failure. #}
@@ -36,7 +36,10 @@
   const contractOf = n => ({
     id: n.id, type: n.stage, label: n.label, bindings: n.bindings || [],
     inputs: n.inputs, outputs: n.outputs, optional_inputs: n.optional_inputs,
-    category: n.category, domain: n.domain, family: n.family,
+    // input_ports collapse a OneOf chain to ONE port — dropping them exploded the chain
+    // into N dangling ports and detached its edges from the visible port.
+    input_ports: n.input_ports,
+    category: n.category, domain: n.domain, family: n.family, structural: n.structural,
     model_field: n.model_field, node_params: n.node_params, columns: n.columns || [],
   });
   // B5: hand this exact graph to the builder, editable (sessionStorage seed).
@@ -52,8 +55,9 @@
     const l = document.getElementById('dag-loading');
     if (l) l.remove();
   };
-  const fallback = () => { /* keep the text chips; hide the empty canvas */
-    done();
+  const fallback = () => {
+    const l = document.getElementById('dag-loading');
+    if (l) l.textContent = 'diagram unavailable';
     document.getElementById('dag-preview-canvas').style.display = 'none';
   };
   const withDagView = (cb) => {
@@ -68,40 +72,49 @@
     fetch('/api/graph/nodes').then(r => r.json()).then(cat => {
       const catalogue = {};
       cat.nodes.forEach(n => { catalogue[n.type] = n; });
-      const canvas = document.getElementById('dag-preview-canvas');
-      const rows = Math.max(...data.levels.map(l => l.length), 1);
-      canvas.style.height = (60 + rows * 145) + 'px';
-      const editor = new Drawflow(canvas);
-      editor.start();
-      editor.editor_mode = 'fixed';  // read-only: pan/zoom yes, edit no
-      // model line on the card comes from the resolved inspect payload
-      const nodes = data.nodes.map(n => ({
-        ...contractOf(n),
-        params: {
-          model: (n.inspect || {}).model || '',
-          size: (n.inspect || {}).size || '',
-        },
-      }));
-      const dfIds = DagView.drawGraph(editor, {nodes, levels: data.levels}, catalogue);
-      DagView.attachZoom(editor, canvas);  // wheel scroll-in/out + controls (B4c)
-      DagView.zoomFit(editor, canvas);
-      const panel = document.getElementById('dag-inspect');
-      data.nodes.forEach(n => {
-        const el = document.getElementById('node-' + dfIds[n.id]);
-        if (!el) return;
-        el.addEventListener('click', () => {
-          DagView.renderInspect(panel, {
-            id: n.id, stage: n.stage, label: n.label,
-            inputs: n.inputs || [], outputs: n.outputs || [],
-            columns: n.columns || [],
-            config: n.inspect || {},
-          });
-          document.querySelectorAll('#dag-preview-canvas .drawflow-node')
-            .forEach(o => o.classList.remove('dag-selected'));
-          el.classList.add('dag-selected');
+      let canvas = document.getElementById('dag-preview-canvas');
+      // Default = the simplified graph (only the meaningful operations the user authored). The
+      // structural plumbing (metrics/report/finalize/aggregate/sinks/measure-comparisons) is
+      // auto-derived; a power-user toggles "View full DAG" to see exactly what runs.
+      let showAll = false;
+
+      function draw() {
+        // Recreate the canvas node each render so the previous editor's zoom/drag listeners (bound
+        // to the old node by attachZoom/watchNodeDrag) are dropped instead of accumulating on every
+        // "View full DAG" toggle. (No class: drawflow's fixed-mode pan needs classList[0]='parent-
+        // drawflow', which start() adds.)
+        const fresh = document.createElement('div');
+        fresh.id = 'dag-preview-canvas';
+        canvas.replaceWith(fresh);
+        canvas = fresh;
+        const shown = showAll ? data.nodes : data.nodes.filter(n => !n.structural);
+        const visible = new Set(shown.map(n => n.id));
+        const levels = data.levels
+          .map(l => l.filter(id => visible.has(id))).filter(l => l.length);
+        const rows = Math.max(...levels.map(l => l.length), 1);
+        canvas.style.height = (60 + rows * 145) + 'px';
+        const editor = new Drawflow(canvas);
+        editor.start();
+        editor.editor_mode = 'fixed';  // read-only: pan/zoom yes, edit no
+        const nodes = shown.map(n => ({
+          ...contractOf(n),
+          params: { model: (n.inspect || {}).model || '', size: (n.inspect || {}).size || '' },
+        }));
+        const dfIds = DagView.drawGraph(editor, {nodes, levels}, catalogue);
+        DagView.attachZoom(editor, canvas);
+        DagView.zoomFit(editor, canvas);
+        shown.forEach(n => {
+          const el = document.getElementById('node-' + dfIds[n.id]);
+          if (el && n.structural) el.style.opacity = '0.5';  // de-emphasize the derived nodes
         });
-      });
-      document.getElementById('dag-fallback').style.display = 'none';
+      }
+      const toggle = document.getElementById('dag-toggle-full');
+      if (toggle) toggle.onclick = () => {
+        showAll = !showAll;
+        toggle.textContent = showAll ? 'Hide derived nodes' : 'View full DAG';
+        draw();
+      };
+      draw();
       done();
     }).catch(fallback);
   }, fallback));

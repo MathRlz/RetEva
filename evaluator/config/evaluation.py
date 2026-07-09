@@ -43,36 +43,6 @@ from . import serialization as _serialization
 from . import validation as _validation
 
 
-@dataclass
-class FeaturesConfig:
-    """Optional, toggleable pipeline features.
-
-    Groups the capability sub-configs (each with its own ``enabled`` flag) under
-    one namespace so the root ``EvaluationConfig`` is not flooded with always-off
-    options. Access them as ``config.features.judge`` (canonical) or via the
-    backward-compatible ``config.judge`` shortcut properties on EvaluationConfig.
-    """
-
-    audio_synthesis: AudioSynthesisConfig = field(default_factory=AudioSynthesisConfig)
-    augmentation: AudioAugmentationConfig = field(
-        default_factory=AudioAugmentationConfig
-    )
-    answer_generation: AnswerGenerationConfig = field(
-        default_factory=AnswerGenerationConfig
-    )
-    judge: JudgeConfig = field(default_factory=JudgeConfig)
-    query_optimization: QueryOptimizationConfig = field(
-        default_factory=QueryOptimizationConfig
-    )
-    query_correction: QueryCorrectionConfig = field(
-        default_factory=QueryCorrectionConfig
-    )
-    embedding_fusion: EmbeddingFusionConfig = field(
-        default_factory=EmbeddingFusionConfig
-    )
-    rag: RagFlowConfig = field(default_factory=RagFlowConfig)
-
-
 # Feature sub-config field name -> class. Single source for from_dict/presets.
 _FEATURE_SUBCONFIGS = {
     "audio_synthesis": AudioSynthesisConfig,
@@ -161,8 +131,17 @@ class EvaluationConfig:
     data: DataConfig = field(default_factory=DataConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     llm_server: LLMServerConfig = field(default_factory=LLMServerConfig)
-    # Optional toggleable features grouped under one namespace (#7).
-    features: FeaturesConfig = field(default_factory=FeaturesConfig)
+    # Optional capability sub-configs — each its own default (disabled) so an un-drawn feature
+    # still resolves for the handlers' global fall-back. A capability runs when its NODE is in the
+    # graph (the spec); there is no `features:` grouping — every one is a top-level field.
+    audio_synthesis: AudioSynthesisConfig = field(default_factory=AudioSynthesisConfig)
+    augmentation: AudioAugmentationConfig = field(default_factory=AudioAugmentationConfig)
+    answer_generation: AnswerGenerationConfig = field(default_factory=AnswerGenerationConfig)
+    judge: JudgeConfig = field(default_factory=JudgeConfig)
+    query_optimization: QueryOptimizationConfig = field(default_factory=QueryOptimizationConfig)
+    query_correction: QueryCorrectionConfig = field(default_factory=QueryCorrectionConfig)
+    embedding_fusion: EmbeddingFusionConfig = field(default_factory=EmbeddingFusionConfig)
+    rag: RagFlowConfig = field(default_factory=RagFlowConfig)
     vector_db: VectorDBConfig = field(default_factory=VectorDBConfig)
     device_pool: Optional[DevicePoolConfig] = None
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
@@ -198,76 +177,17 @@ class EvaluationConfig:
 
     @property
     def graph_template(self) -> Optional[str]:
-        """The graph template this config selects (``graph_override['template']``, set from
-        ``graph: {mode: …}``), or ``None`` for an explicit-graph / model-only config. Replaces the
-        removed ``model.pipeline_mode`` field — the graph is the spec; this is just its label."""
-        return (self.graph_override or {}).get("template")
+        """The pipeline-mode LABEL for this config: derived from the explicit graph's node kinds
+        (``label_from_graph``) — the graph is the spec, this is just its label. A back-compat
+        template reference (``graph_override['template']``, legacy flat dicts only) wins when
+        present. ``None`` only for a model-only / query-head-less custom graph."""
+        override = self.graph_override or {}
+        template = override.get("template")
+        if template:
+            return template
+        from ..pipeline.graph.modes import label_from_graph
 
-    # Backward-compatible shortcuts: config.judge <-> config.features.judge, etc.
-    # Keeps existing call sites working after the features grouping (#7).
-    @property
-    def audio_synthesis(self) -> AudioSynthesisConfig:
-        return self.features.audio_synthesis
-
-    @audio_synthesis.setter
-    def audio_synthesis(self, value: AudioSynthesisConfig) -> None:
-        self.features.audio_synthesis = value
-
-    @property
-    def augmentation(self) -> AudioAugmentationConfig:
-        return self.features.augmentation
-
-    @augmentation.setter
-    def augmentation(self, value: AudioAugmentationConfig) -> None:
-        self.features.augmentation = value
-
-    @property
-    def answer_generation(self) -> AnswerGenerationConfig:
-        return self.features.answer_generation
-
-    @answer_generation.setter
-    def answer_generation(self, value: AnswerGenerationConfig) -> None:
-        self.features.answer_generation = value
-
-    @property
-    def judge(self) -> JudgeConfig:
-        return self.features.judge
-
-    @judge.setter
-    def judge(self, value: JudgeConfig) -> None:
-        self.features.judge = value
-
-    @property
-    def rag(self) -> RagFlowConfig:
-        return self.features.rag
-
-    @rag.setter
-    def rag(self, value: RagFlowConfig) -> None:
-        self.features.rag = value
-
-    @property
-    def query_optimization(self) -> QueryOptimizationConfig:
-        return self.features.query_optimization
-
-    @query_optimization.setter
-    def query_optimization(self, value: QueryOptimizationConfig) -> None:
-        self.features.query_optimization = value
-
-    @property
-    def query_correction(self) -> QueryCorrectionConfig:
-        return self.features.query_correction
-
-    @query_correction.setter
-    def query_correction(self, value: QueryCorrectionConfig) -> None:
-        self.features.query_correction = value
-
-    @property
-    def embedding_fusion(self) -> EmbeddingFusionConfig:
-        return self.features.embedding_fusion
-
-    @embedding_fusion.setter
-    def embedding_fusion(self, value: EmbeddingFusionConfig) -> None:
-        self.features.embedding_fusion = value
+        return label_from_graph(override)
 
     def with_auto_devices(self) -> "EvaluationConfig":
         """Return a copy of this config with auto-configured device assignments.
@@ -374,11 +294,11 @@ class EvaluationConfig:
     )
     _EXPERIMENT_SUBCONFIGS = frozenset(
         {
-            "features",
             "llm",
             "llm_server",
             "tracking",
             "service_runtime",
+            *_FEATURE_SUBCONFIGS,
         }
     )
     # Plain sub-configs: key → class. No custom construction logic needed.

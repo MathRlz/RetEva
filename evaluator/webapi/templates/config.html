@@ -1,23 +1,40 @@
 {% extends "base.html" %}
+{% block head %}
+{# shared per-node param-form renderer — used by the inline edit forms in _config_run.html #}
+<script src="/static/node_form.js?v={{ asset_version('node_form.js') }}"></script>
+<style>
+  /* at most 3 parameter cards per row; min-width:0 lets a card (and its selects/inputs) shrink
+     to the cell instead of overflowing the border */
+  #node-forms-list { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 820px) { #node-forms-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { #node-forms-list { grid-template-columns: 1fr; } }
+  .node-form { border: 1px solid var(--border, #ddd); border-radius: 6px; padding: 8px 10px;
+    min-width: 0; }
+  .node-form h4 { margin: 0 0 6px; font-size: 13px; }
+  .node-form label { display: block; margin: 6px 0; font-size: 12px; }
+  .node-form select, .node-form input[type=text], .node-form input[type=number] {
+    display: block; width: 100%; max-width: 100%; box-sizing: border-box; margin-top: 2px; }
+  .node-form .group { border: 0; padding: 0; min-width: 0; }
+  .node-form .hint { font-size: 11px; color: var(--muted, #888); margin-top: 2px; }
+</style>
+{% endblock %}
 {% block body %}
 <div class="panel">
-  <h2>Build &amp; run configuration</h2>
-  <div id="config-form-wrap">
-    {% include "_config_form.html" %}
+  <h2>Run a configuration</h2>
+  <p class="muted">Choose a configuration to preview its pipeline, tweak its parameters, then run it
+    — or open it in the builder to change the pipeline.</p>
+  <label class="field">
+    <span>Configuration</span>
+    <select name="name"
+            hx-post="/ui/config-preview" hx-target="#config-preview" hx-trigger="change">
+      <option value="">— select a configuration —</option>
+      {% for name in options.presets %}
+      <option value="{{ name }}">{{ name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div id="config-preview">
+    <p class="muted">Pick a configuration above to preview its pipeline.</p>
   </div>
 </div>
-<script>
-// Field-level validation feedback: when a validate/run error lands in #output, clear any prior
-// highlight and mark the input the error names (data-field) so the offending field is obvious.
-document.body.addEventListener('htmx:afterSwap', (e) => {
-  if (!e.target || e.target.id !== 'output') return;
-  document.querySelectorAll('#config-form .invalid')
-    .forEach(el => el.classList.remove('invalid'));
-  const box = e.target.querySelector('[data-field]');
-  if (!box) return;
-  const el = document.querySelector(
-    `#config-form [name="${box.getAttribute('data-field')}"]`);
-  if (el) { el.classList.add('invalid'); el.focus(); }
-});
-</script>
 {% endblock %}

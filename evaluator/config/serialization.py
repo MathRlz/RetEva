@@ -74,11 +74,10 @@ def to_yaml(config: Any, yaml_path: str) -> None:
 
 
 def _config_template_label(config: Any) -> Any:
-    """The config's graph template name (``graph_override['template']``) — the report's
-    ``pipeline_mode`` echo. ``None`` for an explicit-graph config (the run derives the real label
-    from the built pipelines). There is no ``pipeline_mode`` field anymore."""
-    override = getattr(config, "graph_override", None) or {}
-    return override.get("template")
+    """The config's pipeline-mode label — the report's ``pipeline_mode`` echo. Delegates to the
+    ``graph_template`` property (explicit template if any, else the label derived from the
+    graph's node kinds); ``None`` only for a query-head-less custom graph."""
+    return getattr(config, "graph_template", None)
 
 
 def _model_summary(model: Any, family: str) -> str:
@@ -171,10 +170,13 @@ def to_nested_dict(config: Any) -> Dict[str, Any]:
         "resume_from_checkpoint": config.resume_from_checkpoint,
         "parallel_enabled": config.parallel_enabled,
     }
+    from .evaluation import _FEATURE_SUBCONFIGS
+
     for key in config._PLAIN_SUBCONFIGS:
         result[key] = _serialize_dataclass(getattr(config, key))
     result["llm"] = _serialize_dataclass(config.llm)
-    result["features"] = _serialize_dataclass(config.features)
+    for key in _FEATURE_SUBCONFIGS:  # each capability sub-config is a top-level field now
+        result[key] = _serialize_dataclass(getattr(config, key))
     if config.device_pool is not None:
         result["device_pool"] = _serialize_dataclass(config.device_pool)
     # The graph spec (explicit nodes/edges or a template reference) — so an explicit-graph

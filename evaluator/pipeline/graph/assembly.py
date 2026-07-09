@@ -63,6 +63,9 @@ class FeatureSet:
     rag_rounds: int = 1
     refine_method: str = "rewrite_with_context"
     refine_context_top_k: int = 3
+    # tts is explicit, not a silent gap-fill: the audio-synthesis bridge (text → query audio) runs
+    # only when audio_synthesis is enabled. Off → no tts node (audio datasets have their own audio).
+    audio_synthesis_enabled: bool = False
 
     @classmethod
     def maximal(cls) -> "FeatureSet":
@@ -78,6 +81,7 @@ class FeatureSet:
             answer_gen_enabled=True,
             judge_enabled=True,
             trace_enabled=True,
+            audio_synthesis_enabled=True,
         )
 
 
@@ -158,9 +162,10 @@ def assemble_specs(mode: str, f: FeatureSet) -> List[Any]:
     `_sorted` stable-sorts by slot. The result feeds ``build_graph_from_spec`` (auto-wiring).
     """
     items: List[Tuple[float, Any]] = [(SLOT_SOURCE, "dataset_source")]
-    # Every speech template consumes query audio; a tts node gap-fills any missing clip (free
-    # no-op — no model load — when all audio is present), so it belongs in every graph.
-    items.append((SLOT_TTS, "tts"))
+    # tts is explicit (not a silent gap-fill): the text→audio synthesis bridge runs ONLY when
+    # audio_synthesis is enabled. Audio datasets carry their own clips and need no tts node.
+    if f.audio_synthesis_enabled:
+        items.append((SLOT_TTS, "tts"))
 
     if mode == "asr_only":
         items += [

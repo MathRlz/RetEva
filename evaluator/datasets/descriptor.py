@@ -11,7 +11,7 @@ built-in datasets are defined as per-type ABC subclasses in :mod:`.builtins`
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, TYPE_CHECKING
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 from ..config.types import DatasetType
 from ..errors import ConfigurationError
@@ -51,7 +51,12 @@ METRICS_BY_MODE: Dict[str, Sequence[str]] = {
 FIELDS_BY_DATASET_TYPE: Dict[DatasetType, Dict[str, str]] = {
     DatasetType.AUDIO_TRANSCRIPTION: {
         "audio": "query_audio",
-        "transcription": "query_text",
+        # The spoken-transcription column is the ASR ground truth, not the query: in audio
+        # modes query_text is produced by the `asr` node (the hypothesis), so the dataset's
+        # transcription is reference_transcription. Wiring it as GT connects it to
+        # transcription_metrics and frees the source's query_text port from a dangling preview
+        # edge (text_embedding draws from asr, the real producer).
+        "transcription": "reference_transcription",
     },
     DatasetType.AUDIO_QUERY_RETRIEVAL: {
         "audio": "query_audio",
@@ -147,6 +152,18 @@ class DatasetDescriptor:
             validate_field_mapping(self.fields)
 
     # ── Public helpers ────────────────────────────────────────────────
+
+    @property
+    def derived_outputs(self) -> Tuple[str, ...]:
+        """Artifacts the runtime source publishes that aren't literal columns: a self-retrieval
+        ``corpus`` for retrieval-capable datasets that declare no corpus column (their corpus is
+        derived from their own items). Advertised on the DAG so ``corpus_embedding`` wires — in
+        both the preview and the builder picker (keeping the two surfaces identical)."""
+        if "corpus" not in self.fields.values() and any(
+            "retrieval" in str(m) for m in self.compatible_pipeline_modes
+        ):
+            return ("corpus",)
+        return ()
 
     def supports_pipeline_mode(self, mode: str) -> bool:
         """Return True when *mode* is listed in compatible_pipeline_modes."""

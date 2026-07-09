@@ -60,7 +60,7 @@ def create_app(
     # A ConfigurationError is always a bad request (unknown/misspelled key, invalid
     # value). Handle it once here so every /api route can let it propagate instead of
     # wrapping each config call in try/except → HTTPException(400). (UI routes render
-    # their own HTML error via _prepared_config_or_error and never reach this.)
+    # their own inline HTML error and never reach this.)
 
     @app.exception_handler(ConfigurationError)
     async def _configuration_error_handler(  # noqa: F811 - registered, not called directly

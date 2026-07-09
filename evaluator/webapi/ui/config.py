@@ -1,5 +1,5 @@
-"""Config-page UI routes: the preset-driven config form + its validate / graph /
-YAML / models / preset fragments. Mounted under ``/ui`` and ``/ui/config``.
+"""Config-page UI routes: the simplified Config & Run flow (pick a preset → preview its
+execution DAG → run / open in builder). Mounted under ``/ui`` and ``/ui/config``.
 """
 
 from __future__ import annotations
@@ -9,24 +9,16 @@ from typing import Callable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-import yaml
 
+from evaluator import list_presets
 from evaluator.services import ModelServiceProvider
-from evaluator.webapi.form_builder import graph_preview
-from evaluator.webapi.ui._common import _default_preset
-
-
-from evaluator.webapi.form_builder import (
-    _model_section,
-    _prepared_config_or_error,
-    _preset_form_context,
-)
+from evaluator.webapi.form_builder import config_to_canvas_spec, graph_preview
 
 
 def _graph_diagram_context(preview: dict) -> dict:
     """Template vars for the read-only DAG preview partial (``_graph.html``): the preview
     payload as embedded JSON (the shared ``dag_view.js`` renders it via Drawflow in fixed
-    mode, same architecture as the builder — BUILDER_UX.md B3) plus the levels for the
+    mode, same architecture as the builder) plus the levels for the
     no-JS / CDN-failure text-chips fallback."""
     import json as _json
 
@@ -38,8 +30,16 @@ def _graph_diagram_context(preview: dict) -> dict:
                 {
                     "id": n["id"],
                     "stage": n["stage"],
+                    # the default-simplified preview hides structural plumbing (metrics/report/
+                    # finalize/sinks) — _graph.html filters on this flag, so it MUST ride along.
+                    "structural": n.get("structural", False),
                     "bindings": n.get("bindings") or [],
                     "inputs": n.get("inputs") or [],
+                    # input_ports collapse a OneOf chain to ONE port; optional_inputs carry the
+                    # GT side-channels. Dropping either broke the preview: the chain exploded
+                    # into N dangling ports and every optional-GT edge silently vanished.
+                    "input_ports": n.get("input_ports") or [],
+                    "optional_inputs": n.get("optional_inputs") or [],
                     "outputs": n.get("outputs") or [],
                     "columns": n.get("columns") or [],
                     "inspect": n.get("inspect") or {},
@@ -53,9 +53,27 @@ def _graph_diagram_context(preview: dict) -> dict:
         # browsers do NOT decode HTML entities there, so Jinja's autoescape would
         # break JSON.parse; escape the one dangerous sequence instead.
         "preview_json": payload.replace("</", "<\\/"),
-        "levels": preview.get("levels", []),
         "mode": preview.get("mode", ""),
     }
+
+
+def _edit_nodes_json(name: str, canvas: dict) -> str:
+    """The meaningful nodes' editable form data (id/type/params/node_params/family/model_field) for
+    the Config & Run inline parameter forms — embedded as JSON the page renders via NodeForm. The
+    structural plumbing is dropped (auto-derived); the run re-derives it (graph_spec_to_config)."""
+    import json as _json
+
+    nodes = [
+        {
+            "id": n["id"], "type": n["type"], "label": n.get("label"),
+            "params": n.get("params") or {},
+            "node_params": n.get("node_params") or [],
+            "family": n.get("family"), "model_field": n.get("model_field"),
+        }
+        for n in canvas.get("nodes", []) if not n.get("structural")
+    ]
+    payload = _json.dumps({"mode": canvas.get("mode"), "name": name, "nodes": nodes})
+    return payload.replace("</", "<\\/")  # safe inside <script type="application/json">
 
 
 def register_config_routes(
@@ -69,56 +87,87 @@ def register_config_routes(
 
     @router.get("/ui/config", response_class=HTMLResponse, include_in_schema=False)
     def ui_config(request: Request) -> HTMLResponse:
-        ctx = _preset_form_context(provider_factory, _default_preset())
-        return page(request, "config.html", active="config", **ctx)
-
-    @router.get("/ui/models", response_class=HTMLResponse, include_in_schema=False)
-    def ui_models(
-        request: Request, pipeline_mode: str = "asr_text_retrieval"
-    ) -> HTMLResponse:
-        # hx-include sends the whole form: the chosen model types ride along, so the
-        # re-rendered section carries that model's registry-declared sizes + params
-        # (same author-declared schema the builder uses).
-        current = dict(request.query_params)
         return page(
-            request,
-            "_models.html",
-            model_sections=_model_section(provider_factory, pipeline_mode, current),
+            request, "config.html", active="config",
+            options={"presets": list_presets()},
         )
 
-    @router.get("/ui/preset", response_class=HTMLResponse, include_in_schema=False)
-    def ui_preset(request: Request, name: str = "") -> HTMLResponse:
-        # hx-include sends the whole form as query params; preserve user fields
-        # (dataset/paths) the chosen preset doesn't define.
-        ctx = _preset_form_context(provider_factory, name, dict(request.query_params))
-        return page(request, "_config_form.html", **ctx)
+    @router.post("/ui/config-preview", response_class=HTMLResponse, include_in_schema=False)
+    async def ui_config_preview(request: Request) -> HTMLResponse:
+        """Simplified Config & Run: a chosen preset → its execution DAG preview (default-simplified,
+        with 'View full DAG' + 'Open in builder') + a Run button. Reuses config→DAG (graph_preview)
+        and DAG→simplified (the structural flag) — no separate simplified-from-config path."""
+        from evaluator import EvaluationConfig, get_preset
+        from evaluator.config.validation import collect_problems
 
-    @router.post("/ui/validate", response_class=HTMLResponse, include_in_schema=False)
-    async def ui_validate(request: Request) -> HTMLResponse:
-        config, error = _prepared_config_or_error(await request.form())
-        if error is not None:
-            return error
-        return HTMLResponse('<p class="ok">Config valid ✓</p>')
-
-    @router.post("/ui/graph", response_class=HTMLResponse, include_in_schema=False)
-    async def ui_graph(request: Request) -> HTMLResponse:
-        config, error = _prepared_config_or_error(await request.form())
-        if error is not None:
-            return error
-        preview = graph_preview(config)
-        return page(request, "_graph.html", **_graph_diagram_context(preview))
-
-    @router.post("/ui/yaml", response_class=HTMLResponse, include_in_schema=False)
-    async def ui_yaml(request: Request) -> HTMLResponse:
-        """Render the full config the form produces as copy-able node-centric YAML."""
-        config, error = _prepared_config_or_error(await request.form())
-        if error is not None:
-            return error
-        from evaluator.config.graph_config import legacy_yaml_to_graph_yaml
-
-        graph_dict = legacy_yaml_to_graph_yaml(config.to_dict(include_config=True))
-        text = yaml.safe_dump(graph_dict, sort_keys=False, default_flow_style=False)
-        return HTMLResponse(
-            f'<section class="step"><h4>Config (YAML)</h4>'
-            f'<pre class="yaml">{html.escape(text)}</pre></section>'
+        name = (await request.form()).get("name") or ""
+        if not name:
+            return HTMLResponse(
+                '<p class="muted">Pick a configuration to preview its pipeline.</p>'
+            )
+        try:
+            # validate=False: build the preview + forms even if the config has problems (e.g. a
+            # missing dataset path) — the problems show below so the user can fix + revalidate.
+            # auto-devices so the validation matches the run path (no spurious cuda warnings).
+            config = (EvaluationConfig.from_dict(get_preset(name), validate=False)
+                      .with_auto_devices())
+            preview = graph_preview(config)
+            canvas = config_to_canvas_spec(config)
+        except Exception as exc:  # noqa: BLE001 — surface a bad preset/build inline
+            return HTMLResponse(
+                f'<p class="error">Could not load preset: {html.escape(str(exc))}</p>'
+            )
+        errors, warnings = collect_problems(config)
+        return page(
+            request, "_config_run.html", preset_name=name,
+            edit_nodes_json=_edit_nodes_json(name, canvas),
+            errors=errors, warnings=warnings, **_graph_diagram_context(preview)
         )
+
+    @router.post("/ui/validate-graph", response_class=HTMLResponse, include_in_schema=False)
+    async def ui_validate_graph(request: Request) -> HTMLResponse:
+        """Re-validate the user's edited Config & Run graph (non-blocking): returns the problems
+        fragment so they can fix the nodes and validate again before running."""
+        from evaluator import EvaluationConfig
+        from evaluator.config.validation import collect_problems
+        from evaluator.webapi.form_config import graph_spec_to_config_dict
+
+        body = await request.json()
+        spec = body.get("spec") or {}
+        try:
+            config_dict = graph_spec_to_config_dict(
+                spec, experiment_name=body.get("name") or "webui")
+            config = EvaluationConfig.from_dict(config_dict, validate=False).with_auto_devices()
+            errors, warnings = collect_problems(config)
+        except Exception as exc:  # noqa: BLE001 — a broken graph is itself a problem to show
+            errors, warnings = [str(exc)], []
+        return page(request, "_validation.html", errors=errors, warnings=warnings)
+
+    @router.post("/ui/validate-builder", response_class=HTMLResponse, include_in_schema=False)
+    async def ui_validate_builder(request: Request) -> HTMLResponse:
+        """Validate the builder canvas graph and render the SAME styled ``_validation.html`` the
+        Config & Run flow uses (one validation module, no bespoke builder markup). Builds the
+        topology directly (no run config / dataset needed, so a graph-in-progress validates) and
+        shares ``build_canvas_graph`` + ``graph_advice`` (embedding warnings + applicable metrics
+        + GT-missing) with the form-builder helpers."""
+        from evaluator import EvaluationConfig
+        from evaluator.webapi.form_builder import build_canvas_graph, graph_advice
+
+        spec = await request.json()  # the raw canvas spec {mode, nodes, edges, branches?}
+        errors: list = []
+        warnings: list = []
+        metrics: list = []
+        summary = None
+        try:
+            graph = build_canvas_graph(spec)
+            warnings, metrics = graph_advice(graph, EvaluationConfig())
+            summary = (f"Valid ✓ — {len(graph.topological_levels())} levels, "
+                       f"{len(graph.nodes)} nodes")
+            if not metrics:
+                warnings.append(
+                    "No metrics will be computed — the graph produces nothing a metric scores."
+                )
+        except Exception as exc:  # noqa: BLE001 — a broken graph is the problem to show
+            errors = [str(exc)]
+        return page(request, "_validation.html",
+                    errors=errors, warnings=warnings, metrics=metrics, summary=summary)

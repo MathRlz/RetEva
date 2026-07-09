@@ -79,7 +79,8 @@ def collapse_common_subexpressions(
     key_to_canon: Dict[Any, str] = {}
     kept: Dict[str, StageNode] = {}
 
-    for nid in _topo_order(nodes):
+    order = _topo_order(nodes)
+    for nid in order:
         n = by_id[nid]
         deps = tuple(sorted(canon[d] for d in n.depends_on if d in canon))
         binds = tuple(sorted((art, canon[pid]) for art, pid in n.bindings))
@@ -101,5 +102,4 @@ def collapse_common_subexpressions(
             params=n.params,
         )
 
-    order = _topo_order(nodes)
     return tuple(kept[nid] for nid in order if canon[nid] == nid)

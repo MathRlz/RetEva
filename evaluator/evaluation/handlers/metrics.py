@@ -94,7 +94,7 @@ def _branch_scores(s: "RunState", artifacts: Dict[str, Any]) -> Dict[str, Any]:
     B5 IR gate applied — the single scoring call both report paths share."""
     from ..metric_registry import compute_metrics
 
-    return _drop_ir_if_disabled(s, compute_metrics(artifacts, collect_all=True))
+    return _drop_ir_if_disabled(s, compute_metrics(artifacts))
 
 
 def _attach_report(results, report) -> None:
@@ -134,7 +134,7 @@ def attach_judge_metrics(s: "RunState") -> None:
     from ..aggregate import flatten_report, reduce_scores
 
     # collect_all → exactly the judge_* metrics fire (only judge artifacts are present).
-    scores = compute_metrics(judge_arts, collect_all=True)
+    scores = compute_metrics(judge_arts)
     if not scores:
         return
     # The judge runs once globally (single query_traces); attach to the run's mode branch when

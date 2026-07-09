@@ -1,0 +1,86 @@
+{# Config & Run: the chosen preset's pipeline preview + editable per-node parameter forms. The
+   preview (_graph.html) carries "Run preset as-is" + "Open in builder"; edit params below, then
+   "Run with changes". Run status lands in #run-output (top). #}
+<div id="run-output"></div>
+{% include "_graph.html" %}
+
+<section id="node-forms" class="step">
+  <h4>Parameters <small class="muted">edit, then “Validate” / “Run with changes”</small></h4>
+  <div id="validation-output">{% include "_validation.html" %}</div>
+  <div id="node-forms-list"></div>
+  <div class="action-bar row">
+    <button id="validate-btn" type="button" class="secondary">Validate</button>
+    <button id="run-edited" type="button">Run with changes</button>
+  </div>
+</section>
+<script type="application/json" id="edit-nodes-data">{{ edit_nodes_json | safe }}</script>
+<script>
+(function () {
+  let data;
+  try { data = JSON.parse(document.getElementById('edit-nodes-data').textContent); }
+  catch (e) { return; }
+  const list = document.getElementById('node-forms-list');
+
+  function render() {
+    list.innerHTML = '';
+    (data.nodes || []).forEach(node => {
+      node.params = node.params || {};
+      const card = document.createElement('div');
+      card.className = 'node-form group';
+      list.appendChild(card);
+      // Plain-object host: edits accumulate on node.params in place (no canvas / Drawflow).
+      const host = {
+        panel: card, type: node.type, label: node.id,
+        get params() { return node.params; },
+        get spec() { return node; },
+        setParam: (k, v) => {
+          if (v === '' || v === null) delete node.params[k]; else node.params[k] = v;
+        },
+        setExtraParam: (k, v) => {
+          const e = Object.assign({}, node.params.params || {});
+          if (v === '' || v === null) delete e[k]; else e[k] = v;
+          if (Object.keys(e).length) node.params.params = e; else delete node.params.params;
+        },
+        // a discriminator changed → re-resolve this node's form contract, then re-render it
+        refetch: () => fetch('/api/graph/node-form', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({type: node.type, params: node.params}),
+        }).then(r => r.json()).then(form => { Object.assign(node, form); NodeForm.renderPanel(host); }),
+      };
+      NodeForm.renderPanel(host);
+    });
+  }
+
+  const buildSpec = () => ({
+    mode: data.mode,
+    nodes: (data.nodes || []).map(n => ({id: n.id, type: n.type, params: n.params})),
+  });
+
+  // Validate (non-blocking): re-check the edited graph, refresh the problems panel in place.
+  document.getElementById('validate-btn').onclick = () => {
+    const out = document.getElementById('validation-output');
+    out.innerHTML = '<p class="muted">validating…</p>';
+    fetch('/ui/validate-graph', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spec: buildSpec(), name: data.name}),
+    }).then(r => r.text()).then(htmlText => { out.innerHTML = htmlText; })
+      .catch(() => { out.innerHTML = '<p class="error">validation failed</p>'; });
+  };
+
+  document.getElementById('run-edited').onclick = () => {
+    const out = document.getElementById('run-output');
+    out.innerHTML = '<p class="muted">starting…</p>';
+    out.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    fetch('/ui/run-graph', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spec: buildSpec(), name: data.name}),
+    }).then(r => r.text()).then(htmlText => {
+      out.innerHTML = htmlText;
+      if (window.htmx) htmx.process(out);  // activate the status fragment's polling
+    }).catch(() => { out.innerHTML = '<p class="error">run failed to start</p>'; });
+  };
+
+  // node_form.js loads in <head>; guard a load race before the htmx-swapped fragment renders.
+  (function ready() { window.NodeForm ? render() : setTimeout(ready, 50); })();
+})();
+</script>
