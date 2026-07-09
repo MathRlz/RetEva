@@ -27,9 +27,6 @@ dependencies = [
     "pandas>=1.5",
     # Visualization
     "matplotlib>=3.5",
-    "seaborn>=0.12",
-    "plotly>=5.14",
-    "kaleido>=0.2",
     # Utilities
     "tqdm>=4.64",
     "pyyaml>=6.0",

@@ -53,16 +53,6 @@ class LiveQueryRequest(BaseModel):
     auto_devices: bool = True
 
 
-class TtsPreviewRequest(BaseModel):
-    """Payload for a one-off TTS synthesis preview."""
-
-    text: str = Field(..., description="Text to synthesize")
-    provider: str = Field("mms", description="TTS provider (registry type or alias)")
-    voice: Optional[str] = Field(None, description="Voice id / model name (provider-specific)")
-    language: str = Field("en", description="Language code (provider-specific)")
-    sample_rate: int = Field(16000, description="Output sample rate in Hz")
-
-
 class HealthResponse(BaseModel):
     status: str = "ok"
 

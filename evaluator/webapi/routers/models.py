@@ -59,18 +59,4 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
 
         return _list(endpoint, ollama_url)
 
-    @router.get("/api/pipeline/{mode}/required_models")
-    def pipeline_required_models(mode: str) -> Dict[str, Any]:
-        """Return the model fields a graph template requires (used by wizard step 3) —
-        graph-derived from the template's nodes."""
-        from evaluator.webapi.form_builder import required_model_fields_for
-
-        fields = required_model_fields_for(mode)
-        if not fields:
-            raise HTTPException(status_code=404, detail=f"unknown template '{mode}'")
-        return {
-            "mode": mode,
-            "required_model_fields": fields,
-        }
-
     return router

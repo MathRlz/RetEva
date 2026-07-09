@@ -13,7 +13,7 @@ from .protocols import (
     TextEmbeddingPipelineProtocol,
 )
 from .retrieval_pipeline import RetrievalPipeline
-from .stage_graph import (
+from .graph import (
     DATASET_ROLE_BOTH,
     DATASET_ROLE_CORPUS,
     DATASET_ROLE_QUESTIONS,

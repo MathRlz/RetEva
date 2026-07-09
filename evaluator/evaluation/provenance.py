@@ -76,11 +76,8 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
     return flags
 
 
-def item_seed(seed: int, query_id: str, node_id: str, variant: int = 0) -> int:
-    """Deterministic 32-bit seed for one (item, node, variant) — order/parallelism-independent."""
-    key = f"{seed}\x1f{query_id}\x1f{node_id}\x1f{variant}"
-    digest = hashlib.sha256(key.encode("utf-8")).digest()
-    return int.from_bytes(digest[:4], "big")
+# item_seed moved to utils.seeding (a pure hash util); re-exported for its callers.
+from ..utils.seeding import item_seed  # noqa: F401,E402
 
 
 def _git_commit() -> Optional[str]:

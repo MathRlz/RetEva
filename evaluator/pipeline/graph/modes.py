@@ -62,51 +62,15 @@ def resolve_graph_template(name: str) -> GraphTemplateSpec:
     return GRAPH_TEMPLATE_SPECS[name]
 
 
-def build_stage_graph(
-    mode: str,
-    *,
-    embedding_fusion_enabled: bool = False,
-    query_opt_enabled: bool = False,
-    hybrid_retrieval: bool = False,
-    rerank_enabled: bool = False,
-    mmr_enabled: bool = False,
-    threshold_enabled: bool = False,
-    refine_ops: tuple = (),
-    sink_enabled: bool = False,
-    correction_enabled: bool = False,
-    answer_gen_enabled: bool = False,
-    judge_enabled: bool = False,
-    trace_enabled: bool = False,
-    result_fusion_enabled: bool = False,
-    rag_rounds: int = 1,
-    refine_method: str = "rewrite_with_context",
-    refine_context_top_k: int = 3,
-    query_opt_method: str = "rewrite",
-    audio_synthesis_enabled: bool = False,
-) -> StageGraph:
-    """Build execution DAG for currently supported pipeline modes (kwargs → FeatureSet)."""
+def build_stage_graph(mode: str, **features: Any) -> StageGraph:
+    """Build the execution DAG for a pipeline mode; kwargs are ``FeatureSet`` fields
+    (``rerank_enabled=True``, ``refine_ops=(…)``, …) — an unknown flag fails loudly."""
     resolve_graph_template(mode)  # validates the mode
-    features = FeatureSet(
-        audio_synthesis_enabled=audio_synthesis_enabled,
-        embedding_fusion_enabled=embedding_fusion_enabled,
-        result_fusion_enabled=result_fusion_enabled,
-        query_opt_enabled=query_opt_enabled,
-        query_opt_method=query_opt_method,
-        hybrid_retrieval=hybrid_retrieval,
-        rerank_enabled=rerank_enabled,
-        mmr_enabled=mmr_enabled,
-        threshold_enabled=threshold_enabled,
-        refine_ops=tuple(refine_ops),
-        sink_enabled=sink_enabled,
-        correction_enabled=correction_enabled,
-        answer_gen_enabled=answer_gen_enabled,
-        judge_enabled=judge_enabled,
-        trace_enabled=trace_enabled,
-        rag_rounds=rag_rounds,
-        refine_method=refine_method,
-        refine_context_top_k=refine_context_top_k,
+    if "refine_ops" in features:
+        features["refine_ops"] = tuple(features["refine_ops"])
+    graph = StageGraph(
+        mode=mode, nodes=_wire_nodes(assemble_specs(mode, FeatureSet(**features)))
     )
-    graph = StageGraph(mode=mode, nodes=_wire_nodes(assemble_specs(mode, features)))
     validate_graph_artifacts(graph)
     return graph
 
@@ -303,7 +267,8 @@ def build_graph_for_config(config: Any) -> StageGraph:
     override = getattr(config, "graph_override", None)
     return _wire_mode_graph(
         _config_template(config) or label_from_graph(override),
-        _features_from_config(config),
+        # explicit graphs ignore feature flags; derive them only for the template path
+        FeatureSet() if (override or {}).get("nodes") else _features_from_config(config),
         graph_override=override,
         config=config,
         attach_fields=True,
@@ -328,6 +293,15 @@ def build_run_graph(
     graph reflects reality, not just the config's declared intent. (Moved from the former
     ``pipeline/run_graph.py``; shares ``_wire_mode_graph`` with the config builder.)"""
     from dataclasses import replace
+
+    # An explicit graph ignores feature flags entirely (_wire_mode_graph wires the nodes);
+    # only the back-compat template path (model.pipeline_mode / a template reference)
+    # derives its node list from them — skip the wasted derivation otherwise.
+    if (graph_override or {}).get("nodes"):
+        return _wire_mode_graph(
+            mode, FeatureSet(), graph_override=graph_override,
+            config=eval_config, attach_fields=False,
+        )
 
     def _enabled(cfg):
         return bool(cfg is not None and getattr(cfg, "enabled", False))

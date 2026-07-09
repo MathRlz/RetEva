@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Mapping
 
-from .stage_graph import (
+from .graph import (
     ARTIFACT_CORPUS,
     ARTIFACT_CORPUS_VECTORS,
     ARTIFACT_GENERATED_ANSWERS,

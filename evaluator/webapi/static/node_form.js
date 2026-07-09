@@ -141,7 +141,12 @@
     panel.appendChild(group);
     modelsPromise().then(models => {
       const fam = models[spec.family] || [];
-      const opts = [{value: '', label: '(default)'}]
+      // The empty option NAMES the inherited model (the flat config default the run reads) —
+      // a bare "(default)" tells the user nothing about what will actually run.
+      const dm = spec.default_model;
+      const dmName = dm && (fam.find(m => m.type === dm) || {}).name;
+      const inheritLabel = dm ? `${dm}${dmName ? ' — ' + dmName : ''} (default)` : '(default)';
+      const opts = [{value: '', label: inheritLabel}]
         .concat(fam.map(m => ({value: m.type, label: `${m.type} — ${m.name}`})));
       group.appendChild(fieldRow('model', selectEl(opts, current.model || '', v => {
         host.setParam('model', v);
@@ -262,7 +267,10 @@
       };
       let widget;
       if (p.kind === 'select') {
-        widget = selectEl([{value: '', label: '(default)'}]
+        // name the declared default in the empty option instead of a bare "(default)"
+        const inheritLabel = p.default !== undefined && p.default !== null && p.default !== ''
+          ? `${p.default} (default)` : '(default)';
+        widget = selectEl([{value: '', label: inheritLabel}]
                             .concat((p.choices || []).map(c => ({value: c, label: c}))),
                           String(cur), onSet);
       } else if (p.kind === 'bool') {

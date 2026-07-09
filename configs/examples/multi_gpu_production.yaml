@@ -88,7 +88,7 @@ checkpoint_interval: 200
 resume_from_checkpoint: true
 audio_synthesis:
   enabled: false
-  provider: espeak
+  provider: mms
   voice: en
   sample_rate: 16000
   seed: 42

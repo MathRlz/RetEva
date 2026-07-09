@@ -13,13 +13,15 @@ from .graph.display import display_label
 from .graph.operators import expand_alias, node_kind, operator_discriminators
 from .graph.artifacts import STRUCTURAL_ARTIFACTS
 from .graph.registry import _resolve as resolve_field
+from .graph.registry import is_structural
 from .graph.registry import node_category, node_domain, node_model_field
-from .stage_graph import _effective_inputs as effective_inputs
-from .stage_graph import _effective_outputs as effective_outputs
-from .stage_graph import dataset_columns, display_artifact_names, get_stage_node_def
+from .graph import _effective_inputs as effective_inputs
+from .graph import _effective_outputs as effective_outputs
+from .graph import dataset_columns, display_artifact_names, get_stage_node_def
 
 __all__ = [
     "resolve_field",
+    "is_structural",
     "effective_inputs",
     "effective_outputs",
     "node_category",

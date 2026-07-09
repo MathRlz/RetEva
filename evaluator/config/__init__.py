@@ -35,7 +35,6 @@ from .device_pool import DevicePoolConfig
 from .tracking import TrackingConfig
 from .service_runtime import ServiceRuntimeConfig
 from .evaluation import EvaluationConfig, preflight_check
-from .templates import ConfigTemplates
 
 # Import utilities and helpers
 from .base import (
@@ -77,7 +76,6 @@ __all__ = [
     "TrackingConfig",
     "ServiceRuntimeConfig",
     "EvaluationConfig",
-    "ConfigTemplates",
     # Utilities
     "validate_device_string",
     "detect_device",

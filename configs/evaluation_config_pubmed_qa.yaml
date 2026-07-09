@@ -16,7 +16,7 @@ graph:
   - id: tts
     type: tts
     params:
-      provider: espeak
+      provider: mms
       voice: en
       sample_rate: 16000
       seed: 42

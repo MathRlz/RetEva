@@ -57,11 +57,13 @@ def _graph_diagram_context(preview: dict) -> dict:
     }
 
 
-def _edit_nodes_json(name: str, canvas: dict) -> str:
+def _edit_nodes_json(name: str, canvas: dict, config=None) -> str:
     """The meaningful nodes' editable form data (id/type/params/node_params/family/model_field) for
     the Config & Run inline parameter forms — embedded as JSON the page renders via NodeForm. The
     structural plumbing is dropped (auto-derived); the run re-derives it (graph_spec_to_config)."""
     import json as _json
+
+    from evaluator.webapi.form_builder import default_model_for
 
     nodes = [
         {
@@ -69,6 +71,9 @@ def _edit_nodes_json(name: str, canvas: dict) -> str:
             "params": n.get("params") or {},
             "node_params": n.get("node_params") or [],
             "family": n.get("family"), "model_field": n.get("model_field"),
+            # the form's empty model option names the inherited model — the LOADED config's
+            # flat default here, not the dataclass default (audit: no bare "(default)")
+            "default_model": default_model_for(n.get("model_field"), config),
         }
         for n in canvas.get("nodes", []) if not n.get("structural")
     ]
@@ -120,7 +125,7 @@ def register_config_routes(
         errors, warnings = collect_problems(config)
         return page(
             request, "_config_run.html", preset_name=name,
-            edit_nodes_json=_edit_nodes_json(name, canvas),
+            edit_nodes_json=_edit_nodes_json(name, canvas, config),
             errors=errors, warnings=warnings, **_graph_diagram_context(preview)
         )
 

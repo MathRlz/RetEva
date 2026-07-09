@@ -47,15 +47,8 @@ def run_graph(
     load_info: Any = None,
     graph_override: Any = None,
 ) -> RunResults:
-    """Optimized phased evaluation - processes entire dataset in phases.
-
-    Runs evaluation by dispatching the stage-graph DAG node by node (the graph,
-    not fixed phases, is the source of truth). A typical retrieval graph wires:
-
-    - ASR node — transcribe all audio samples (or audio-embedding node)
-    - embedding node — embed all transcriptions
-    - retrieval node — perform all vector searches
-    - metrics node — compute all evaluation metrics
+    """Run the evaluation by dispatching the stage-graph DAG node by node (the graph, not
+    fixed phases, is the source of truth).
 
     Args:
         dataset: QueryDataset instance containing audio samples and ground truth.
@@ -70,59 +63,11 @@ def run_graph(
         graph_override: Optional explicit stage-graph spec replacing the default for the mode.
 
     Returns:
-        Dictionary of evaluation metrics including:
-        - pipeline_mode: Mode used (asr_text_retrieval, audio_emb_retrieval, etc.)
-        - WER, CER: Word/Character error rates (ASR modes)
-        - MRR: Mean Reciprocal Rank
-        - MAP: Mean Average Precision
-        - Recall@k: Recall at k for various k values
-        - NDCG@k: Normalized Discounted Cumulative Gain at k
-        - total_samples: Number of samples processed
-        - duration_seconds: Total evaluation time
+        RunResults — the flat metric dict (pipeline_mode, WER/CER, MRR/Recall@k/NDCG@k, …,
+        total_samples, duration_seconds) the report/leaderboard consume.
 
     Raises:
         ValueError: If neither audio_embedding_pipeline nor asr_pipeline provided.
-
-    Examples:
-        Basic usage with ASR and text retrieval::
-
-            >>> from evaluator.evaluation import run_graph
-            >>> from evaluator.evaluation.executor.state import EvaluationContext
-            >>> from evaluator.pipeline import create_pipeline_from_config
-            >>>
-            >>> bundle = create_pipeline_from_config(config, cache_manager)
-            >>> context = EvaluationContext(
-            ...     retrieval_pipeline=bundle.retrieval_pipeline,
-            ...     asr_pipeline=bundle.asr_pipeline,
-            ...     text_embedding_pipeline=bundle.text_embedding_pipeline,
-            ...     k=5,
-            ...     batch_size=32,
-            ... )
-            >>> results = run_graph(dataset, context, eval_config=config)
-
-        Interpreting results::
-
-            >>> print(f"Pipeline: {results['pipeline_mode']}")
-            Pipeline: asr_text_retrieval
-            >>> print(f"ASR Quality - WER: {results['WER']:.2%}")
-            ASR Quality - WER: 12.34%
-            >>> print(f"Retrieval - MRR: {results['MRR']:.4f}")
-            Retrieval - MRR: 0.7523
-            >>> print(f"Recall@5: {results['Recall@5']:.4f}")
-            Recall@5: 0.8912
-
-        With checkpointing for long evaluations::
-
-            >>> context = EvaluationContext(
-            ...     retrieval_pipeline=retrieval,
-            ...     asr_pipeline=asr,
-            ...     text_embedding_pipeline=text_emb,
-            ...     cache_manager=cache,
-            ...     checkpoint_interval=100,
-            ...     experiment_id="long_eval_run",
-            ...     resume_from_checkpoint=True,
-            ... )
-            >>> results = run_graph(large_dataset, context, eval_config=config)
     """
     # The EvaluationContext is the sole source of the pipeline + execution params (D1/F5).
     # Only the fields used directly in this function are unpacked; the rest are read from

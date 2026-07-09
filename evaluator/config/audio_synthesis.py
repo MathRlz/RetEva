@@ -25,7 +25,6 @@ class AudioSynthesisConfig:
         output_dir: Directory for synthesized audio files. Default: "prepared_benchmarks/audio".
         cache_dir: Directory for caching synthesized audio. Default: None (auto-derived from output_dir).
         skip_cache: Skip all caches and force re-synthesis on every call. Default: False.
-        api_key: API key for cloud TTS providers. Default: None.
 
     Examples:
         >>> config = AudioSynthesisConfig(
@@ -57,4 +56,3 @@ class AudioSynthesisConfig:
     output_dir: str = "prepared_benchmarks/audio"
     cache_dir: Optional[str] = None
     skip_cache: bool = False
-    api_key: Optional[str] = None

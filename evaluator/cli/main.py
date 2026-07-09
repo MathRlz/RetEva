@@ -161,7 +161,7 @@ def _cmd_leaderboard(rest: List[str]) -> int:
     parser.add_argument("--name", default=None, help="experiment name filter")
     args = parser.parse_args(rest)
 
-    from evaluator.webapi.routers.leaderboard import leaderboard_rows
+    from evaluator.analysis.leaderboard_views import leaderboard_rows
 
     rows = leaderboard_rows(
         metric=args.metric,

@@ -9,7 +9,6 @@ from evaluator.datasets.descriptor import list_registered_datasets, get_descript
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.form_builder import (
     config_to_canvas_spec,
-    create_config_options,
     graph_render_payload,
     nested_config,
     prepare_run_config,
@@ -35,11 +34,6 @@ def build_config_router(
         from evaluator import list_presets
 
         return {"presets": list_presets()}
-
-    @router.get("/api/config/options", summary="Config form options")
-    def config_options() -> Dict[str, Any]:
-        """Presets, pipeline modes, dataset types, model choices + defaults for the config UI."""
-        return create_config_options(provider_factory)
 
     @router.get("/api/config/schema", summary="Config schema for wizard UI")
     def config_schema() -> Dict[str, Any]:

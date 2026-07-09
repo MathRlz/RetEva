@@ -104,7 +104,7 @@ def register_results_routes(router: APIRouter, page) -> None:
         text_emb_model_type,
         audio_emb_model_type,
     ) -> HTMLResponse:
-        from evaluator.webapi.routers.leaderboard import leaderboard_rows
+        from evaluator.analysis.leaderboard_views import leaderboard_rows
 
         model_filters = {
             "asr_model_type": asr_model_type,
@@ -173,7 +173,7 @@ def register_results_routes(router: APIRouter, page) -> None:
         """Cross-run Pareto view for an experiment group (Roadmap 4a): a 2-objective scatter
         with the non-dominated frontier highlighted + a table tagging each comparable run."""
         from evaluator.storage import ExperimentStore
-        from evaluator.webapi.routers.leaderboard import pareto_rows
+        from evaluator.analysis.leaderboard_views import pareto_rows
 
         try:
             groups = ExperimentStore(

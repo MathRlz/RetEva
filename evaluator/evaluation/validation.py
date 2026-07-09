@@ -33,7 +33,7 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     """
     from ..llm.cost import COST
     from ..pipeline.factory import check_graph_backend_dependencies
-    from ..pipeline.stage_graph import build_graph_for_config
+    from ..pipeline.graph import build_graph_for_config
     from ..plugins import discover_all_plugins
     from .provenance import set_global_determinism
 

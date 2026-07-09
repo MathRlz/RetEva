@@ -1,33 +1,20 @@
 """Registry/config-driven UI helpers for the WebAPI (form builder).
 
-Builds UI options/forms from the registries and config (``create_config_options``,
-``node_catalogue``, ``graph_preview``, ``config_to_canvas_spec``, ``resolve_node_form``).
+Builds UI options/forms from the registries and config (``node_catalogue``, ``graph_preview``,
+``config_to_canvas_spec``, ``resolve_node_form``).
 The form → validated-config half lives in ``form_config.py`` (import its public names
 from there directly); ``prepare_run_config`` is re-exported here for one remaining caller.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List
 
-from evaluator import EvaluationConfig, list_presets
+from evaluator import EvaluationConfig
 from evaluator.config.model_fields import (
     MODEL_FIELD_FAMILY as _MODEL_FIELD_FAMILY,
 )
-from evaluator.config.types import (
-    DatasetType,
-    VectorDBType,
-    RETRIEVAL_MODES,
-    RERANKER_MODES,
-    SERVICE_STARTUP_MODES,
-    SERVICE_OFFLOAD_POLICIES,
-    DATASET_SOURCES,
-)
-from evaluator.models.retrieval import list_fusions
-from evaluator.datasets import (
-    list_known_dataset_names,
-    resolve_dataset_profile,
-)
+from evaluator.datasets import resolve_dataset_profile
 from evaluator.pipeline import build_graph_for_config
 # Public introspection surface (the supported boundary — not registry/stage_graph privates).
 from evaluator.pipeline.introspection import (
@@ -42,9 +29,7 @@ from evaluator.pipeline.introspection import (
     effective_inputs as _effective_inputs,
     effective_outputs as _effective_outputs,
 )
-from evaluator.services import ModelServiceProvider
 from evaluator.webapi.field_help import FIELD_HELP
-from evaluator.webapi.utils import with_provider
 
 # Form → validated-config half (moved to form_config.py); ``prepare_run_config`` is still used
 # directly here / by routers.config, so keep that one importable from this module.
@@ -60,71 +45,6 @@ def nested_config(config: EvaluationConfig) -> Dict[str, Any]:
         "output_dir": config.output_dir,
         "runtime": config.to_runtime_dict(),
         "experiment": config.to_experiment_dict(),
-    }
-
-
-def create_config_options(
-    provider_factory: Callable[[], ModelServiceProvider],
-) -> Dict[str, Any]:
-    """Build form options for config creator UI."""
-    raw_models = with_provider(provider_factory, lambda p: p.list_available_models())
-
-    def _normalize_model_entries(entries: Any) -> List[Dict[str, str]]:
-        normalized: List[Dict[str, str]] = []
-        if not isinstance(entries, list):
-            return normalized
-        for entry in entries:
-            if isinstance(entry, dict):
-                entry_type = str(entry.get("type", "")).strip()
-                entry_name = str(entry.get("name", "")).strip() or entry_type
-                if entry_type:
-                    normalized.append({"type": entry_type, "name": entry_name})
-                continue
-            if isinstance(entry, str):
-                value = entry.strip()
-                if value:
-                    normalized.append({"type": value, "name": value})
-        return normalized
-
-    normalized_models: Dict[str, List[Dict[str, str]]] = {}
-    if isinstance(raw_models, dict):
-        for family, entries in raw_models.items():
-            normalized_models[str(family)] = _normalize_model_entries(entries)
-    for required_family in (
-        "asr",
-        "text_embedding",
-        "audio_embedding",
-        "tts",
-        "reranker",
-    ):
-        normalized_models.setdefault(required_family, [])
-
-    from evaluator.pipeline.graph.templates import GRAPH_TEMPLATES, list_graph_templates
-
-    defaults = EvaluationConfig()
-    return {
-        "presets": list_presets(),
-        # The four former pipeline modes are now graph templates (config-creation skeletons).
-        # Key kept as ``pipeline_modes`` for the existing UI; values are the template names.
-        "pipeline_modes": list(GRAPH_TEMPLATES),
-        "graph_templates": list_graph_templates(),
-        "dataset_types": [dataset_type.value for dataset_type in DatasetType],
-        "dataset_sources": list(DATASET_SOURCES),
-        "dataset_names": list_known_dataset_names(),
-        "vector_db_types": [db.value for db in VectorDBType],
-        "retrieval_modes": list(RETRIEVAL_MODES),
-        "hybrid_fusion_methods": list_fusions(),
-        "reranker_modes": list(RERANKER_MODES),
-        "service_runtime": {
-            "startup_mode": list(SERVICE_STARTUP_MODES),
-            "offload_policy": list(SERVICE_OFFLOAD_POLICIES),
-        },
-        "tts_providers": sorted(
-            {entry["type"] for entry in normalized_models.get("tts", [])}
-        ),
-        "field_help": dict(FIELD_HELP),
-        "models": normalized_models,
-        "defaults": nested_config(defaults),
     }
 
 
@@ -194,7 +114,7 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
 def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     """The rich preview node card (label/category/domain/ports/bindings/inspect) the read-only
     DAG view + the builder seed render from."""
-    from ..pipeline.graph.registry import is_structural
+    from ..pipeline.introspection import is_structural
 
     return {
         "id": node.id,
@@ -480,7 +400,7 @@ def render_node(node: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """One node in a canvas render payload: id + type + params + resolved bindings + the
     field-aware form contract (ports/label/family/switches) — the shape ``DagView.drawGraph``
     consumes, identical to ``/api/graph/template``."""
-    from ..pipeline.graph.registry import is_structural
+    from ..pipeline.introspection import is_structural
 
     return {
         "id": node.id,
@@ -675,9 +595,8 @@ def node_catalogue() -> Dict[str, Any]:
     artifact name matches a consumer's input name (the same rule the auto-wiring uses);
     ``family`` names the model registry the node's model picker reads (null = model-free);
     ``node_params`` are the node-centric YAML keys its param form offers."""
-    from ..pipeline.stage_graph import _NODE_REGISTRY
-
-    from ..pipeline.graph.registry import _resolve, is_structural
+    from ..pipeline.graph import _NODE_REGISTRY
+    from ..pipeline.introspection import is_structural
 
     nodes = []
     for stage, d in sorted(_NODE_REGISTRY.items()):
@@ -752,6 +671,29 @@ def _inject_dataset_fields(node_type: str, params: Dict[str, Any]) -> None:
         params["fields"] = dict(desc.fields)
 
 
+def default_model_for(model_field: Any, config: Any = None) -> Any:
+    """The model type a ``model_field`` path resolves to when the node picks none: the value on
+    the given config (Config & Run — the loaded experiment's flat default), else the dataclass
+    default (builder — no config context). ``model.X`` → ModelConfig, ``vector_db.X`` →
+    VectorDBConfig; anything else (model-free node) → None."""
+    if not model_field or "." not in str(model_field):
+        return None
+    section, attr = str(model_field).split(".", 1)
+    if config is not None:
+        holder = getattr(config, section, None)
+        if holder is not None:
+            return getattr(holder, attr, None)
+    if section == "model":
+        from evaluator.config.model import ModelConfig
+
+        return getattr(ModelConfig(), attr, None)
+    if section == "vector_db":
+        from evaluator.config.vector_db import VectorDBConfig
+
+        return getattr(VectorDBConfig(), attr, None)
+    return None
+
+
 def resolve_node_form(node_type: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """Field-aware builder form for one operator instance (E2 follow-up): given the node's
     currently-set discriminator fields, resolve its ports + model family + the op-specific
@@ -774,6 +716,9 @@ def resolve_node_form(node_type: str, params: Dict[str, Any] | None = None) -> D
         "domain": _resolve(d.domain, params),
         "model_field": model_field,
         "family": family,
+        # The model this node runs when none is picked (the flat config default the executor
+        # reads) — the form's empty option names it instead of a bare "(default)".
+        "default_model": default_model_for(model_field),
         "inputs": list(_effective_inputs(node_type, params)),
         "outputs": list(_effective_outputs(node_type, params)),
         "optional_inputs": list(

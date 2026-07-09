@@ -8,11 +8,10 @@ from evaluator.config import EvaluationConfig
 from evaluator.storage.cache import CacheManager
 from evaluator.logging_config import setup_logging, log_cache_stats, runtime_logger
 from evaluator.evaluation.runner import run_evaluation_from_config
-
-from .parser import parse_args, apply_args_to_config
+from .parser import apply_args_to_config
 from .utils import generate_output_filename, generate_model_description
 
-__all__ = ["run_evaluation", "main"]
+__all__ = ["run_evaluation"]
 
 
 def run_evaluation(args: argparse.Namespace) -> None:
@@ -131,7 +130,7 @@ def _print_graph(config: EvaluationConfig) -> None:
     """Print the execution DAG for *config* without loading any models."""
     from evaluator.pipeline import build_graph_for_config
     from evaluator.pipeline.graph.display import display_label
-    from evaluator.pipeline.stage_graph import (
+    from evaluator.pipeline.graph import (
         _effective_inputs,
         _effective_outputs,
         dataset_columns,
@@ -157,8 +156,3 @@ def _print_graph(config: EvaluationConfig) -> None:
             cols = ", ".join(f"{c['name']}:{c['type']}" for c in columns)
             print(f"      columns: {cols}")
 
-
-def main() -> None:
-    """Main entry point for CLI."""
-    args = parse_args()
-    run_evaluation(args)

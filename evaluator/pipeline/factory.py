@@ -13,7 +13,7 @@ from .text_embedding_pipeline import TextEmbeddingPipeline
 from .audio_embedding_pipeline import AudioEmbeddingPipeline
 from .retrieval_pipeline import RetrievalPipeline
 from .types import PipelineBundle
-from .stage_graph import resolve_graph_template
+from .graph import resolve_graph_template
 
 from ..logging_config import get_logger
 
@@ -86,7 +86,7 @@ def check_graph_backend_dependencies(config) -> None:
     A per-node ``store`` override can name chromadb/qdrant even when the global
     ``vector_db.type`` doesn't — fail before any model loads, not mid-run.
     """
-    from .stage_graph import build_graph_for_config
+    from .graph import build_graph_for_config
 
     try:
         graph = build_graph_for_config(config)

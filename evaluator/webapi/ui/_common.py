@@ -73,7 +73,7 @@ def _graph_view_from_config(config_dict: dict):
                 .get("enabled")
             )
             graph = build_stage_graph(mode, embedding_fusion_enabled=fusion)
-        from evaluator.pipeline.stage_graph import (
+        from evaluator.pipeline.graph import (
             _effective_inputs,
             _effective_outputs,
             dataset_columns,

@@ -28,7 +28,6 @@ from evaluator.webapi.routers import (
     leaderboard as leaderboard_router,
     live as live_router,
     models as models_router,
-    tts as tts_router,
 )
 
 
@@ -79,7 +78,6 @@ def create_app(
     app.include_router(datasets_router.build_datasets_router())
     app.include_router(graphs_router.build_graphs_router(graph_store or GraphStore()))
     app.include_router(introspection_router.build_introspection_router())
-    app.include_router(tts_router.build_tts_router())
     app.include_router(jobs_router.build_jobs_router(jobs))
     app.include_router(leaderboard_router.build_leaderboard_router())
     app.include_router(

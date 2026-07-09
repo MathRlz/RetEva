@@ -101,7 +101,7 @@ class AudioAugmenter:
             logger.debug(f"Creating variant {i+1}/{n}")
             seed: Optional[int] = None
             if base_seed is not None and query_id is not None:
-                from ...evaluation.provenance import item_seed
+                from ...utils.seeding import item_seed
 
                 seed = item_seed(int(base_seed), query_id, node_id, i)
             variant = self.augment(audio, sr, seed=seed)
