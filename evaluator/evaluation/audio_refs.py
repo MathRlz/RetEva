@@ -14,14 +14,9 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..logging_config import get_logger
-from .item_set import ItemSet
+from .item_set import ItemSet, lineage_parent as _lineage_parent
 
 logger = get_logger(__name__)
-
-
-def _lineage_parent(qid: str) -> str:
-    """``q42·aug0`` → ``q42`` (fan-out variants resolve metadata via their parent)."""
-    return qid.split("·", 1)[0]
 
 
 class RefAudioDatasetView:

@@ -2,9 +2,9 @@
 
 Two endpoint kinds:
 
-* ``local`` — the curated local catalog (:class:`LLMModelCatalog`) merged with a *live* probe of
-  a running Ollama server (``/api/tags``), so models you've actually ``ollama pull``-ed are
-  flagged ``pulled`` and float to the top. Any pulled model missing from the catalog is added.
+* ``local`` — the curated local list (``registry.CURATED_LOCAL_MODELS``) merged with a *live*
+  probe of a running Ollama server (``/api/tags``), so models you've actually ``ollama pull``-ed
+  are flagged ``pulled`` and float to the top. A pulled model missing from the list is added.
 * ``api`` — a small static set of common OpenAI-compatible chat models (the catalog is
   local-only; API model ids are different).
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-from .registry import LLMModelCatalog
+from .registry import CURATED_LOCAL_MODELS
 
 # Common OpenAI-compatible chat models for the `api` endpoint (the curated catalog is local).
 _API_MODELS: List[Dict[str, str]] = [
@@ -65,21 +65,11 @@ def list_llm_models(
 
     models: List[Dict[str, Any]] = []
     seen: set = set()
-    for m in LLMModelCatalog.to_dict_list():
-        mid = m.get("ollama_name") or m.get("name")
-        if not mid or mid in seen:
+    for m in CURATED_LOCAL_MODELS:
+        if m["id"] in seen:
             continue
-        seen.add(mid)
-        models.append(
-            {
-                "id": mid,
-                "label": m["display_name"],
-                "domain": m["domain"],
-                "size": m["size"],
-                "min_ram_gb": m.get("min_ram_gb"),
-                "pulled": mid in pulled,
-            }
-        )
+        seen.add(m["id"])
+        models.append({**m, "pulled": m["id"] in pulled})
     # pulled models not in the curated catalog (custom pulls) — surface them too
     for name in sorted(pulled):
         if name not in seen:

@@ -4,7 +4,7 @@ import gc
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Optional, Generator, Any, Callable
+from typing import Optional, Any, Callable
 
 from .monitor import GPUMonitor, get_monitor
 
@@ -62,13 +62,8 @@ class MemoryManager:
         auto_cleanup: bool = False,
         cleanup_interval: int = 10,
     ):
-        """Initialize the memory manager.
-
-        Args:
-            monitor: GPU monitor instance. Uses default if not provided.
-            auto_cleanup: Whether to automatically clear cache after operations.
-            cleanup_interval: Interval (in operations) for automatic cleanup.
-        """
+        """``auto_cleanup`` clears the GPU cache every ``cleanup_interval`` recorded
+        operations; ``monitor`` defaults to the shared GPUMonitor."""
         self._monitor = monitor or get_monitor()
         self._auto_cleanup = auto_cleanup
         self._cleanup_interval = cleanup_interval
@@ -77,10 +72,7 @@ class MemoryManager:
         self._memory_snapshots: list[MemorySnapshot] = []
 
     def clear_gpu_cache(self) -> None:
-        """Clear GPU cache on all CUDA devices.
-
-        This is a no-op if CUDA is not available or torch is not installed.
-        """
+        """Clear GPU cache on all CUDA devices; no-op without CUDA or torch."""
         if not self._monitor.cuda_available:
             return
 
@@ -93,10 +85,7 @@ class MemoryManager:
             logger.warning(f"Failed to clear GPU cache: {e}")
 
     def collect_garbage(self) -> None:
-        """Trigger Python garbage collection to free memory.
-
-        Useful after processing large batches to free Python object memory.
-        """
+        """Trigger Python garbage collection to free memory."""
         collected = gc.collect()
         logger.debug(f"Garbage collection freed {collected} objects")
 
@@ -116,14 +105,7 @@ class MemoryManager:
             self.clear_gpu_cache()
 
     def get_memory_snapshot(self, device_idx: int = 0) -> Optional[MemorySnapshot]:
-        """Get a snapshot of current GPU memory state.
-
-        Args:
-            device_idx: CUDA device index.
-
-        Returns:
-            MemorySnapshot or None if device unavailable.
-        """
+        """Snapshot current GPU memory state; None if the device is unavailable."""
         import time
 
         device_str = f"cuda:{device_idx}"
@@ -132,7 +114,6 @@ class MemoryManager:
         if memory_info is None:
             return None
 
-        # Convert to MB
         total_mb = memory_info.total * 1024
         used_mb = memory_info.used * 1024
         free_mb = memory_info.free * 1024
@@ -148,7 +129,6 @@ class MemoryManager:
             ),
         )
 
-        # Update peak memory tracking
         key = f"peak_used_{device_idx}"
         current_peak = self._peak_memory.get(key, 0.0)
         if used_mb > current_peak:
@@ -216,36 +196,23 @@ class MemoryManager:
         )
 
     def get_peak_memory_usage(self, device_idx: int = 0) -> Optional[float]:
-        """Get peak memory usage for a device in MB.
-
-        Args:
-            device_idx: CUDA device index.
-
-        Returns:
-            Peak memory used in MB, or None if never recorded.
-        """
+        """Peak memory used on a device in MB, or None if never recorded."""
         key = f"peak_used_{device_idx}"
         return self._peak_memory.get(key)
 
     def get_memory_stats(self) -> dict[str, Any]:
-        """Get comprehensive memory statistics.
-
-        Returns:
-            Dictionary with memory stats for all tracked devices.
-        """
+        """Memory statistics per tracked device (peak/avg/min over snapshots)."""
         if not self._memory_snapshots:
             return {"error": "No memory snapshots recorded"}
 
         stats = {}
 
-        # Group by device
         by_device = {}
         for snapshot in self._memory_snapshots:
             if snapshot.device not in by_device:
                 by_device[snapshot.device] = []
             by_device[snapshot.device].append(snapshot)
 
-        # Calculate stats per device
         for device, snapshots in by_device.items():
             used_values = [s.used_mb for s in snapshots]
             util_values = [s.utilization_percent for s in snapshots]
@@ -268,39 +235,12 @@ class MemoryManager:
         self._operation_count = 0
 
     @contextmanager
-    def device_memory_scope(self, cleanup_on_exit: bool = True):
-        """Context manager for device memory management.
-
-        Optionally clears GPU cache and collects garbage on exit.
-
-        Args:
-            cleanup_on_exit: Whether to cleanup after exiting the context.
-
-        Yields:
-            This memory manager instance.
-        """
-        try:
-            yield self
-        finally:
-            if cleanup_on_exit:
-                self.cleanup_all()
-
-    @contextmanager
     def batch_processing_scope(
         self, cleanup_interval: int = 10, monitor_memory: bool = False
     ):
-        """Context manager optimized for batch processing loops.
-
-        Provides periodic cleanup during batch processing and optional
-        memory monitoring.
-
-        Args:
-            cleanup_interval: Clear cache every N operations.
-            monitor_memory: Whether to monitor memory during processing.
-
-        Yields:
-            A BatchProcessor helper object.
-        """
+        """Context manager for batch loops: temporarily enables GPU-cache cleanup
+        every ``cleanup_interval`` operations and yields a BatchProcessor helper;
+        prior settings are restored and a full cleanup runs on exit."""
         saved_interval = self._cleanup_interval
         saved_auto_cleanup = self._auto_cleanup
         saved_operation_count = self._operation_count
@@ -325,12 +265,7 @@ class BatchProcessor:
     """
 
     def __init__(self, memory_manager: MemoryManager, monitor_memory: bool = False):
-        """Initialize the batch processor.
-
-        Args:
-            memory_manager: The MemoryManager instance.
-            monitor_memory: Whether to monitor memory for each batch.
-        """
+        """If ``monitor_memory``, snapshot memory for each recorded batch."""
         self.memory_manager = memory_manager
         self.monitor_memory = monitor_memory
         self.batch_count = 0
@@ -339,14 +274,8 @@ class BatchProcessor:
     def record_batch(
         self, batch_size: Optional[int] = None
     ) -> Optional[MemorySnapshot]:
-        """Record processing of a batch.
-
-        Args:
-            batch_size: Size of the batch (for logging).
-
-        Returns:
-            Memory snapshot if monitoring, None otherwise.
-        """
+        """Record processing of a batch; returns a MemorySnapshot when monitoring,
+        else None. ``batch_size`` is only used for logging."""
         self.memory_manager.record_operation()
         self.batch_count += 1
 
@@ -390,43 +319,6 @@ def get_memory_manager() -> MemoryManager:
     return _default_memory_manager
 
 
-@contextmanager
-def memory_managed(
-    cleanup_on_exit: bool = True,
-) -> Generator[MemoryManager, None, None]:
-    """Convenient context manager for memory management.
-
-    Args:
-        cleanup_on_exit: Whether to cleanup after exiting the context.
-
-    Yields:
-        MemoryManager instance.
-    """
-    manager = get_memory_manager()
-    with manager.device_memory_scope(cleanup_on_exit=cleanup_on_exit) as mgr:
-        yield mgr
-
-
-@contextmanager
-def batch_processing(
-    cleanup_interval: int = 10, monitor_memory: bool = False
-) -> Generator[BatchProcessor, None, None]:
-    """Convenient context manager for batch processing.
-
-    Args:
-        cleanup_interval: Clear cache every N operations.
-        monitor_memory: Whether to monitor memory during processing.
-
-    Yields:
-        BatchProcessor instance.
-    """
-    manager = get_memory_manager()
-    with manager.batch_processing_scope(
-        cleanup_interval=cleanup_interval, monitor_memory=monitor_memory
-    ) as processor:
-        yield processor
-
-
 def _is_oom_error(exc: BaseException) -> bool:
     """True if ``exc`` is a CUDA out-of-memory error (the retryable case for T7)."""
     try:
@@ -434,7 +326,7 @@ def _is_oom_error(exc: BaseException) -> bool:
 
         if isinstance(exc, getattr(torch.cuda, "OutOfMemoryError", ())):
             return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - no torch → fall through to the string match
         pass
     msg = str(exc).lower()
     return "out of memory" in msg or "cuda oom" in msg

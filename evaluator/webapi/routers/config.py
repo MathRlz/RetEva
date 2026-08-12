@@ -10,14 +10,11 @@ from evaluator.services import ModelServiceProvider
 from evaluator.webapi.form_builder import (
     config_to_canvas_spec,
     graph_render_payload,
-    nested_config,
     prepare_run_config,
     render_node,
     required_model_fields_for,
 )
-from evaluator.webapi.form_config import _deep_merge
 from evaluator.webapi.schemas import (
-    ConfigCreateRequest,
     ErrorResponse,
     EvaluationJobRequest,
 )
@@ -27,13 +24,6 @@ def build_config_router(
     provider_factory: Callable[[], ModelServiceProvider],
 ) -> APIRouter:
     router = APIRouter()
-
-    @router.get("/api/presets", summary="List presets")
-    def presets() -> Dict[str, list[str]]:
-        """Return available preset names for quick config creation."""
-        from evaluator import list_presets
-
-        return {"presets": list_presets()}
 
     @router.get("/api/config/schema", summary="Config schema for wizard UI")
     def config_schema() -> Dict[str, Any]:
@@ -175,7 +165,7 @@ def build_config_router(
         from evaluator.config.graph_config import to_legacy_dict
         from evaluator.pipeline import build_graph_for_config
 
-        from evaluator.webapi.form_builder import lift_single_source_dataset, minimal_edges
+        from evaluator.webapi.form_builder import lift_single_source_dataset
         from evaluator.webapi.form_config import _GRAPH_SPEC_KEYS
 
         spec = payload.get("spec") or {}
@@ -183,14 +173,14 @@ def build_config_router(
         # deep-copy: lift_single_source_dataset strips the dataset_source node in place
         graph = copy.deepcopy({k: spec[k] for k in _GRAPH_SPEC_KEYS if k in spec})
         graph.pop("mode", None)  # the canvas label is derived from nodes, not exported as a key
+        from evaluator.webapi.form_config import _strip_display_params
+
+        _strip_display_params(graph.get("nodes") or [])
         if not graph.get("nodes"):
             raise HTTPException(status_code=400, detail="The graph has no nodes to export.")
-        # Keep only edges the auto-wiring wouldn't recreate, so bindings don't accumulate across
-        # export→load→export and the YAML stays minimal.
-        if graph.get("edges"):
-            graph["edges"] = minimal_edges(graph["nodes"], graph["edges"])
-            if not graph["edges"]:
-                del graph["edges"]
+        # Explicit wiring (E5): the canvas connections ARE the edges — export keeps every one.
+        if not graph.get("edges"):
+            graph.pop("edges", None)
         # A single registered-dataset source lifts to a clean top-level `dataset:` block (the node
         # goes structural) so the export reads well and YAML→canvas→YAML is idempotent.
         config: Dict[str, Any] = {"experiment": {"name": name}}
@@ -220,34 +210,6 @@ def build_config_router(
             return sweep_preview(payload)
         except ConfigurationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @router.post(
-        "/api/config/create",
-        summary="Create config from preset + patch",
-        responses={400: {"model": ErrorResponse}},
-    )
-    def create_config(payload: ConfigCreateRequest) -> Dict[str, Any]:
-        """Create a new config by merging a patch dict over a preset base
-        (ConfigurationError → 400 via the app-level handler)."""
-        from evaluator import EvaluationConfig
-
-        if payload.preset_name:
-            base_config = EvaluationConfig.from_preset(
-                payload.preset_name, validate=False
-            )
-        else:
-            base_config = EvaluationConfig()
-
-        merged = _deep_merge(
-            nested_config(base_config), dict(payload.config_patch)
-        )
-        config = EvaluationConfig.from_dict(merged)
-        if payload.auto_devices:
-            config = config.with_auto_devices()
-        return {
-            "config": nested_config(config),
-            "flat": config.to_dict(),
-        }
 
     @router.post("/api/report/metrics-table", summary="Tidy branch×metric table for a report")
     def report_metrics_table_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:

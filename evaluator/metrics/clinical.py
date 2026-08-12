@@ -69,9 +69,13 @@ def critical_entity_error_rate(
     """Per-item CEER: fraction of the reference's *critical* tokens not preserved (by count)
     in the hypothesis. 0.0 when the reference has no critical tokens (nothing at risk).
     """
-    critical = set(
-        t.lower() for t in (terms if terms is not None else DEFAULT_CRITICAL_TERMS)
-    )
+    # A frozenset is trusted pre-lowercased (the cached rx set) — no per-item rebuild.
+    if isinstance(terms, frozenset):
+        critical = terms
+    else:
+        critical = set(
+            t.lower() for t in (terms if terms is not None else DEFAULT_CRITICAL_TERMS)
+        )
     ref_tokens = _tokens(reference)
     hyp_tokens = _tokens(hypothesis)
     ref_critical = [t for t in ref_tokens if t in critical]

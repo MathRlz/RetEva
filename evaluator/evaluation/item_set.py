@@ -19,9 +19,17 @@ See ``evaluator-architecture.md`` §3.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, Iterator, List, Sequence, Tuple
+from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+#: Separator between a lineage parent and its variant suffix (``q42·aug0``).
+LINEAGE_SEPARATOR = "·"
+
+
+def lineage_parent(item_id: str) -> str:
+    """``q42·aug0`` → ``q42`` (identity for a non-variant id)."""
+    return item_id.split(LINEAGE_SEPARATOR, 1)[0]
 
 
 class ItemSet:
@@ -128,18 +136,30 @@ class ItemSet:
         return ItemSet([self._ids[i] for i in rows], self._take(rows))
 
     # ── join (align two sets by id) ───────────────────────────────────
-    def align(self, other: "ItemSet") -> Tuple[List[str], List[Any], List[Any]]:
+    def align(
+        self,
+        other: "ItemSet",
+        *,
+        other_key: Optional[Callable[[str], str]] = None,
+    ) -> Tuple[List[str], List[Any], List[Any]]:
         """Inner-join with ``other`` by id (this set's order). Returns
         ``(ids, self_values, other_values)`` over the shared ids — the basis for metric
-        nodes (scored vs ground-truth) and cross-branch deltas."""
+        nodes (scored vs ground-truth) and cross-branch deltas.
+
+        ``other_key`` maps an id that missed directly to the id to read from ``other``
+        instead (the lineage join: variant ``q42·aug0`` reads ``other``'s ``q42``). The
+        returned ids stay this set's ids, so variants remain distinct items."""
         ids: List[str] = []
         a: List[Any] = []
         b: List[Any] = []
         for i, item_id in enumerate(self._ids):
-            if other.has(item_id):
+            key = item_id
+            if not other.has(key) and other_key is not None:
+                key = other_key(item_id)
+            if other.has(key):
                 ids.append(item_id)
                 a.append(self._row(i))
-                b.append(other.value_for(item_id))
+                b.append(other.value_for(key))
         return ids, a, b
 
     # ── internals ─────────────────────────────────────────────────────

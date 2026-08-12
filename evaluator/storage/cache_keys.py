@@ -28,15 +28,7 @@ def _typed_default(obj: Any) -> str:
 
 
 def _compute_hash(*args: Any) -> str:
-    """
-    Compute MD5 hash from arguments.
-
-    Args:
-        *args: Variable arguments to hash
-
-    Returns:
-        MD5 hash as hexadecimal string
-    """
+    """Compute MD5 hash of the arguments, returned as a hex string."""
     content = json.dumps(args, sort_keys=True, default=_typed_default)
     return hashlib.md5(content.encode()).hexdigest()
 
@@ -136,23 +128,9 @@ def preprocessing_fingerprint(
 def model_key(
     audio_hash: str, model_name: str, model_version: Optional[str] = None
 ) -> str:
-    """
-    Generate cache key for ASR model features.
-
-    Args:
-        audio_hash: Hash of the audio data
-        model_name: Name/identifier of the ASR model
-        model_version: Optional weights revision/version (T3). When given it is folded
-            into the key so updated weights under the same name invalidate the cache;
-            ``None`` leaves the key identical to the pre-T3 hash (back-compat).
-
-    Returns:
-        Cache key string
-
-    Example:
-        >>> model_key("a1b2c3", "openai/whisper-small")
-        '5d41402abc4b2a76b9719d911017c592'
-    """
+    """Cache key for ASR model features. ``model_version`` (T3) is folded in when
+    given so updated weights under the same name invalidate the cache; ``None``
+    leaves the key identical to the pre-T3 hash (back-compat)."""
     if model_version:
         return _compute_hash(audio_hash, model_name, model_version)
     return _compute_hash(audio_hash, model_name)
@@ -161,21 +139,8 @@ def model_key(
 def embedding_key(
     text: str, model_name: str, model_version: Optional[str] = None
 ) -> str:
-    """
-    Generate cache key for text embeddings.
-
-    Args:
-        text: Text to embed
-        model_name: Name/identifier of the embedding model
-        model_version: Optional weights revision (T3; folded in when given, else no-op).
-
-    Returns:
-        Cache key string
-
-    Example:
-        >>> embedding_key("hello world", "sentence-transformers/labse")
-        '7d793037a0760186574b0282f2f435e7'
-    """
+    """Cache key for text embeddings. ``model_version``: optional weights revision
+    (T3; folded in when given, else no-op)."""
     if model_version:
         return _compute_hash(text, model_name, model_version)
     return _compute_hash(text, model_name)
@@ -187,24 +152,9 @@ def transcription_key(
     language: Optional[str] = None,
     model_version: Optional[str] = None,
 ) -> str:
-    """
-    Generate cache key for transcriptions.
-
-    Args:
-        audio_hash: Hash of the audio data
-        model_name: Name/identifier of the ASR model
-        language: Optional language code (for multilingual models)
-        model_version: Optional weights revision (T3; folded in when given, else no-op).
-
-    Returns:
-        Cache key string
-
-    Example:
-        >>> transcription_key("a1b2c3", "openai/whisper-small", "en")
-        '9bf31c7ff062936a96d3c8bd1f8f2ff3'
-        >>> transcription_key("a1b2c3", "openai/whisper-small")
-        '098f6bcd4621d373cade4e832627b4f6'
-    """
+    """Cache key for transcriptions. ``language``: optional code for multilingual
+    models. ``model_version``: optional weights revision (T3; folded in when given,
+    else no-op)."""
     if model_version:
         return _compute_hash(audio_hash, model_name, language, model_version)
     return _compute_hash(audio_hash, model_name, language)
@@ -213,42 +163,15 @@ def transcription_key(
 def audio_embedding_key(
     audio_hash: str, model_name: str, model_version: Optional[str] = None
 ) -> str:
-    """
-    Generate cache key for audio embeddings.
-
-    Args:
-        audio_hash: Hash of the audio data
-        model_name: Name/identifier of the audio embedding model
-        model_version: Optional weights revision (T3; folded in when given, else no-op).
-
-    Returns:
-        Cache key string
-
-    Example:
-        >>> audio_embedding_key("a1b2c3", "clap-audio-encoder")
-        'c4ca4238a0b923820dcc509a6f75849b'
-    """
+    """Cache key for audio embeddings. ``model_version``: optional weights revision
+    (T3; folded in when given, else no-op)."""
     if model_version:
         return _compute_hash(audio_hash, model_name, model_version)
     return _compute_hash(audio_hash, model_name)
 
 
 def vector_db_key(dataset_name: str, dataset_size: int, model_name: str) -> str:
-    """
-    Generate cache key for vector database.
-
-    Args:
-        dataset_name: Name of the dataset
-        dataset_size: Number of documents in the dataset
-        model_name: Name/identifier of the embedding model used
-
-    Returns:
-        Cache key string
-
-    Example:
-        >>> vector_db_key("pubmed", 1000, "labse")
-        'c81e728d9d4c2f636f067f89cc14862c'
-    """
+    """Cache key for a vector database (dataset name + document count + embedding model)."""
     return _compute_hash(dataset_name, dataset_size, model_name)
 
 

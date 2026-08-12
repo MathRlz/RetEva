@@ -13,7 +13,7 @@ from ..models import (
     create_audio_embedding_model as factory_create_audio_embedding_model,
     create_reranker as factory_create_reranker,
 )
-from ..models.llm import create_server as factory_create_llm_server
+from ..models.llm import OllamaServer
 from .model_services import (
     FactoryModelService,
     LLMServerService,
@@ -366,19 +366,18 @@ class ModelServiceProvider:
 
     @staticmethod
     def _create_llm_server_backend(config):
-        server = factory_create_llm_server(
-            backend=config.backend,
+        backend = config.backend.lower()
+        if backend != "ollama":
+            raise ValueError(
+                f"Unknown local LLM server backend '{config.backend}' "
+                f"for model '{config.model}'. Supported: ollama"
+            )
+        return OllamaServer(
             model=config.model,
             host=config.host,
             port=config.port,
             gpu_layers=config.gpu_layers,
         )
-        if server is None:
-            raise RuntimeError(
-                f"Failed to create local LLM server backend '{config.backend}' "
-                f"for model '{config.model}'"
-            )
-        return server
 
     def shutdown(self, offload: bool = True) -> None:
         logger.info("provider.shutdown offload=%s", offload)

@@ -86,6 +86,10 @@ QUERY_TEXT_CHAIN = one_of(
 # reference_text (= question_text): they coincide only on TTS-bridge datasets where the
 # spoken text IS the question (M1a/M1c-3). ASR-quality metrics score against THIS.
 ARTIFACT_REFERENCE_TRANSCRIPTION = "reference_transcription"
+# The retrieval-side reference (= the dataset's question text) — published by the source
+# (handlers/source.py) and consumed by the branched aggregate; declared here so it is a
+# real, bindable output like every other GT artifact.
+ARTIFACT_REFERENCE_TEXT = "reference_text"
 ARTIFACT_CORPUS = "corpus"
 ARTIFACT_RELEVANT_DOCS = "relevant_docs"
 ARTIFACT_SHORT_ANSWERS = "short_answers"

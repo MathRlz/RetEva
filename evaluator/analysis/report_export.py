@@ -42,12 +42,19 @@ def report_to_metrics_table(report: Dict[str, Any]) -> List[Dict[str, Any]]:
         for metric in sorted(metrics):
             val = metrics[metric]
             if isinstance(val, dict):
+                # reduce_scores emits the CI as a `ci: (low, high)` pair — the flat
+                # ci_lower/ci_upper spelling is accepted for hand-built blocks.
+                ci = val.get("ci")
+                if isinstance(ci, (list, tuple)) and len(ci) == 2:
+                    ci_lower, ci_upper = ci
+                else:
+                    ci_lower, ci_upper = val.get("ci_lower"), val.get("ci_upper")
                 rows.append({
                     "branch": branch,
                     "metric": metric,
                     "mean": val.get("mean"),
-                    "ci_lower": val.get("ci_lower"),
-                    "ci_upper": val.get("ci_upper"),
+                    "ci_lower": ci_lower,
+                    "ci_upper": ci_upper,
                     "n": val.get("n"),
                 })
             elif isinstance(val, (int, float)) and not isinstance(val, bool):

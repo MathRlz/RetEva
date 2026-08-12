@@ -31,15 +31,10 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     Order matters: determinism first (everything downstream may consume RNGs),
     then the cheap config-level checks, then the graph-level ones.
     """
-    from ..llm.cost import COST
+    from ..llm_client.cost import COST
     from ..pipeline.factory import check_graph_backend_dependencies
     from ..pipeline.graph import build_graph_for_config
-    from ..plugins import discover_all_plugins
     from .provenance import set_global_determinism
-
-    # Load any third-party plugins (models/nodes/handlers/metrics/datasets) before validation
-    # so they are visible to the graph build + registries (§5). Idempotent, best-effort.
-    discover_all_plugins()
 
     logger.info("Validating configuration, please wait…")
 
@@ -50,7 +45,6 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     budget = int(getattr(getattr(config, "llm", None), "max_tokens_budget", 0) or 0)
     COST.reset(budget_tokens=budget or None)
 
-    validate_embedding_spaces(config)
     check_graph_backend_dependencies(config)
 
     try:
@@ -137,58 +131,6 @@ def _resolve_space(
     if override:
         return str(override)
     return resolve_embedding_space(registry, str(model_type), model_name)
-
-
-def validate_embedding_spaces(config: Any) -> None:
-    """Raise ``ConfigurationError`` if a dense/hybrid retrieval would dot vectors from
-    different embedding spaces (query-side vs corpus-side). No-op for non-vector retrieval,
-    asr_text (query embedder == corpus embedder), or fusion (combined space, not checked).
-
-    Today the corpus is text-embedded for cross-modal retrieval, so the check that matters is
-    ``audio_emb_retrieval``: the audio query embedder must share a space with the text corpus
-    embedder.
-    """
-    from ..models.registry import audio_embedding_registry, text_embedding_registry
-
-    model = getattr(config, "model", None)
-    if model is None:
-        return
-    mode = str(getattr(config, "graph_template", None) or "")
-    vdb = getattr(config, "vector_db", None)
-    retrieval_mode = str(getattr(vdb, "retrieval_mode", "dense")) if vdb else "dense"
-    if retrieval_mode not in _VECTOR_MODES:
-        return
-
-    text_type = getattr(model, "text_emb_model_type", None)
-    if mode == "audio_emb_retrieval":
-        audio_type = getattr(model, "audio_emb_model_type", None)
-        if not audio_type or not text_type:
-            return  # not enough info to compare
-        query_space = _resolve_space(
-            audio_embedding_registry,
-            audio_type,
-            getattr(model, "audio_emb_model_name", None),
-            getattr(model, "audio_emb_embedding_space", None),
-        )
-        corpus_space = _resolve_space(
-            text_embedding_registry,
-            text_type,
-            getattr(model, "text_emb_model_name", None),
-            getattr(model, "text_emb_embedding_space", None),
-        )
-        if not spaces_compatible(query_space, corpus_space):
-            raise ConfigurationError(
-                f"Embedding-space mismatch for dense '{mode}': audio query embedder "
-                f"'{audio_type}' is in space '{query_space}' but the text corpus embedder "
-                f"'{text_type}' is in space '{corpus_space}'. Dense retrieval dots these "
-                f"vectors, so the scores would be meaningless. Use embedders that share a "
-                f"space (e.g. sonar_speech + sonar); for an APM trained to align to this text "
-                f"embedder, set the SAME `embedding_space:` on both nodes (audio + text) to "
-                f"declare the shared space; or switch to sparse retrieval."
-            )
-    # asr_text_retrieval: query and corpus both use text_emb → same space, always OK.
-    # audio_text_retrieval (fusion): query is a fused vector — space combination is not
-    # validated here (revisit with n-ary fusion).
 
 
 def _node_space(node: Any, config: Any) -> Optional[str]:

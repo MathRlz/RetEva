@@ -11,7 +11,6 @@ Backward Compatibility:
 # Import config types and errors first
 from ..config.types import (
     VectorDBType,
-    AllocationStrategy,
     DatasetType,
     to_enum,
     enum_to_str,
@@ -34,7 +33,8 @@ from .vector_db import VectorDBConfig
 from .device_pool import DevicePoolConfig
 from .tracking import TrackingConfig
 from .service_runtime import ServiceRuntimeConfig
-from .evaluation import EvaluationConfig, preflight_check
+from .evaluation import EvaluationConfig
+from .validation import preflight_check
 
 # Import utilities and helpers
 from .base import (
@@ -53,7 +53,6 @@ from .base import (
 __all__ = [
     # Enums and types
     "VectorDBType",
-    "AllocationStrategy",
     "DatasetType",
     "to_enum",
     "enum_to_str",

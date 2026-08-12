@@ -235,7 +235,7 @@ def create_reranker(
         max_length: Maximum sequence length for tokenization
 
     Returns:
-        BaseReranker instance
+        Reranker instance
     """
     model_class = reranker_registry.get(model_type)
     name = model_name or reranker_registry.get_default_name(model_type)

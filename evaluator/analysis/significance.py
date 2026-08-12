@@ -411,7 +411,7 @@ def format_comparison_report(comparison: Dict[str, Any]) -> str:
     metrics = comparison.get("metrics", {})
 
     for metric_name, metric_data in metrics.items():
-        lines.append(f"📊 {metric_name}")
+        lines.append(f"== {metric_name}")
 
         mean_a = metric_data.get("mean_a")
         mean_b = metric_data.get("mean_b")

@@ -39,6 +39,38 @@ graph:
     type: dataset_sink
     params:
       output_dir: evaluation_results/showcase/exported_dataset
+  edges:
+  - {from: dataset_source, to: corpus_embedding, input: corpus}
+  - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
+  - {from: dataset_source, to: tts, input: query_text}
+  - {from: dataset_source, to: asr, input: query_audio}
+  - {from: tts, to: asr, input: query_audio}
+  - {from: dataset_source, to: asr, input: reference_transcription}
+  - {from: dataset_source, to: text_embedding, input: query_text}
+  - {from: asr, to: text_embedding, input: query_text}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
+  - {from: vector_db, to: retrieval, input: vector_index}
+  - {from: dataset_source, to: retrieval, input: query_text}
+  - {from: asr, to: retrieval, input: query_text}
+  - {from: dataset_source, to: retrieval, input: reference_transcription}
+  - {from: dataset_source, to: retrieval, input: relevant_docs}
+  - {from: retrieval, to: metrics, input: retrieved}
+  - {from: dataset_source, to: metrics, input: query_text}
+  - {from: asr, to: metrics, input: query_text}
+  - {from: dataset_source, to: metrics, input: reference_transcription}
+  - {from: dataset_source, to: metrics, input: relevant_docs}
+  - {from: metrics, to: finalize, input: metrics}
+  - {from: retrieval, to: finalize, input: retrieved}
+  - {from: retrieval, to: aggregate, input: retrieved}
+  - {from: metrics, to: aggregate, input: metrics}
+  - {from: dataset_source, to: aggregate, input: query_text}
+  - {from: asr, to: aggregate, input: query_text}
+  - {from: dataset_source, to: aggregate, input: relevant_docs}
+  - {from: dataset_source, to: aggregate, input: reference_text}
+  - {from: dataset_source, to: aggregate, input: reference_transcription}
+  - {from: metrics, to: leaderboard_sink, input: metrics}
+  - {from: dataset_source, to: dataset_sink, input: query_audio}
+  - {from: tts, to: dataset_sink, input: query_audio}
 nodes:
   asr:
     model: whisper
@@ -48,7 +80,7 @@ nodes:
     model: labse
     device: cuda:0
   retrieval:
-    k: 5
+    k: 10
 runtime:
   cache:
     enabled: true

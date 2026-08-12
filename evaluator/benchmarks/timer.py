@@ -24,17 +24,8 @@ class PerformanceStats:
 
 
 def aggregate_timings(timings: List[float]) -> PerformanceStats:
-    """Compute statistics from a list of timing measurements.
-
-    Args:
-        timings: List of timing measurements in seconds.
-
-    Returns:
-        PerformanceStats with computed mean, std, min, max, and sample count.
-
-    Raises:
-        ValueError: If timings list is empty.
-    """
+    """Compute mean/std/min/max stats from timings in seconds.
+    Raises ValueError on an empty list."""
     if not timings:
         raise ValueError("Cannot aggregate empty timings list")
 
@@ -89,14 +80,8 @@ class Timer:
         return self
 
     def stop(self) -> float:
-        """Stop the timer and record the elapsed time.
-
-        Returns:
-            Elapsed time in seconds.
-
-        Raises:
-            RuntimeError: If timer was not started.
-        """
+        """Stop the timer and record the elapsed time. Returns seconds;
+        raises RuntimeError if the timer was not started."""
         if self._start_time is None:
             raise RuntimeError("Timer was not started. Call start() first.")
 
@@ -116,11 +101,7 @@ class Timer:
 
     @property
     def elapsed(self) -> float:
-        """Get the most recent elapsed time.
-
-        Returns:
-            Most recent elapsed time, or 0.0 if no measurements.
-        """
+        """Most recent elapsed time in seconds, or 0.0 if no measurements."""
         if self._elapsed is not None:
             return self._elapsed
         if self.timings:
@@ -129,14 +110,7 @@ class Timer:
 
     @property
     def stats(self) -> PerformanceStats:
-        """Compute statistics from all recorded timings.
-
-        Returns:
-            PerformanceStats computed from all timings.
-
-        Raises:
-            ValueError: If no timings have been recorded.
-        """
+        """Statistics over all recorded timings; raises ValueError if none recorded."""
         return aggregate_timings(self.timings)
 
     def reset(self) -> None:

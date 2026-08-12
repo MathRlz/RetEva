@@ -6,18 +6,22 @@ auto-wiring engine. The list is assembled declaratively from a :class:`FeatureSe
 entry points (the former for tests, the latter the single config chokepoint).
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .assembly import FeatureSet, assemble_specs
 from .branches import build_branched_graph
 from .registry import (
+    ARTIFACT_REFERENCE_TEXT,
     ARTIFACT_REFERENCE_TRANSCRIPTION,
     StageGraph,
     node_model_field,
     validate_graph_artifacts,
 )
 from .wiring import _normalize_spec_item, _wire_nodes, build_graph_from_spec
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,7 @@ def build_stage_graph(mode: str, **features: Any) -> StageGraph:
 
 
 def _dataset_fields_for(
-    config: Any, params: Optional[dict], has_tts: bool = False
+    config: Any, params: Optional[dict], *, has_tts: bool = False
 ) -> Optional[dict]:
     """The declared column schema for a dataset_source node instance.
 
@@ -98,7 +102,11 @@ def _dataset_fields_for(
             overlay = {k: v for k, v in entry.items() if k not in ("role", "datasets")}
             data = replace(data, datasets=None, **overlay)
         descriptor = resolve_dataset_descriptor(data)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - preview-only; the run path re-raises its own
+        logger.debug(
+            "dataset descriptor unresolvable for %r (node keeps static outputs): %s",
+            (params or {}).get("dataset"), exc,
+        )
         return None
     if not descriptor.fields:
         return None
@@ -115,14 +123,22 @@ def _derived_source_outputs(descriptor: Any, config: Any, has_tts: bool) -> Tupl
     """Artifacts the runtime source publishes that aren't literal dataset columns, so the
     preview wires the nodes the run wires from the static source outputs:
     - a self-retrieval ``corpus`` (audio datasets retrieve against their own items — no corpus
-      column exists), and
+      column exists),
+    - the retrieval-side ``reference_text`` (the question text republished under its own name —
+      ``handlers/source.py`` always publishes it), and
     - the TTS-bridge ASR ``reference_transcription`` (the synthesized speech's reference IS the
       question text; published whenever a tts node bridges text→audio).
+
+    A source output missing here is narrowed away by ``_effective_outputs`` even though the
+    handler publishes it, which leaves consumers holding bindings the graph says are
+    impossible — the emitted edge list then fails to re-bind.
     """
     # Self-retrieval corpus is descriptor-level (shared with the builder picker via
     # descriptor.derived_outputs); the TTS-bridge reference is graph-gated (a tts node exists —
     # the graph is the spec, not a config.audio_synthesis flag).
     extra: List[str] = list(descriptor.derived_outputs)
+    if ARTIFACT_REFERENCE_TEXT not in set(descriptor.fields.values()):
+        extra.append(ARTIFACT_REFERENCE_TEXT)
     if (
         ARTIFACT_REFERENCE_TRANSCRIPTION not in set(descriptor.fields.values())
         and ARTIFACT_REFERENCE_TRANSCRIPTION not in extra
@@ -188,6 +204,38 @@ def _attach_dataset_fields(node_spec: Any, config: Any) -> list:
     return out
 
 
+def _attach_display_fields(graph: StageGraph, config: Any) -> StageGraph:
+    """POST-wiring display attach for explicitly-wired graphs (E4): inject the dataset column
+    schema + superseded-output marks onto ``dataset_source`` nodes AFTER the edges defined the
+    bindings — pure display metadata (canvas columns, narrowed preview ports), zero wiring
+    effect. Mirrors ``_attach_dataset_fields``'s injected params."""
+    from dataclasses import replace
+
+    from .operators import node_kind
+
+    kinds = {node_kind(n.stage, n.params) for n in graph.nodes}
+    superseded = []
+    if "tts" in kinds:
+        superseded.append("query_audio")
+    if "asr" in kinds and "tts" not in kinds:
+        superseded.append("query_text")
+    nodes = []
+    for n in graph.nodes:
+        if node_kind(n.stage, n.params) != "dataset_source":
+            nodes.append(n)
+            continue
+        params = dict(n.params or {})
+        injected = _dataset_fields_for(config, params, has_tts="tts" in kinds)
+        if injected and "fields" not in params:
+            params.update(injected)
+        existing = tuple(params.get("suppress_outputs") or ())
+        new_suppress = tuple(a for a in superseded if a not in existing)
+        if new_suppress:
+            params["suppress_outputs"] = (*existing, *new_suppress)
+        nodes.append(replace(n, params=params))
+    return StageGraph(mode=graph.mode, nodes=tuple(nodes))
+
+
 def _wire_mode_graph(
     mode: Optional[str],
     features: "FeatureSet",
@@ -198,23 +246,36 @@ def _wire_mode_graph(
 ) -> StageGraph:
     """Shared assembly tail for both graph builders: an explicit ``graph_override`` if given,
     else ``assemble_specs(mode, features)``; branch-expand or wire. ``attach_fields`` injects the
-    dataset column schema into ``dataset_source`` nodes — done for the config/preview path (so the
-    DAG display shows real columns) but NOT for the run (which wires from the static node outputs,
-    the source of the run's reference_transcription binding). A mode-less explicit DAG labels
+    dataset column schema into ``dataset_source`` nodes for the config/preview path (so the DAG
+    display shows real columns) but NOT for the run. With explicit PORT-LEVEL edges (E4) the
+    attach is display-only and happens POST-wiring — the edges define the bindings for preview
+    and run alike, so the two builders produce ONE graph; on the legacy auto-wire path the attach
+    still narrows wiring (the historical preview/run divergence). A mode-less explicit DAG labels
     "custom"."""
+    from .wiring import _has_port_edges
+
     override = graph_override or {}
     branches = override.get("branches")
     if override.get("nodes"):
         nodes = override["nodes"]
+        edges = override.get("edges")
+        if _has_port_edges(edges):
+            # Explicit wiring: bindings come from the edges; preview == run. Wire the RAW
+            # nodes (no suppress/narrow interference), then attach the display schema.
+            if branches:
+                graph = build_branched_graph(
+                    nodes, branches, mode=mode or "custom", edges=edges
+                )
+            else:
+                graph = build_graph_from_spec(nodes, mode=mode or "custom", edges=edges)
+            return _attach_display_fields(graph, config) if attach_fields else graph
         if attach_fields:
             nodes = _attach_dataset_fields(nodes, config)
         if branches:
             return build_branched_graph(
-                nodes, branches, mode=mode or "custom", edges=override.get("edges")
+                nodes, branches, mode=mode or "custom", edges=edges
             )
-        return build_graph_from_spec(
-            nodes, mode=mode or "custom", edges=override.get("edges")
-        )
+        return build_graph_from_spec(nodes, mode=mode or "custom", edges=edges)
     if mode is None:
         raise ValueError(
             "a config needs an explicit graph.nodes to build from (or a builder template name)."
@@ -234,6 +295,16 @@ def _config_template(config: Any) -> Optional[str]:
     override = getattr(config, "graph_override", None) or {}
     template = override.get("template")
     return str(template) if template else None
+
+
+def resolve_template_label(config: Any) -> Optional[str]:
+    """THE template-label resolver: an explicit back-compat template reference wins, else
+    the label derives from the explicit graph's node kinds (``label_from_graph``); ``None``
+    for a custom shape. ``EvaluationConfig.graph_template``, ``build_graph_for_config`` and
+    the executor's mode detection all resolve through here."""
+    return _config_template(config) or label_from_graph(
+        getattr(config, "graph_override", None)
+    )
 
 
 def label_from_graph(graph_override: Optional[dict]) -> Optional[str]:
@@ -266,7 +337,7 @@ def build_graph_for_config(config: Any) -> StageGraph:
     :func:`build_run_graph`, which sources its feature flags from the built pipelines instead."""
     override = getattr(config, "graph_override", None)
     return _wire_mode_graph(
-        _config_template(config) or label_from_graph(override),
+        resolve_template_label(config),
         # explicit graphs ignore feature flags; derive them only for the template path
         FeatureSet() if (override or {}).get("nodes") else _features_from_config(config),
         graph_override=override,

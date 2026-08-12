@@ -26,11 +26,6 @@ logger = get_logger(__name__)
 # Plain-data fields snapshotted from RunState (everything downstream nodes read). ctx and
 # drop_sink are handled specially (their locks aren't picklable).
 _SNAPSHOT_FIELDS = (
-    "metrics_all_relevant",
-    "wer_scores",
-    "cer_scores",
-    "per_query_recall5",
-    "ans_detail_by_qid",
     "stage_times",
     "results",
 )
@@ -61,6 +56,26 @@ def restore_state(state: Any, blob: Dict[str, Any]) -> None:
             setattr(state, f, blob[f])
     state.ctx._store = dict(blob.get("__ctx_store__", {}))
     state.drop_sink.by_node = dict(blob.get("__dropped__", {}))
+
+
+def try_restore(state: Any, blob: Dict[str, Any]) -> bool:
+    """Restore a snapshot, or leave ``state`` untouched and return False.
+
+    Stages every value FIRST (the reads/copies are where a malformed blob fails), then
+    applies — so "restore failed, running fresh" never proceeds on a half-restored state.
+    """
+    try:
+        staged = [(f, blob[f]) for f in _SNAPSHOT_FIELDS if f in blob]
+        ctx_store = dict(blob.get("__ctx_store__", {}))
+        dropped = dict(blob.get("__dropped__", {}))
+    except Exception as exc:  # noqa: BLE001 - a bad journal must never block a run
+        logger.warning("journal restore failed (%s); running fresh", exc)
+        return False
+    for f, v in staged:
+        setattr(state, f, v)
+    state.ctx._store = ctx_store
+    state.drop_sink.by_node = dropped
+    return True
 
 
 class RunJournal:

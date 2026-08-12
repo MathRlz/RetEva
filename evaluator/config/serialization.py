@@ -12,8 +12,6 @@ from typing import Any, Dict
 
 import yaml
 
-from ..config.types import enum_to_str
-
 
 def _serialize_value(val: Any) -> Any:
     """Recursively serialize a value for dict output."""
@@ -154,8 +152,8 @@ def to_dict(config: Any, *, include_config: bool = False) -> Dict[str, Any]:
         "service_offload_policy": config.service_runtime.offload_policy,
     }
     if config.device_pool is not None:
-        result["device_pool_strategy"] = enum_to_str(
-            config.device_pool.allocation_strategy
+        result["device_pool_strategy"] = (
+            "manual" if config.device_pool.model_device_overrides else "memory_aware"
         )
     return result
 

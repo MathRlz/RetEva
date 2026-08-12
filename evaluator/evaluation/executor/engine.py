@@ -108,7 +108,7 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
     from ..progress import ProgressSink
 
     sink = ProgressSink.from_env(
-        callback=getattr(state, "cb", None), total_levels=len(levels)
+        callback=state.cb, total_levels=len(levels)
     )
 
     pos = 0
@@ -129,7 +129,7 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
             for model in offloads.get(pos, ()):
                 try:
                     state.service_provider.release_model_instance(
-                        model, soft_cpu=getattr(state, "soft_cpu_offload", False)
+                        model, soft_cpu=state.soft_cpu_offload
                     )
                     node_logger.info("offloaded model after stage '%s'", node.stage)
                 except Exception as exc:  # never let offload break the run
@@ -151,25 +151,23 @@ def _setup_run_journal(state: "RunState", flat_nodes) -> tuple:
     ``checkpoint_interval`` are configured. On a matching journal, restores the snapshot and
     resumes at the level after the last completed one."""
     if not (
-        getattr(state, "cache_manager", None) is not None
-        and getattr(state, "experiment_id", None)
-        and getattr(state, "checkpoint_interval", 0) > 0
+        state.cache_manager is not None
+        and state.experiment_id
+        and state.checkpoint_interval > 0
     ):
         return None, 0
-    from ..run_journal import RunJournal, restore_state, run_key
+    from ..run_journal import RunJournal, run_key
 
     key = run_key(state.config, tuple(n.id for n in flat_nodes))
     journal = RunJournal(state.cache_manager.checkpoints_dir, key)
     start_level = 0
-    if getattr(state, "resume_from_checkpoint", False):
+    if state.resume_from_checkpoint:
         loaded = journal.load()
         if loaded is not None:
             last_level, blob = loaded
-            try:
-                restore_state(state, blob)
+            from ..run_journal import try_restore
+
+            if try_restore(state, blob):
                 start_level = last_level + 1
                 node_logger.info("resuming run from level %d (journal %s)", start_level, key)
-            except Exception as exc:
-                logger.warning("journal restore failed (%s); running fresh", exc)
-                start_level = 0
     return journal, start_level

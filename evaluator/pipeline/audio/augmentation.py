@@ -199,16 +199,11 @@ class AudioAugmenter:
         speed_min, speed_max = self.config.speed_range
         speed_factor = rng.uniform(speed_min, speed_max)
 
-        try:
-            import librosa
+        from ...utils.audio import time_stretch
 
-            # Time stretch (preserves pitch)
-            stretched = librosa.effects.time_stretch(audio, rate=speed_factor)
-            logger.debug(f"Applied speed perturbation: {speed_factor:.2f}x")
-            return stretched
-        except ImportError:
-            logger.warning("librosa not installed, speed perturbation skipped")
-            return audio
+        stretched = time_stretch(audio, speed_factor)
+        logger.debug(f"Applied speed perturbation: {speed_factor:.2f}x")
+        return stretched
 
     def _pitch_shift(
         self, audio: np.ndarray, sr: int, rng: np.random.RandomState
@@ -218,16 +213,11 @@ class AudioAugmenter:
         pitch_min, pitch_max = self.config.pitch_semitones_range
         n_steps = rng.uniform(pitch_min, pitch_max)
 
-        try:
-            import librosa
+        from ...utils.audio import pitch_shift
 
-            # Pitch shift
-            shifted = librosa.effects.pitch_shift(audio, sr=sr, n_steps=n_steps)
-            logger.debug(f"Applied pitch shift: {n_steps:.1f} semitones")
-            return shifted
-        except ImportError:
-            logger.warning("librosa not installed, pitch shift skipped")
-            return audio
+        shifted = pitch_shift(audio, sr, n_steps)
+        logger.debug(f"Applied pitch shift: {n_steps:.1f} semitones")
+        return shifted
 
     def _volume_change(
         self, audio: np.ndarray, rng: np.random.RandomState

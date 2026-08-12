@@ -4,12 +4,9 @@ import logging
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, TYPE_CHECKING, Generator
+from typing import Dict, List, Optional, Generator
 
 from .monitor import GPUMonitor, get_monitor
-
-if TYPE_CHECKING:
-    from .strategy import AllocationStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -57,31 +54,22 @@ class GPUPool:
         memory_buffer_percent: float = 0.1,
         allow_cpu_fallback: bool = True,
     ):
-        """Initialize the GPU pool.
-
-        Args:
-            devices: List of device strings (e.g., ["cuda:0", "cuda:1"]).
-                    Use ["auto"] to auto-detect available GPUs.
-            monitor: GPU monitor instance. Uses default if not provided.
-            memory_buffer_percent: Buffer to keep free on each GPU (0.0 to 1.0).
-            allow_cpu_fallback: If True, fall back to CPU when GPUs are full.
-        """
+        """``devices`` is a list like ["cuda:0", "cuda:1"], or ["auto"] to
+        auto-detect. ``memory_buffer_percent`` (0.0-1.0) is kept free on each GPU;
+        ``allow_cpu_fallback`` falls back to CPU when GPUs are full."""
         self._monitor = monitor or get_monitor()
         self._memory_buffer_percent = memory_buffer_percent
         self._allow_cpu_fallback = allow_cpu_fallback
-        self._strategy: Optional["AllocationStrategy"] = None
-        self._round_robin_index = 0
+        self._strategy = None
         # The webapi runs allocations on a ThreadPoolExecutor; without this lock two
         # threads can both pass the ``free >= memory_gb`` check and over-commit a GPU
         # (F2). Re-entrant: ``allocate`` holds it while the strategy calls back into
-        # ``get_next_round_robin_device`` / ``_reserve``.
+        # ``_reserve``.
         self._lock = threading.RLock()
 
-        # Resolve "auto" to actual devices
         if devices == ["auto"] or (len(devices) == 1 and devices[0] == "auto"):
             devices = self._auto_detect_devices()
 
-        # Initialize device usage tracking
         self._devices: Dict[str, DeviceUsage] = {}
         for device in devices:
             self._devices[device] = self._create_device_usage(device)
@@ -103,7 +91,6 @@ class GPUPool:
             # CPU has "unlimited" memory for our purposes
             return DeviceUsage(device=device, total_memory_gb=float('inf'))
 
-        # Parse device index
         if ":" in device:
             try:
                 device_idx = int(device.split(":")[1])
@@ -112,49 +99,34 @@ class GPUPool:
         else:
             device_idx = 0
 
-        # Get actual memory from monitor
         memory_info = self._monitor.get_memory_usage(device_idx)
         if memory_info is not None:
-            # Apply buffer
             total_usable = memory_info.total * (1 - self._memory_buffer_percent)
             return DeviceUsage(device=device, total_memory_gb=total_usable)
 
         # Fallback: assume 8GB if we can't query
         return DeviceUsage(device=device, total_memory_gb=8.0)
 
-    def set_strategy(self, strategy: "AllocationStrategy") -> None:
-        """Set the allocation strategy.
-
-        Args:
-            strategy: The allocation strategy to use.
-        """
+    def set_strategy(self, strategy) -> None:
+        """Set the allocation strategy (duck-typed: ``allocate(pool, model_type, gb)``)."""
         self._strategy = strategy
 
     def allocate(self, model_type: str, memory_gb: float) -> str:
-        """Allocate a device for a model.
-
-        Args:
-            model_type: Identifier for the model (e.g., "asr", "text_embedding").
-            memory_gb: Estimated memory requirement in GB.
-
-        Returns:
-            Device string (e.g., "cuda:0", "cpu").
-
-        Raises:
-            RuntimeError: If no device can accommodate the model.
-        """
+        """Allocate a device for a model and reserve ``memory_gb`` on it. Returns a
+        device string (e.g. "cuda:0", "cpu"); raises RuntimeError when no device
+        can accommodate the model."""
         logger.debug(f"Allocating device for '{model_type}' (requires {memory_gb:.2f}GB)")
 
         # Hold the lock across the whole find-then-reserve so two threads can't both see the
         # same device as free and over-commit it (F2). RLock → nested _reserve / round-robin OK.
         with self._lock:
-            # Use strategy if set
             if self._strategy is not None:
                 device = self._strategy.allocate(self, model_type, memory_gb)
                 if device is not None:
                     self._reserve(device, model_type, memory_gb)
                     logger.info(
-                        f"Allocated '{device}' for '{model_type}' using {self._strategy.__class__.__name__} "
+                        f"Allocated '{device}' for '{model_type}' "
+                        f"using {self._strategy.__class__.__name__} "
                         f"({memory_gb:.2f}GB reserved)"
                     )
                     return device
@@ -165,11 +137,11 @@ class GPUPool:
                 self._reserve(device, model_type, memory_gb)
                 logger.info(
                     f"Allocated '{device}' for '{model_type}' "
-                    f"({memory_gb:.2f}GB reserved, {self._devices[device].free_memory_gb:.2f}GB free)"
+                    f"({memory_gb:.2f}GB reserved, "
+                    f"{self._devices[device].free_memory_gb:.2f}GB free)"
                 )
                 return device
 
-            # Try CPU fallback
             if self._allow_cpu_fallback and "cpu" not in self._devices:
                 logger.warning(
                     f"No GPU available for '{model_type}' requiring {memory_gb:.2f}GB. "
@@ -187,7 +159,6 @@ class GPUPool:
                 self._reserve("cpu", model_type, memory_gb)
                 return "cpu"
 
-            # Build detailed error message
             usage_info = {dev: f"{usage.reserved_memory_gb:.2f}/{usage.total_memory_gb:.2f}GB"
                           for dev, usage in self._devices.items()}
         logger.error(
@@ -223,11 +194,7 @@ class GPUPool:
             usage.allocations[model_type] = memory_gb
 
     def release(self, model_type: str) -> None:
-        """Release a model's allocation.
-
-        Args:
-            model_type: Identifier for the model to release.
-        """
+        """Release a model's allocation."""
         with self._lock:
             for device, usage in self._devices.items():
                 if model_type in usage.allocations:
@@ -243,22 +210,11 @@ class GPUPool:
             logger.warning(f"Attempted to release '{model_type}' but no allocation found")
 
     def get_usage(self) -> Dict[str, DeviceUsage]:
-        """Get current allocation status for all devices.
-
-        Returns:
-            Dictionary mapping device strings to DeviceUsage objects.
-        """
+        """Current allocation status: device string -> DeviceUsage."""
         return dict(self._devices)
 
     def get_device_for_model(self, model_type: str) -> Optional[str]:
-        """Get the device currently allocated to a model.
-
-        Args:
-            model_type: Identifier for the model.
-
-        Returns:
-            Device string if allocated, None otherwise.
-        """
+        """Device currently allocated to a model, or None."""
         for device, usage in self._devices.items():
             if model_type in usage.allocations:
                 return device
@@ -274,17 +230,6 @@ class GPUPool:
         """List of GPU devices in the pool (excludes CPU)."""
         return [d for d in self._devices.keys() if d != "cpu"]
 
-    def get_next_round_robin_device(self) -> str:
-        """Get the next GPU device in round-robin order."""
-        gpu_devices = self.gpu_devices
-        if not gpu_devices:
-            return "cpu"
-
-        with self._lock:
-            device = gpu_devices[self._round_robin_index % len(gpu_devices)]
-            self._round_robin_index += 1
-        return device
-
     @contextmanager
     def managed_allocation(
         self,
@@ -292,16 +237,8 @@ class GPUPool:
         memory_gb: float,
         cleanup_on_exit: bool = False
     ) -> Generator[str, None, None]:
-        """Context manager for model allocation with automatic cleanup.
-
-        Args:
-            model_type: Identifier for the model.
-            memory_gb: Estimated memory requirement in GB.
-            cleanup_on_exit: Whether to clear GPU cache on exit.
-
-        Yields:
-            Device string allocated for the model.
-        """
+        """Allocate, yield the device string, and release on exit;
+        ``cleanup_on_exit`` also clears the GPU cache."""
         device = self.allocate(model_type, memory_gb)
         try:
             yield device
@@ -314,3 +251,17 @@ class GPUPool:
                         torch.cuda.empty_cache()
                 except (RuntimeError, ImportError) as exc:
                     logger.debug("GPU cache clear failed during cleanup: %s", exc)
+
+
+def pool_from_config(device_pool_cfg) -> "GPUPool":
+    """The one GPUPool builder both the config-side device resolution and the
+    pipeline factory use (they used to hold byte-equivalent copies)."""
+    from .strategy import pick_strategy
+
+    pool = GPUPool(
+        devices=list(device_pool_cfg.available_devices),
+        memory_buffer_percent=device_pool_cfg.memory_buffer_percent,
+        allow_cpu_fallback=device_pool_cfg.allow_cpu_fallback,
+    )
+    pool.set_strategy(pick_strategy(device_pool_cfg))
+    return pool

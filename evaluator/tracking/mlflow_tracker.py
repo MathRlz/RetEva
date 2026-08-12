@@ -55,28 +55,16 @@ class MLflowTracker:
         experiment_name: str,
         tracking_uri: Optional[str] = None
     ) -> None:
-        """Initialize MLflow tracker.
-
-        Args:
-            experiment_name: Name for the MLflow experiment. Will be created
-                if it doesn't exist.
-            tracking_uri: MLflow tracking server URI. If None, uses local
-                file-based tracking in the 'mlruns' directory.
-        """
+        """The experiment is created if it doesn't exist; ``tracking_uri`` None
+        means local file-based tracking in the 'mlruns' directory."""
         self.experiment_name = experiment_name
         self.tracking_uri = tracking_uri
         self._run_active = False
         self._mlflow = None
 
     def _ensure_mlflow(self) -> Any:
-        """Lazily import and configure MLflow.
-
-        Returns:
-            The mlflow module.
-
-        Raises:
-            ImportError: If mlflow is not installed.
-        """
+        """Lazily import and configure MLflow; returns the mlflow module.
+        Raises ImportError if mlflow is not installed."""
         if self._mlflow is None:
             try:
                 import mlflow
@@ -98,11 +86,7 @@ class MLflowTracker:
         return self._mlflow
 
     def start_run(self, run_name: Optional[str] = None) -> None:
-        """Start a new MLflow run.
-
-        Args:
-            run_name: Optional name for the run. If None, MLflow generates one.
-        """
+        """Start a new MLflow run; MLflow generates a name when ``run_name`` is None."""
         mlflow = self._ensure_mlflow()
 
         if self._run_active:
@@ -114,19 +98,14 @@ class MLflowTracker:
         logger.info(f"Started MLflow run: {run_name or '(auto-generated)'}")
 
     def log_params(self, params: Dict[str, Any]) -> None:
-        """Log parameters to MLflow.
-
-        Args:
-            params: Dictionary of parameter names to values. Values are
-                converted to strings for MLflow compatibility.
-        """
+        """Log parameters to MLflow; nested dicts are flattened and values are
+        converted to strings for MLflow compatibility."""
         if not self._run_active:
             logger.warning("No active run. Call start_run() first.")
             return
 
         mlflow = self._ensure_mlflow()
 
-        # Flatten nested dicts and convert values to strings
         flat_params = self._flatten_params(params)
 
         # MLflow has a limit of 500 params per batch
@@ -145,16 +124,7 @@ class MLflowTracker:
         parent_key: str = "",
         sep: str = "."
     ) -> Dict[str, str]:
-        """Flatten nested parameter dictionaries.
-
-        Args:
-            params: Nested parameter dictionary.
-            parent_key: Prefix for flattened keys.
-            sep: Separator between nested keys.
-
-        Returns:
-            Flattened dictionary with string values.
-        """
+        """Flatten nested parameter dicts into ``sep``-joined keys with string values."""
         items: Dict[str, str] = {}
 
         for key, value in params.items():
@@ -172,19 +142,14 @@ class MLflowTracker:
         return items
 
     def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
-        """Log metrics to MLflow.
-
-        Args:
-            metrics: Dictionary of metric names to float values.
-            step: Optional step number for time-series metrics.
-        """
+        """Log metrics to MLflow; non-numeric values are dropped. ``step`` is an
+        optional step number for time-series metrics."""
         if not self._run_active:
             logger.warning("No active run. Call start_run() first.")
             return
 
         mlflow = self._ensure_mlflow()
 
-        # Filter to only numeric metrics
         numeric_metrics = {
             k: float(v) for k, v in metrics.items()
             if isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -198,11 +163,7 @@ class MLflowTracker:
         logger.debug(f"Logged {len(numeric_metrics)} metrics to MLflow")
 
     def log_artifact(self, path: str) -> None:
-        """Log an artifact file to MLflow.
-
-        Args:
-            path: Path to the artifact file. Must exist.
-        """
+        """Log an artifact file to MLflow; a missing path is skipped with a warning."""
         if not self._run_active:
             logger.warning("No active run. Call start_run() first.")
             return

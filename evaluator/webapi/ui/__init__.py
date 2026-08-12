@@ -18,6 +18,14 @@ from typing import Callable
 from fastapi import APIRouter
 from fastapi.templating import Jinja2Templates
 
+from evaluator.services import ModelServiceProvider
+from evaluator.webapi.jobs import JobManager
+from evaluator.webapi.ui._common import _TEMPLATES_DIR, make_page
+from evaluator.webapi.ui.builder import register_builder_routes
+from evaluator.webapi.ui.config import register_config_routes
+from evaluator.webapi.ui.jobs import register_jobs_routes
+from evaluator.webapi.ui.results import register_results_routes
+
 # Static dir (sibling of this `ui` package) for content-derived cache-bust tokens.
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -31,14 +39,6 @@ def _asset_version(filename: str) -> str:
     except OSError:
         return "0"
 
-
-from evaluator.services import ModelServiceProvider
-from evaluator.webapi.jobs import JobManager
-from evaluator.webapi.ui._common import _TEMPLATES_DIR, make_page
-from evaluator.webapi.ui.builder import register_builder_routes
-from evaluator.webapi.ui.config import register_config_routes
-from evaluator.webapi.ui.jobs import register_jobs_routes
-from evaluator.webapi.ui.results import register_results_routes
 
 __all__ = ["build_ui_router"]
 

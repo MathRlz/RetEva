@@ -16,6 +16,20 @@ graph:
   - transcription_metrics
   - metrics
   - finalize
+  edges:
+  - {from: dataset_source, to: asr, input: query_audio}
+  - {from: dataset_source, to: asr, input: reference_transcription}
+  - {from: dataset_source, to: transcription_metrics, input: query_text}
+  - {from: asr, to: transcription_metrics, input: query_text}
+  - {from: dataset_source, to: transcription_metrics, input: reference_transcription}
+  - {from: transcription_metrics, to: metrics, input: transcription_scores}
+  - {from: dataset_source, to: metrics, input: query_text}
+  - {from: asr, to: metrics, input: query_text}
+  - {from: dataset_source, to: metrics, input: reference_transcription}
+  - {from: dataset_source, to: metrics, input: relevant_docs}
+  - {from: transcription_metrics, to: metrics, input: per_query_wer}
+  - {from: transcription_metrics, to: metrics, input: per_query_cer}
+  - {from: metrics, to: finalize, input: metrics}
 nodes:
   asr:
     model: whisper

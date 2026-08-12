@@ -449,7 +449,6 @@ class ASRPipeline(CacheMixin):
                             if attention_mask is not None:
                                 attention_mask = attention_mask.to(self.model.device)
 
-                        # Transcribe
                         batch_transcriptions = self.model.transcribe_from_features(
                             features, attention_mask, lang
                         )

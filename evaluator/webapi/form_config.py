@@ -106,6 +106,17 @@ def build_validated_run_config(
 _GRAPH_SPEC_KEYS = ("mode", "nodes", "edges", "branches")
 
 
+def _strip_display_params(nodes: list) -> None:
+    """Drop the transient display schema (fields/extra_outputs/suppress_outputs) the canvas
+    carries on dataset_source cards — preview metadata, re-derived from the dataset descriptor
+    at build; persisting it back would narrow the run's outputs and break edge validation
+    (E5). Mutates the node dicts in place."""
+    for n in nodes:
+        if isinstance(n, dict) and isinstance(n.get("params"), dict):
+            for key in ("fields", "extra_outputs", "suppress_outputs"):
+                n["params"].pop(key, None)
+
+
 def _spec_type(spec: Any) -> str:
     """A graph-spec item is a node-type string OR a ``{id, type, params}`` dict."""
     return spec if isinstance(spec, str) else spec.get("type")
@@ -165,10 +176,12 @@ def _infer_features(nodes: list) -> Any:
 def _complete_with_plumbing(legacy: Dict[str, Any], mode: str) -> None:
     """Approach B (UI-graph ↔ execution-DAG split): the builder authors only the *meaningful*
     operations; here we append the *structural* plumbing the template would derive (the metric
-    comparisons + report + traces + finalize) so the canvas graph runs as the full DAG. The appended
-    nodes carry NO edges — they auto-wire by data-flow (`build_graph_from_spec`), and the user's
-    meaningful nodes (incl. per-node models) are untouched, so edit-time checks stay exact. No-op on
-    the template-only path (no explicit nodes): `assemble_specs` already adds the plumbing there."""
+    comparisons + report + traces + finalize) so the canvas graph runs as the full DAG. On the
+    explicit-wiring
+    path the appended nodes' edges are derived here via the authoring wirer (E5); on the legacy
+    path they carry no edges and auto-wire. The user's meaningful nodes (incl. per-node models)
+    are untouched, so edit-time checks stay exact. No-op on the template-only path (no explicit
+    nodes): `assemble_specs` already adds the plumbing there."""
     override = legacy.get("graph_override")
     if not (mode and isinstance(override, dict) and override.get("nodes")):
         return
@@ -178,11 +191,36 @@ def _complete_with_plumbing(legacy: Dict[str, Any], mode: str) -> None:
 
     nodes = override["nodes"]
     have = {node_kind(_spec_type(n), _spec_params(n)) for n in nodes}
+    appended = []
     for spec in assemble_specs(mode, _infer_features(nodes)):
         st, sp = _spec_type(spec), _spec_params(spec)
         if is_structural(st, sp) and node_kind(st, sp) not in have:
             nodes.append(spec)
+            appended.append(spec if isinstance(spec, str) else (spec.get("id") or st))
             have.add(node_kind(st, sp))
+    # E5: with explicit port wiring the appended plumbing needs its edges too — derive them
+    # via the authoring wirer over the FULL list and keep those touching an appended node
+    # (the user's drawn edges stay authoritative for the meaningful graph).
+    edges = override.get("edges")
+    from evaluator.pipeline.graph.wiring import _has_port_edges
+
+    if appended and _has_port_edges(edges):
+        from evaluator.pipeline.graph.wiring import emit_edges
+
+        app_ids = set(appended)
+
+        # `output` may be omitted when it equals `input` — compare on the resolved pair so the
+        # short and long spellings of one edge dedup against each other.
+        def _key(e):
+            return (e.get("from"), e.get("output", e.get("input")),
+                    e.get("to"), e.get("input"))
+
+        existing = {_key(e) for e in edges}
+        derived = [
+            e for e in emit_edges(nodes)
+            if (e["to"] in app_ids or e["from"] in app_ids) and _key(e) not in existing
+        ]
+        override["edges"] = list(edges) + derived
 
 
 def graph_spec_to_config_dict(
@@ -206,6 +244,16 @@ def graph_spec_to_config_dict(
     # The canvas 'mode' is a display label derived from the nodes — not a config key. Strip it so
     # the graph goes through to_legacy_dict as an explicit-nodes graph (which rejects graph.mode).
     graph.pop("mode", None)
+    _strip_display_params(graph.get("nodes") or [])
+    # The builder IS the authoring assistant: a spec whose edges aren't port-level yet
+    # (palette drafts, legacy saved graphs with ordering-only edges) gets its edge set
+    # derived here — the same emit_edges the CLI offers; canvas port edges pass through
+    # untouched and stay authoritative.
+    from evaluator.pipeline.graph.wiring import _has_port_edges, emit_edges
+
+    if graph.get("nodes") and not _has_port_edges(graph.get("edges")):
+        ordering = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
+        graph["edges"] = emit_edges(graph["nodes"]) + ordering
     config_dict: Dict[str, Any] = {"graph": graph, "experiment_name": experiment_name}
     if spec.get("llm"):
         config_dict["llm"] = deepcopy(spec["llm"])

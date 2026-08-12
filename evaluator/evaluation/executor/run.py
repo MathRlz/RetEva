@@ -29,6 +29,20 @@ from .engine import _execute_stage_graph
 logger = get_logger(__name__)
 
 
+def _result_depth(k, source: str) -> int:
+    """Retrieval depth, floored at the deepest report cutoff (@10) so the published
+    ``recall@10``/``ndcg@10`` are measured rather than a shallower ``@k`` relabelled."""
+    from ...metrics.ir import RETRIEVAL_DEPTH, report_depth
+
+    depth = report_depth(k)
+    if depth != int(k):
+        logger.info(
+            "%s=%s raised to %d: the report publishes cutoffs up to @%d",
+            source, k, depth, RETRIEVAL_DEPTH,
+        )
+    return depth
+
+
 def _node_kind(node) -> str:
     """The legacy node-kind name for graph-flag derivation (operator-abstraction): an
     operator node resolves to its old stage name, a pre-collapse node is itself."""
@@ -57,7 +71,8 @@ def run_graph(
             k, batch_size, trace_limit, num_workers, checkpoint_interval, experiment_id,
             resume_from_checkpoint, progress_callback, oracle_mode, and ``features``).
         service_provider: Optional model service provider (offload coordination).
-        offload_policy: "never" | "on_finish" — free each stage's model after last use.
+        offload_policy: "never" | "on_finish" | "on_finish_soft_cpu" — free each stage's
+            model after last use ("on_finish_soft_cpu" parks it warm on CPU instead).
         eval_config: The EvaluationConfig (mode detection, multi-dataset sources, provenance).
         load_info: Optional model load metadata for the report.
         graph_override: Optional explicit stage-graph spec replacing the default for the mode.
@@ -69,70 +84,29 @@ def run_graph(
     Raises:
         ValueError: If neither audio_embedding_pipeline nor asr_pipeline provided.
     """
-    # The EvaluationContext is the sole source of the pipeline + execution params (D1/F5).
-    # Only the fields used directly in this function are unpacked; the rest are read from
-    # ``context`` in _setup_execution_context (F6).
-    retrieval_pipeline = context.retrieval_pipeline
-    asr_pipeline = context.asr_pipeline
-    text_embedding_pipeline = context.text_embedding_pipeline
-    audio_embedding_pipeline = context.audio_embedding_pipeline
-    cache_manager = context.cache_manager
-    k = context.k
-    batch_size = context.batch_size
-    trace_limit = context.trace_limit
-    experiment_id = context.experiment_id
-    progress_callback = context.progress_callback
     features = context.features or RunFeatures()
-
-    # Determine mode + build the stage graph (the source of truth for what runs). The config's
-    # graph template wins — cross-modal audio_emb builds a text pipeline for the corpus, which
-    # pipeline-presence detection would misread as audio_text fusion.
-    configured_mode = None
-    if eval_config is not None and getattr(eval_config, "model", None) is not None:
-        from ...pipeline.graph.modes import _config_template, label_from_graph
-
-        # a back-compat template reference wins; else derive the label from the explicit graph's
-        # node kinds (audio_emb vs audio_text hinges on corpus_embedding vs text_embedding),
-        # which presence-detection alone can't tell apart.
-        configured_mode = _config_template(eval_config) or label_from_graph(
-            getattr(eval_config, "graph_override", None)
-        )
-    mode = detect_graph_template(
-        retrieval_pipeline,
-        asr_pipeline,
-        text_embedding_pipeline,
-        audio_embedding_pipeline,
-        configured_mode=configured_mode,
+    mode, stage_graph = _resolve_mode_and_graph(
+        context, features, eval_config, graph_override
     )
-    logger.info("Evaluation template: %s (DAG)", GRAPH_TEMPLATES.get(mode, mode))
-    stage_graph = build_run_graph(
-        mode,
-        graph_override=graph_override,
-        embedding_fusion_config=features.embedding_fusion_config,
-        query_opt_config=features.query_opt_config,
-        query_correction_config=features.query_correction_config,
-        retrieval_pipeline=retrieval_pipeline,
-        eval_config=eval_config,
-        trace_limit=trace_limit,
-    )
-    stage_levels = [
-        [node.id for node in level] for level in stage_graph.topological_levels()
-    ]
-    node_logger.info("Execution DAG mode=%s levels=%s", mode, stage_levels)
+
     # The dataset is loaded in-graph (the dataset_source node) — on the standard path ``dataset``
     # is None here and the node sets ``state.total`` when it loads; a pre-loaded dataset (oracle
     # re-run / direct callers) keeps the count up front.
     _have_ds = dataset is not None
     logger.info(
         "Batch size: %s, k: %s%s",
-        batch_size, k,
+        context.batch_size, context.k,
         f", dataset size: {len(dataset)}" if _have_ds else " (dataset loads in-graph)",
     )
-    # Pre-flight (M3): fail a typo'd/unregistered node type before any heavy work.
+    # Pre-flight (M3): fail a typo'd/unregistered node type before any heavy work; a
+    # model node without a device mapping fails here too (was an import-time assert).
     validate_graph_handlers(stage_graph)
+    from .parallel import assert_model_nodes_are_device_managed
+
+    assert_model_nodes_are_device_managed()
 
     _total = len(dataset) if _have_ds else 0
-    _cb = progress_callback or (lambda *_: None)
+    _cb = context.progress_callback or (lambda *_: None)
     _cb("init", 0, _total, f"Starting {mode} evaluation")
 
     # Seed the run state (M2: setup extracted out of the DAG flow).
@@ -151,9 +125,65 @@ def run_graph(
         offload_policy=offload_policy,
     )
 
-    # DAG-driven execution: the stage graph drives what runs and in what order. With
-    # ``streaming.window_size`` set, run the query side window-by-window (3a) — same RunState,
-    # bounded memory; else the whole-dataset pass.
+    _dispatch_execution(state, stage_graph, eval_config, features)
+
+    _finalize_run(context.cache_manager, context.experiment_id)
+    # G5: traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
+    # the duplicate top-level keys at the output boundary (sinks read them during the run).
+    drop_mirrored_top_level_keys(state.results)
+    _cb("done", _total, _total, "Evaluation complete")
+    return state.results
+
+
+def _resolve_mode_and_graph(
+    context: "EvaluationContext",
+    features: "RunFeatures",
+    eval_config: Any,
+    graph_override: Any,
+):
+    """Determine the template label + build the run stage graph (the source of truth for
+    what runs). The config's graph template wins — cross-modal audio_emb builds a text
+    pipeline for the corpus, which pipeline-presence detection would misread as audio_text
+    fusion."""
+    configured_mode = None
+    if eval_config is not None and getattr(eval_config, "model", None) is not None:
+        from ...pipeline.graph.modes import resolve_template_label
+
+        # a back-compat template reference wins; else derive the label from the explicit graph's
+        # node kinds (audio_emb vs audio_text hinges on corpus_embedding vs text_embedding),
+        # which presence-detection alone can't tell apart.
+        configured_mode = resolve_template_label(eval_config)
+    mode = detect_graph_template(
+        context.retrieval_pipeline,
+        context.asr_pipeline,
+        context.text_embedding_pipeline,
+        context.audio_embedding_pipeline,
+        configured_mode=configured_mode,
+    )
+    logger.info("Evaluation template: %s (DAG)", GRAPH_TEMPLATES.get(mode, mode))
+    stage_graph = build_run_graph(
+        mode,
+        graph_override=graph_override,
+        embedding_fusion_config=features.embedding_fusion_config,
+        query_opt_config=features.query_opt_config,
+        query_correction_config=features.query_correction_config,
+        retrieval_pipeline=context.retrieval_pipeline,
+        eval_config=eval_config,
+        trace_limit=context.trace_limit,
+    )
+    stage_levels = [
+        [node.id for node in level] for level in stage_graph.topological_levels()
+    ]
+    node_logger.info("Execution DAG mode=%s levels=%s", mode, stage_levels)
+    return mode, stage_graph
+
+
+def _dispatch_execution(
+    state: "RunState", stage_graph: Any, eval_config: Any, features: "RunFeatures"
+) -> None:
+    """DAG-driven execution: the stage graph drives what runs and in what order. With
+    ``streaming.window_size`` set, run the query side window-by-window (3a) — same
+    RunState, bounded memory; else the whole-dataset pass."""
     _window = getattr(getattr(eval_config, "streaming", None), "window_size", None)
     if _window:
         from .streaming import execute_windowed
@@ -161,13 +191,6 @@ def run_graph(
         execute_windowed(state, stage_graph, int(_window))
     else:
         _execute_stage_graph(state, stage_graph, features.query_opt_config)
-
-    _finalize_run(cache_manager, experiment_id)
-    # G5: traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
-    # the duplicate top-level keys at the output boundary (sinks read them during the run).
-    drop_mirrored_top_level_keys(state.results)
-    _cb("done", _total, _total, "Evaluation complete")
-    return state.results
 
 
 def _setup_execution_context(
@@ -229,6 +252,8 @@ def _setup_execution_context(
         trace_limit=context.trace_limit,
         term_weights=features.term_weights,
         compute_confidence_intervals=features.compute_confidence_intervals,
+        metric_allowlist=features.metric_allowlist,
+        variant_rollup=features.variant_rollup,
         total=total,
         cb=cb,
         t_total=t_total,
@@ -240,17 +265,13 @@ def _setup_execution_context(
         soft_cpu_offload=(
             service_provider is not None and offload_policy == "on_finish_soft_cpu"
         ),
-        refine_in_graph=any(
-            _node_kind(n) in ("rerank", "mmr", "threshold") for n in stage_graph.nodes
-        ),
-        mmr_in_graph=any(_node_kind(n) == "mmr" for n in stage_graph.nodes),
-        # A hybrid result_fusion consumes the dense + sparse arms' candidate pools, so those
-        # retrievals must emit candidates (not finalize to k) even with no refine node.
-        fuse_in_graph=any(
-            _node_kind(n) == "result_fusion" and (n.params or {}).get("hybrid")
-            for n in stage_graph.nodes
-        ),
+        **_graph_shape_flags(stage_graph),
     )
+    # resolve every feature node's effective config ONCE (global ⊕ node params),
+    # so handlers look theirs up instead of overlaying an allowlist at run time.
+    from ..node_config import resolve_graph_node_configs
+
+    state.node_configs = resolve_graph_node_configs(state, stage_graph)
     state.stage_times = {
         "asr_s": 0.0,
         "query_opt_s": 0.0,
@@ -258,14 +279,34 @@ def _setup_execution_context(
         "embedding_s": 0.0,
         "retrieval_s": 0.0,
     }
-    # Soft-CPU offload (2c): size the provider's warm pool from config before any release.
+    _configure_offload(state, service_provider, eval_config)
+    return state
+
+
+def _graph_shape_flags(stage_graph: Any) -> Dict[str, bool]:
+    """Handler-behavior flags derived from the graph's node kinds."""
+    return {
+        "refine_in_graph": any(
+            _node_kind(n) in ("rerank", "mmr", "threshold") for n in stage_graph.nodes
+        ),
+        "mmr_in_graph": any(_node_kind(n) == "mmr" for n in stage_graph.nodes),
+        # A hybrid result_fusion consumes the dense + sparse arms' candidate pools, so those
+        # retrievals must emit candidates (not finalize to k) even with no refine node.
+        "fuse_in_graph": any(
+            _node_kind(n) == "result_fusion" and (n.params or {}).get("hybrid")
+            for n in stage_graph.nodes
+        ),
+    }
+
+
+def _configure_offload(state: RunState, service_provider: Any, eval_config: Any) -> None:
+    """Soft-CPU offload (2c): size the provider's warm pool from config before any release."""
     if state.soft_cpu_offload and hasattr(service_provider, "configure_soft_offload"):
         sr = getattr(eval_config, "service_runtime", None)
         service_provider.configure_soft_offload(
             max_warm=getattr(sr, "soft_offload_max_warm", 2),
             ttl_s=getattr(sr, "soft_offload_ttl_s", None),
         )
-    return state
 
 
 def _finalize_run(cache_manager: Any, experiment_id: Any) -> None:
@@ -294,12 +335,12 @@ def run_from_bundle(
     progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
     load_info: Optional[Dict[str, Any]] = None,
 ) -> RunResults:
-    """Convenience wrapper: extract params from bundle + config.
+    """Build ``RunFeatures`` + ``EvaluationContext`` from the bundle + config, then run
+    :func:`run_graph`.
 
-    Reduces a 16-param call to 4 args.  Fusion, judge, answer generation, and
-    query optimization are enabled only when their respective ``config.*. enabled``
-    flag is True; call ``run_graph`` directly to force any of them on
-    regardless of config flags.
+    Fusion, judge, answer generation, and query optimization are enabled only when their
+    respective ``config.*.enabled`` flag is True; call ``run_graph`` directly to force any
+    of them on regardless of config flags.
     """
     _term_weights: Optional[Dict[str, float]] = None
     _tww_path = getattr(config, "domain_term_weights_file", None)
@@ -333,16 +374,12 @@ def run_from_bundle(
         compute_confidence_intervals=getattr(
             config, "compute_confidence_intervals", False
         ),
+        metric_allowlist=getattr(config, "metrics", None),
+        variant_rollup=getattr(config, "variant_rollup", "mean"),
     )
-    # Per-stage model offload: free each stage's model after its last use. Guarded so the
-    # oracle baseline re-run below (which reuses these pipelines) still has its models — the
-    # first call must not offload when an oracle pass follows.
+    # Per-stage model offload: free each stage's model after its last use.
     _offload_policy = getattr(
         getattr(config, "service_runtime", None), "offload_policy", "never"
-    )
-    _oracle_will_run = (
-        getattr(config, "compute_oracle_baseline", False)
-        and bundle.mode == "asr_text_retrieval"
     )
     context = EvaluationContext(
         retrieval_pipeline=bundle.retrieval_pipeline,
@@ -350,7 +387,7 @@ def run_from_bundle(
         text_embedding_pipeline=bundle.text_embedding_pipeline,
         audio_embedding_pipeline=bundle.audio_embedding_pipeline,
         cache_manager=cache_manager,
-        k=config.vector_db.k,
+        k=_result_depth(config.vector_db.k, "vector_db.k"),
         batch_size=config.data.batch_size,
         trace_limit=config.data.trace_limit,
         num_workers=config.data.num_workers,
@@ -372,46 +409,8 @@ def run_from_bundle(
     results = run_graph(
         dataset,
         context,
-        offload_policy="never" if _oracle_will_run else _offload_policy,
+        offload_policy=_offload_policy,
         **_run_kwargs,
     )
-
-    # The first run loaded the dataset in-graph (when ``dataset`` was None); reuse the loaded
-    # object for the oracle re-run so it isn't loaded (and replay-sliced) a second time.
-    if dataset is None and isinstance(load_info, dict):
-        dataset = load_info.get("dataset")
-
-    if (
-        getattr(config, "compute_oracle_baseline", False)
-        and results.get("pipeline_mode") == "asr_text_retrieval"
-    ):
-        # The oracle baseline only contributes MRR / Recall@5 / NDCG@5 to the
-        # degradation factor. Skip the extras that don't affect those but cost
-        # real time/LLM calls: judge, answer generation, traces, bootstrap CI.
-        from dataclasses import replace as _replace
-
-        oracle_features = _replace(
-            features,
-            judge_config=None,
-            answer_gen_config=None,
-            compute_confidence_intervals=False,
-        )
-        oracle_context = _replace(
-            context, oracle_mode=True, features=oracle_features, trace_limit=0
-        )
-        oracle_results = run_graph(
-            dataset,
-            oracle_context,
-            offload_policy=_offload_policy,  # last use of these pipelines → safe to offload
-            **_run_kwargs,
-        )
-        actual_mrr = results.get("MRR", 0.0)
-        oracle_mrr = oracle_results.get("MRR", 0.0)
-        results["oracle_MRR"] = oracle_mrr
-        results["oracle_Recall@5"] = oracle_results.get("Recall@5", 0.0)
-        results["oracle_NDCG@5"] = oracle_results.get("NDCG@5", 0.0)
-        results["asr_degradation_factor"] = (
-            (actual_mrr / oracle_mrr) if oracle_mrr > 0 else None
-        )
 
     return results

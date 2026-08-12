@@ -1,3 +1,4 @@
+{% from "_chart.html" import chart_panel %}
 {% set r = run %}
 {% set m = r.metrics or {} %}
 {% set lat = m.get('latency') or {} %}
@@ -32,7 +33,9 @@
         {{ '%.4f'|format(v) if v is number else v }}</span>{% endfor %}
     </div>
     {% endif %}
-    {% set cache = prov.get('cache_stats') or {} %}
+    {# provenance writes this under `cache` (provenance.py); the old `cache_stats`
+       spelling never matched, so these chips never rendered. Accept both. #}
+    {% set cache = prov.get('cache') or prov.get('cache_stats') or {} %}
     {% if cache %}
     <div class="muted" style="font-size:12px;margin:4px 0">cache:
       {% for stage, st in cache.items() %}<span class="chip">{{ stage }}:
@@ -54,15 +57,28 @@
     {% endif %}
   </details>
   {% endif %}
+  {# Panels carrying data first; the rest fold into one line so they stop outweighing
+     them. Both lists are partitioned in webapi/ui/results.py. #}
+  {% for p in panels %}{{ chart_panel(p.spec, height=p.height) }}{% endfor %}
+  {% if panels_empty %}
+  <details class="panels-empty">
+    <summary>{{ panels_empty|length }} panel{{ 's' if panels_empty|length != 1 }} with no
+      data for this run</summary>
+    <ul>
+      {% for s in panels_empty %}
+      <li><strong>{{ s.title }}</strong> <span class="muted">{{ s.empty }}</span></li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
 
-  {# --- Metric chips, with bootstrap CI when present (R4) --- #}
+  {# --- Metric chips, with bootstrap CI when present (R4). Deduped in
+         chart_data.metric_chips: the same number is stored under a display name, under
+         its branch, and again as that branch's mean. --- #}
   <div>
-    {% for k, v in m.items() %}
-      {% if v is number %}
-        {% set ci = m.get(k ~ '_ci') %}
-        <span class="chip">{{ k }}: {{ '%.4f'|format(v) }}{% if ci and ci|length == 2 %}
-          <span class="muted">[{{ '%.3f'|format(ci[0]) }}–{{ '%.3f'|format(ci[1]) }}]</span>{% endif %}</span>
-      {% endif %}
+    {% for c in metric_chips.chips %}
+      <span class="chip">{{ c.label }}: {{ c.text }}{% if c.ci %}
+        <span class="muted">[{{ '%.3f'|format(c.ci[0]) }}–{{ '%.3f'|format(c.ci[1]) }}]</span>{% endif %}</span>
     {% endfor %}
   </div>
 
@@ -75,11 +91,16 @@
     {% for bname, bmetrics in branches.items() %}
       <div style="margin:6px 0">
         <strong>{{ bname }}</strong>
-        {% for mname, stats in bmetrics.items() %}
-          {% if stats is mapping and stats.get('mean') is number %}
-            <span class="chip">{{ mname }}: {{ '%.4f'|format(stats['mean']) }}</span>
-          {% endif %}
-        {% endfor %}
+        {# On a single-branch run every mean here is a metric chip above, verbatim. #}
+        {% if metric_chips.branch_values %}
+          {% for mname, stats in bmetrics.items() %}
+            {% if stats is mapping and stats.get('mean') is number %}
+              <span class="chip">{{ mname }}: {{ '%.4f'|format(stats['mean']) }}</span>
+            {% endif %}
+          {% endfor %}
+        {% else %}
+          <span class="muted">— same values as the run metrics above</span>
+        {% endif %}
       </div>
     {% endfor %}
     {% set deltas = report.get('deltas') or {} %}
@@ -95,7 +116,9 @@
       </div>
     {% endfor %}
     {# --- Delta bar chart with bootstrap-CI whiskers + FDR stars (batch 3) --- #}
-    <div id="run-delta-chart" style="height:260px;margin-top:8px"></div>
+    <div id="run-delta-chart" class="chart-host" style="--chart-h:260px;margin-top:8px"
+         role="img" aria-label="Bar chart of per-branch metric deltas against the baseline, with 95% bootstrap confidence whiskers. Values are listed in the branch chips above."></div>
+    <p id="run-delta-empty" class="muted" hidden>No numeric deltas in this report.</p>
     <script>
       (function () {
         var deltas = {{ deltas|tojson }};
@@ -108,25 +131,32 @@
             labels.push('Δ' + name + '<br>' + pair);
             values.push(d.mean_delta);
             var ci = Array.isArray(d.ci) && d.ci.length === 2 ? d.ci : null;
-            lo.push(ci ? d.mean_delta - ci[0] : 0);
-            hi.push(ci ? ci[1] - d.mean_delta : 0);
+            // Clamp: an asymmetric or inverted CI would otherwise draw a NEGATIVE whisker
+            // (the matplotlib twin, analysis/branch_report.py, has always clamped).
+            lo.push(ci ? Math.max(0, d.mean_delta - ci[0]) : 0);
+            hi.push(ci ? Math.max(0, ci[1] - d.mean_delta) : 0);
             var q = (typeof d.p_value_fdr === 'number') ? d.p_value_fdr : d.p_value;
             notes.push(typeof q !== 'number' ? '' : q < 0.001 ? '***' : q < 0.01 ? '**' : q < 0.05 ? '*' : '');
           });
         });
-        if (values.length) {
-          plotInto('run-delta-chart', [{
-            x: labels, y: values, type: 'bar',
-            marker: { color: values.map(function (v) { return v >= 0 ? '#2563eb' : '#dc2626'; }) },
-            error_y: { type: 'data', array: hi, arrayminus: lo, color: '#94a3b8' },
-            text: notes, textposition: 'outside', textfont: { size: 14, color: '#fbbf24' }
-          }], {
-            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { color: '#e2e8f0' }, margin: { l: 50, r: 16, t: 10, b: 60 },
-            yaxis: { title: 'Δ (branch − baseline)', gridcolor: '#1f2937', zerolinecolor: '#374151' },
-            xaxis: { gridcolor: '#1f2937' }
-          }, { displaylogo: false, responsive: true });
+        if (!values.length) {
+          // Say so, rather than leaving a silent empty box under a caption describing a chart.
+          document.getElementById('run-delta-empty').hidden = false;
+          document.getElementById('run-delta-chart').hidden = true;
+          return;
         }
+        var t = chartTheme();
+        plotInto('run-delta-chart', [{
+          x: labels, y: values, type: 'bar',
+          // Polarity → the diverging pair (improvement vs regression), not identity.
+          marker: { color: values.map(function (v) { return v >= 0 ? t.pos : t.neg; }) },
+          error_y: { type: 'data', array: hi, arrayminus: lo, color: t.muted },
+          text: notes, textposition: 'outside', textfont: { size: 14, color: t.warn },
+          hovertemplate: '<b>%{y:.4f}</b><br>%{x}<extra></extra>'
+        }], {
+          margin: { l: 56, r: 16, t: 16, b: 64 },
+          yaxis: { title: 'Δ (branch − baseline)' }
+        });
       })();
     </script>
     <p class="muted" style="font-size:11px">whiskers: 95% bootstrap CI · stars: BH-FDR q (*** &lt;.001, ** &lt;.01, * &lt;.05)</p>
@@ -153,32 +183,11 @@
   </details>
   {% endif %}
 
-  {# --- Per-stage latency breakdown (R2) --- #}
-  {% if lat %}
-  <details open>
-    <summary>Stage latency</summary>
-    <div id="run-latency-chart" style="height:240px;"></div>
-    <script>
-      (function () {
-        var lat = {{ lat|tojson }};
-        var keys = Object.keys(lat).filter(function (k) { return k !== 'total_s' && lat[k] > 0; });
-        var labels = keys.map(function (k) { return k.replace(/_s$/, ''); });
-        var values = keys.map(function (k) { return lat[k]; });
-        if (values.length) {
-          plotInto('run-latency-chart', [{
-            x: values, y: labels, type: 'bar', orientation: 'h',
-            marker: { color: '#1d4ed8' },
-            text: values.map(function (v) { return v.toFixed(3) + 's'; }), textposition: 'auto'
-          }], {
-            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { color: '#e2e8f0' }, margin: { l: 90, r: 16, t: 10, b: 30 },
-            xaxis: { title: 'seconds', gridcolor: '#1f2937' }, yaxis: { gridcolor: '#1f2937' }
-          }, { displaylogo: false, responsive: true });
-        }
-      })();
-    </script>
-    {% if lat.get('total_s') %}<p class="muted">Total: {{ '%.3f'|format(lat.total_s) }}s</p>{% endif %}
-  </details>
+  {# The per-stage chart is the `stage_timing` panel above (same stages, tokenized,
+     with a data table). Only the wall clock is left here, because it is NOT the sum of
+     those stages and saying so is the whole point of keeping it. #}
+  {% if lat and lat.get('total_s') %}
+  <p class="muted">Wall clock for the run: {{ '%.3f'|format(lat.total_s) }}s.</p>
   {% endif %}
 
   {# --- Retrieval failure analysis (R3) --- #}
@@ -190,10 +199,8 @@
       {% if fail.get('near_miss_rate') is number %}<span class="chip">near-miss {{ '%.0f%%'|format(fail.near_miss_rate * 100) }}</span>{% endif %}
       {% if fail.get('failure_rate') is number %}<span class="chip error">fail {{ '%.0f%%'|format(fail.failure_rate * 100) }}</span>{% endif %}
     </div>
-    {% set cats = fail.get('failure_categories') or {} %}
-    {% if cats %}<p class="muted">Categories: {% for c, n in cats.items() %}{{ c }}={{ n }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
-    {% set ranks = fail.get('rank_distribution') or {} %}
-    {% if ranks %}<p class="muted">First-relevant rank: {% for rk, n in ranks.items() %}@{{ rk }}={{ n }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+    {{ chart_panel(rank_spec, height=260) }}
+    {{ chart_panel(failcat_spec, height=240) }}
   </details>
   {% endif %}
 

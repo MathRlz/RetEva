@@ -20,7 +20,13 @@ def _freeze_params(params: Optional[dict], stage: Optional[str] = None) -> Any:
     Defaults are resolved against the node contract before hashing (S7): a key whose value
     is ``None`` or equal to the registered ``param_defaults`` for ``stage`` is dropped, so
     ``{model: <default>}`` and an omitted ``model`` produce the same key and CSE collapses the
-    explicit-vs-default twin into a single run (instead of running it twice)."""
+    explicit-vs-default twin into a single run (instead of running it twice).
+
+    A ``param_defaults`` entry is sound ONLY when the handler's absent-param fallback is that
+    same constant in every config — a param whose absent value is inherited from global config
+    (e.g. the index node's ``store``) must NOT be declared, or twins that behave differently
+    collapse to one (over-share = silently wrong results). ``tests/test_cse_guard.py``
+    allowlists every declaration."""
     defaults: Mapping[str, Any] = {}
     if stage is not None and stage in _NODE_REGISTRY:
         defaults = _NODE_REGISTRY[stage].param_defaults

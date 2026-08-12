@@ -26,8 +26,7 @@ The top-level ``evaluator`` namespace exposes the stable, high-level API:
         print(f"MRR: {results.get_metric('MRR', 0.0):.4f}")
 
 For advanced/internal extension points, import explicit subpackages such as
-``evaluator.pipeline``, ``evaluator.models``, ``evaluator.storage``, or
-``evaluator.advanced_api``.
+``evaluator.pipeline``, ``evaluator.models``, or ``evaluator.storage``.
 """
 
 from .public_api import (

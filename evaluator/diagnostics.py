@@ -56,7 +56,8 @@ def _process_state() -> str:
         if torch.cuda.is_available():
             # Names matter: a heterogeneous box (e.g. a good dGPU + an unsupported iGPU)
             # will crash any op placed on the bad device. Surfacing them makes that obvious.
-            gpus = [f"{i}:{torch.cuda.get_device_name(i)}" for i in range(torch.cuda.device_count())]
+            gpus = [f"{i}:{torch.cuda.get_device_name(i)}"
+                    for i in range(torch.cuda.device_count())]
             parts.append("gpus=[" + "; ".join(gpus) + "]")
     except Exception:
         pass

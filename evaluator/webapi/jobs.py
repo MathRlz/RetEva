@@ -177,12 +177,15 @@ class JobManager:
         )
         route = os.environ.get("EVALUATOR_JOB_RUNNER", "subprocess").strip().lower()
         self._subprocess = self._real_runners and route != "service"
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="evaluator-webapi")
+        self._executor = ThreadPoolExecutor(max_workers=max_workers,
+                                            thread_name_prefix="evaluator-webapi")
         self._jobs: Dict[str, JobRecord] = {}
         self._lock = Lock()
 
-    def push_progress(self, job_id: str, phase: str, current: int, total: int, message: str) -> None:
-        event = {"phase": phase, "current": current, "total": total, "message": message, "ts": utc_now()}
+    def push_progress(self, job_id: str, phase: str, current: int, total: int,
+                      message: str) -> None:
+        event = {"phase": phase, "current": current, "total": total,
+                 "message": message, "ts": utc_now()}
         with self._lock:
             if job_id in self._jobs:
                 self._jobs[job_id].progress.append(event)
@@ -211,7 +214,8 @@ class JobManager:
 
         def _inproc() -> Dict[str, Any]:
             cb = lambda *a: self.push_progress(job_id, *a)  # noqa: E731
-            return self._evaluation_runner(config, progress_callback=cb).to_dict(include_config=True)
+            return self._evaluation_runner(
+                config, progress_callback=cb).to_dict(include_config=True)
 
         return self._submit(
             "evaluation", job_id=job_id, config_snapshot=config.to_dict(),
@@ -225,8 +229,10 @@ class JobManager:
         job_id = str(uuid4())
         return self._submit(
             "matrix", job_id=job_id, config_snapshot=config.to_dict(),
-            inproc=lambda: self._matrix_runner(config, test_setups, baseline_setup_id=baseline_setup_id),
-            subproc=lambda jid: self._run_matrix_subprocess(jid, config, test_setups, baseline_setup_id),
+            inproc=lambda: self._matrix_runner(config, test_setups,
+                                               baseline_setup_id=baseline_setup_id),
+            subproc=lambda jid: self._run_matrix_subprocess(jid, config, test_setups,
+                                                            baseline_setup_id),
         )
 
     def _submit(self, job_type, *, job_id, config_snapshot, inproc, subproc) -> JobRecord:
@@ -274,7 +280,8 @@ class JobManager:
         finally:
             shutil.rmtree(jobdir, ignore_errors=True)
 
-    def _run_matrix_subprocess(self, job_id, config, test_setups, baseline_setup_id) -> Dict[str, Any]:
+    def _run_matrix_subprocess(self, job_id, config, test_setups,
+                               baseline_setup_id) -> Dict[str, Any]:
         """Run each matrix setup as its own CLI subprocess; assemble the comparison."""
         from evaluator.services.evaluation_service import (
             _apply_setup_overrides, _build_comparison_bundle,
@@ -490,5 +497,5 @@ def _kill_process_group(proc) -> None:
     except Exception:
         try:
             proc.terminate()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - already-dead process is fine
+            logger.debug("process terminate skipped: %s", exc)

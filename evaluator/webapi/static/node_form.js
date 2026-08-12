@@ -169,6 +169,13 @@
         group.appendChild(fieldRow('name', inputEl('text', current.name || '',
           schema.default_name || 'checkpoint (advanced)', v => host.setParam('name', v)),
           'Explicit model checkpoint — overrides the size pick.'));
+        // LoRA/PEFT adapter — supported by the asr + text_embedding config folds
+        // (asr_adapter_path / text_emb_adapter_path).
+        if (spec.family === 'asr' || spec.family === 'text_embedding') {
+          group.appendChild(fieldRow('adapter', inputEl('text', current.adapter || '',
+            'LoRA adapter path (advanced)', v => host.setParam('adapter', v)),
+            'Path to a LoRA/PEFT adapter directory applied on top of the base checkpoint.'));
+        }
         if ((spec.family || '').includes('embedding')) {
           group.appendChild(fieldRow('embedding_space', inputEl('text', current.embedding_space || '',
             'space id (advanced)', v => host.setParam('embedding_space', v)),

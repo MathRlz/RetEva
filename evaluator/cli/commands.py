@@ -155,4 +155,3 @@ def _print_graph(config: EvaluationConfig) -> None:
         if columns:
             cols = ", ".join(f"{c['name']}:{c['type']}" for c in columns)
             print(f"      columns: {cols}")
-

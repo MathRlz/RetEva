@@ -167,7 +167,6 @@ class HuBERTAudioModel(AudioEmbeddingModel):
             else:  # cls - use first token
                 embeddings = hidden_states[:, 0, :]
 
-            # L2 normalize
             embeddings = F.normalize(embeddings, p=2, dim=-1)
 
         torch.cuda.empty_cache()

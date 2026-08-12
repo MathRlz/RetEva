@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..llm.client import LLMClient
+from ..llm_client.client import LLMClient
 
 logger = logging.getLogger("evaluator.judge")
 

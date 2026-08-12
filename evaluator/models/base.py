@@ -79,47 +79,19 @@ class AudioEmbeddingModel(ABC):
     def encode_audio(self, audio_list: List[torch.Tensor],
                      sampling_rates: List[int],
                      show_progress: bool = False) -> np.ndarray:
-        """
-        Encode audio directly into embeddings.
-
-        Args:
-            audio_list: List of audio tensors
-            sampling_rates: Corresponding sampling rates
-            show_progress: Whether to show progress bar
-
-        Returns:
-            Array of embeddings with shape (N, D)
-        """
+        """Encode audio directly into embeddings of shape (N, D)."""
         pass
 
     @abstractmethod
     def preprocess_audio(self, audio_list: List[torch.Tensor],
                         sampling_rates: List[int]):
-        """
-        Preprocess audio for the model.
-
-        Args:
-            audio_list: List of audio tensors
-            sampling_rates: Corresponding sampling rates
-
-        Returns:
-            Preprocessed features ready for encoding
-        """
+        """Preprocess audio into features ready for encoding."""
         pass
 
     @abstractmethod
     def encode_from_features(self, features: torch.Tensor,
                            attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
-        """
-        Encode preprocessed features into embeddings.
-
-        Args:
-            features: Preprocessed audio features
-            attention_mask: Optional attention mask
-
-        Returns:
-            Array of embeddings
-        """
+        """Encode preprocessed features into an array of embeddings."""
         pass
 
     @abstractmethod

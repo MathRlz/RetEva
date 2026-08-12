@@ -12,9 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from evaluator import ConfigurationError, EvaluationConfig, run_evaluation, run_evaluation_matrix
-from evaluator.pipeline import create_pipeline_from_config  # noqa: F401
 from evaluator.services import ModelServiceProvider
-from evaluator.services.evaluation_service import load_dataset  # noqa: F401
 from evaluator.webapi.graph_store import GraphStore
 from evaluator.webapi.jobs import JobManager
 from evaluator.webapi.ui import build_ui_router
@@ -26,7 +24,6 @@ from evaluator.webapi.routers import (
     introspection as introspection_router,
     jobs as jobs_router,
     leaderboard as leaderboard_router,
-    live as live_router,
     models as models_router,
 )
 
@@ -34,7 +31,9 @@ from evaluator.webapi.routers import (
 def create_app(
     *,
     evaluation_runner: Callable[[EvaluationConfig], Any] = run_evaluation,
-    matrix_runner: Callable[[EvaluationConfig, List[Dict[str, Any]]], Dict[str, Any]] = run_evaluation_matrix,
+    matrix_runner: Callable[
+        [EvaluationConfig, List[Dict[str, Any]]], Dict[str, Any]
+    ] = run_evaluation_matrix,
     provider_factory: Callable[[], ModelServiceProvider] = ModelServiceProvider,
     graph_store: Optional[GraphStore] = None,
 ) -> FastAPI:
@@ -44,7 +43,7 @@ def create_app(
         version="0.2.0",
         description="HTTP backend for medical audio retrieval evaluation. "
                     "Supports async evaluation jobs, config management, "
-                    "leaderboard queries, and live retrieval.",
+                    "and leaderboard queries.",
     )
     app.add_middleware(
         CORSMiddleware,
@@ -80,13 +79,6 @@ def create_app(
     app.include_router(introspection_router.build_introspection_router())
     app.include_router(jobs_router.build_jobs_router(jobs))
     app.include_router(leaderboard_router.build_leaderboard_router())
-    app.include_router(
-        live_router.build_live_router(
-            provider_factory,
-            pipeline_factory=create_pipeline_from_config,
-            dataset_loader=load_dataset,
-        )
-    )
     app.include_router(build_ui_router(provider_factory, jobs))
 
     # Mount only when the assets shipped — an install without package data must not

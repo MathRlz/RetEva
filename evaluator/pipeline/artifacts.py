@@ -144,6 +144,15 @@ register_artifact("refined_query_text", Modality.TEXT)
 # Per-comparison score artifacts from the typed metric nodes (Phase 5).
 register_artifact("transcription_scores", Modality.SCORES)
 register_artifact("retrieval_scores", Modality.SCORES)
+# Per-item score ItemSets ("one bus"): the typed metric nodes publish these keyed,
+# and the trace/judge/diagnostics consumers join by query id — replacing the positional
+# RunState side-channel attrs.
+register_artifact("per_query_wer", Modality.SCORES)
+register_artifact("per_query_cer", Modality.SCORES)
+register_artifact("per_query_recall5", Modality.SCORES)
+# The answer-generation node's per-query payload: an ItemSet of the per-query detail
+# dicts the trace builder consumes.
+register_artifact("generated_answers", Modality.ANSWERS)
 register_artifact("judge_scores", Modality.SCORES)  # overall per-query judge score
 register_artifact("judge_pass", Modality.SCORES)  # per-query 1.0/0.0 → judge_pass_rate
 # per-aspect judge scores; only the configured aspects are actually published at run time

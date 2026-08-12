@@ -17,7 +17,7 @@ from ..helpers import _payload_to_key
 from ..answer_gen import generate_answers
 from ..executor.state import RunState
 from .retrieval import _retrieved_from_bus
-from ._common import retrieval_ran
+from ._common import _relevant_from_bus, publish_keyed_or_plain, retrieval_ran
 
 logger = get_logger(__name__)
 
@@ -47,16 +47,8 @@ def _generate_answer_details(
     """Answer-GENERATION node: generate answers (if enabled); return query_id → detail map
     (the SAME detail dicts stored in ``results['answer_generation']``, so the answer_metrics
     node can enrich them in place). Scoring is the answer_metrics node's job."""
-    cfg = s.node_overlay(
-        s.answer_gen_config,
-        ("enabled", "method", "model", "api_base", "api_key_env", "temperature", "max_cases",
-         "timeout_s", "context_docs", "context_max_chars", "compute_rouge", "use_local_server",
-         "local_server_url", "system_prompt", "prompt_template", "reference_metadata_field"),
-        casts={"enabled": bool, "temperature": float, "max_cases": int, "timeout_s": int,
-               "context_docs": int, "context_max_chars": int, "compute_rouge": bool,
-               "use_local_server": bool},
-        force={"enabled": True},
-    )
+    # Resolved before execution: global ⊕ node params; the node's presence forces enabled.
+    cfg = s.resolved_config(default=s.answer_gen_config)
     if cfg is None or not getattr(cfg, "enabled", False):
         return {}
 
@@ -87,14 +79,14 @@ def _build_query_traces(
     s: "RunState",
     results,
     all_relevant,
-    wer_scores,
-    cer_scores,
-    per_query_recall5,
-    ans_detail_by_qid,
     results_with_scores,
     query_ids,
 ) -> None:
-    """Build per-query traces (+ per-speaker breakdown) when trace_limit > 0."""
+    """Build per-query traces (+ per-speaker breakdown) when trace_limit > 0.
+
+    Per-item scores and answer details come off the bus as keyed ItemSets and are joined
+    by query id: WER is published in reference order and recall in retrieved order, so a
+    positional pairing would cross them."""
     if not (s.trace_limit > 0 and results_with_scores):
         return
 
@@ -102,6 +94,14 @@ def _build_query_traces(
     references = s.get_artifact(
         "reference_transcription", default=[]
     )  # bus-only (M1d-2)
+    wer_items = s.keyed_items("per_query_wer")
+    cer_items = s.keyed_items("per_query_cer")
+    recall_items = s.keyed_items("per_query_recall5")
+    ans_items = s.keyed_items("generated_answers")
+
+    def _by_id(items, qid):
+        return items.value_for(qid) if items is not None and items.has(qid) else None
+
     from ...utils.progress import progress_iter
 
     traces = []
@@ -119,7 +119,7 @@ def _build_query_traces(
             for payload, score in results_with_scores[i]
         ]
         query_id = query_ids[i] if i < len(query_ids) else str(i)
-        ans_detail = ans_detail_by_qid.get(query_id, {})
+        ans_detail = _by_id(ans_items, query_id) or {}
         # Read metadata WITHOUT decoding audio (`s.dataset[i]` loads the waveform + requires
         # an audio_path — which the oracle branch has none of). The question objects carry it.
         questions = getattr(s.dataset, "questions", None)
@@ -142,11 +142,15 @@ def _build_query_traces(
             "reference_answer": ans_detail.get("reference_answer", ""),
             "metadata": sample_meta,
         }
-        if i < len(wer_scores):
-            trace_entry["per_query_wer"] = wer_scores[i]
-            trace_entry["per_query_cer"] = cer_scores[i]
-        if i < len(per_query_recall5):
-            trace_entry["recall_at_5"] = per_query_recall5[i]
+        wer = _by_id(wer_items, query_id)
+        if wer is not None:
+            trace_entry["per_query_wer"] = wer
+            cer = _by_id(cer_items, query_id)
+            if cer is not None:
+                trace_entry["per_query_cer"] = cer
+        recall = _by_id(recall_items, query_id)
+        if recall is not None:
+            trace_entry["recall_at_5"] = recall
         traces.append(trace_entry)
     results["query_traces"] = traces
 
@@ -209,16 +213,18 @@ def _run_judge(
 @register_stage_handler("generate", self_timed=True)
 def _stage_generate(s: RunState) -> None:
     """Answer-generation node: RAG answer generation only (retrieval modes). Writes
-    ``answer_generation`` into ``s.results`` + the per-query detail map onto
-    ``s.ans_detail_by_qid`` (read by the build_query_traces node). Conditional on
+    ``answer_generation`` into ``s.results`` and publishes the per-query detail map as the
+    ``generated_answers`` ItemSet, which the trace node id-joins. Conditional on
     ``answer_generation.enabled``."""
     if not retrieval_ran(s):
         return
     results_with_scores, _, query_ids = _retrieved_from_bus(s)
-    s.ans_detail_by_qid = _generate_answer_details(
-        s, s.results, s.metrics_all_relevant, results_with_scores, query_ids
+    detail_by_qid = _generate_answer_details(
+        s, s.results, _relevant_from_bus(s), results_with_scores, query_ids
     )
-    s.put_artifact("generated_answers", {"generated": "answer_generation" in s.results})
+    publish_keyed_or_plain(
+        s, "generated_answers", list(detail_by_qid.values()), list(detail_by_qid.keys())
+    )
 
 
 def _stage_answer_metrics(s: RunState) -> None:
@@ -234,7 +240,7 @@ def _stage_answer_metrics(s: RunState) -> None:
     results_with_scores, _, query_ids = _retrieved_from_bus(s)
     score_answers(
         answer_results,
-        traces_data=(query_ids, s.metrics_all_relevant, results_with_scores),
+        traces_data=(query_ids, _relevant_from_bus(s), results_with_scores),
         corpus_lookup=_answer_corpus_lookup(s, results_with_scores),
         config=s.answer_gen_config,
     )
@@ -251,9 +257,10 @@ def _stage_answer_metrics(s: RunState) -> None:
 
 def _stage_build_query_traces(s: RunState) -> None:
     """Explicit trace builder: assemble the per-query traces from the retrieved docs, the
-    generated answers (``s.ans_detail_by_qid``, empty when no answer_gen ran) and the
-    per-item WER/recall. Always present in retrieval modes when tracing is on — so the
-    judge + report read the traces without the old ``traces_built`` state machine."""
+    generated answers (the keyed ``generated_answers`` ItemSet, empty when no answer_gen
+    ran) and the per-item WER/recall score artifacts — all id-joined off the bus.
+    Always present in retrieval modes when tracing is on — so the judge + report read the
+    traces without the old ``traces_built`` state machine."""
     if not retrieval_ran(s):
         return
     # In a branched run this node is expanded per branch; the report carries a single
@@ -265,11 +272,7 @@ def _stage_build_query_traces(s: RunState) -> None:
     _build_query_traces(
         s,
         s.results,
-        s.metrics_all_relevant,
-        s.wer_scores,
-        s.cer_scores,
-        s.per_query_recall5,
-        s.ans_detail_by_qid,
+        _relevant_from_bus(s),
         results_with_scores,
         query_ids,
     )
@@ -281,21 +284,14 @@ def _stage_answer_judge(s: RunState) -> None:
     rubric + calibrates against IR metrics. Present only when the judge is enabled."""
     if not retrieval_ran(s):
         return
-    cfg = s.node_overlay(
-        s.judge_config,
-        ("enabled", "model", "api_base", "api_key_env", "temperature", "max_cases", "timeout_s",
-         "judge_mode", "judge_aspects", "score_aggregation", "aspect_weights", "reference_mode",
-         "pass_threshold", "include_doc_text", "judge_top_k", "use_local_server",
-         "local_server_url", "system_prompt", "user_prompt_template"),
-        casts={"enabled": bool, "temperature": float, "max_cases": int, "timeout_s": int,
-               "pass_threshold": float, "judge_top_k": int, "include_doc_text": bool,
-               "use_local_server": bool},
-        force={"enabled": True},
-    )
+    cfg = s.resolved_config(default=s.judge_config)
     if cfg is not None and not cfg.enabled:
         return  # a per-branch {enabled: false} judge node — skip this branch's judging
     _, retrieved_keys, _ids = _retrieved_from_bus(s)
-    _run_judge(s, s.results, s.metrics_all_relevant, s.per_query_recall5, retrieved_keys, cfg)
+    _run_judge(
+        s, s.results, _relevant_from_bus(s),
+        list(s.get_artifact("per_query_recall5", default=[])), retrieved_keys, cfg,
+    )
     details = (s.results.get("llm_judge") or {}).get("details") or []
     _publish_judge_scores(s, details, cfg)
 

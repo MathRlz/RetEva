@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 from ..config.types import VectorDBType, to_enum
+from ..metrics.ir import RETRIEVAL_DEPTH
 
 # The composable post-retrieval refine vocabulary (each is one retrieved→retrieved node).
 REFINE_OPS = ("rerank", "mmr", "threshold")
@@ -19,7 +20,8 @@ class VectorDBConfig:
     Attributes:
         type: Vector database type. Default: "inmemory".
             Options: "inmemory", "faiss", "faiss_gpu", "chromadb", "qdrant".
-        k: Number of documents to retrieve. Default: 5.
+        k: Number of documents to retrieve. Default: 10. Floored at the deepest report
+            cutoff (@10) at run time — a smaller value cannot silently cap ``recall@10``.
         gpu_id: GPU device ID for FAISS GPU. Default: 0.
 
         retrieval_mode: Retrieval strategy. Default: "dense".
@@ -37,7 +39,8 @@ class VectorDBConfig:
         reranker_top_k: Number of candidates to rerank. Default: 20.
         reranker_weight: Weight for reranker scores (0.0-1.0). Default: 0.5.
         reranker_enabled: Whether cross-encoder reranking is enabled. Default: False.
-        reranker_model: Cross-encoder model identifier. Default: "cross-encoder/ms-marco-MiniLM-L-6-v2".
+        reranker_model: Cross-encoder model identifier.
+            Default: "cross-encoder/ms-marco-MiniLM-L-6-v2".
         reranker_device: Device for reranker (None = auto-detect).
 
         use_mmr: Enable Maximal Marginal Relevance for diversity. Default: False.
@@ -75,7 +78,7 @@ class VectorDBConfig:
         ... )
     """
     type: Union[str, VectorDBType] = "inmemory"  # inmemory | faiss | faiss_gpu | chromadb | qdrant
-    k: int = 5
+    k: int = RETRIEVAL_DEPTH
     gpu_id: int = 0
     retrieval_mode: str = "dense"  # dense | sparse | hybrid
     hybrid_dense_weight: float = 0.5
@@ -94,9 +97,7 @@ class VectorDBConfig:
     use_mmr: bool = False  # Enable MMR for diversity
     mmr_lambda: float = 0.5  # 0-1, higher = more relevance, lower = more diversity
     min_similarity_threshold: Optional[float] = None  # Filter results below this score
-    max_similarity_threshold: Optional[float] = None  # Filter results above this score (for diversity)
     distance_metric: str = "cosine"  # cosine | euclidean | dot_product
-    diversity_penalty: float = 0.0  # Penalty for similar documents (0.0-1.0)
     # Explicit, ordered post-retrieval refine chain (Roadmap 2a). Each entry is one of
     # REFINE_OPS; the listed nodes are emitted in this order (repeats allowed → cascades,
     # e.g. ["rerank", "mmr", "rerank"]). None = derive the chain from the reranker / use_mmr /
@@ -127,17 +128,16 @@ class VectorDBConfig:
         valid_hybrid_fusion = {"weighted", "rrf", "max_score"}
         if self.hybrid_fusion_method not in valid_hybrid_fusion:
             raise ValueError(
-                f"hybrid_fusion_method must be one of {valid_hybrid_fusion}, got {self.hybrid_fusion_method}"
+                f"hybrid_fusion_method must be one of {valid_hybrid_fusion}, "
+                f"got {self.hybrid_fusion_method}"
             )
 
         if not 0.0 <= self.hybrid_dense_weight <= 1.0:
-            raise ValueError(f"hybrid_dense_weight must be in [0, 1], got {self.hybrid_dense_weight}")
+            raise ValueError(
+                f"hybrid_dense_weight must be in [0, 1], got {self.hybrid_dense_weight}")
 
         if not 0.0 <= self.mmr_lambda <= 1.0:
             raise ValueError(f"mmr_lambda must be in [0, 1], got {self.mmr_lambda}")
-
-        if not 0.0 <= self.diversity_penalty <= 1.0:
-            raise ValueError(f"diversity_penalty must be in [0, 1], got {self.diversity_penalty}")
 
         if self.refine_ops is not None:
             bad = [op for op in self.refine_ops if op not in REFINE_OPS]

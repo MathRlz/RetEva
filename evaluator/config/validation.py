@@ -27,9 +27,7 @@ def _detect_cuda():
         import torch
 
         if torch.cuda.is_available():
-            from ..devices.capability import usable_gpu_count
-
-            return True, usable_gpu_count()
+            return True, torch.cuda.device_count()
     except ImportError:
         from ..logging_config import get_logger
 
@@ -85,7 +83,37 @@ def collect_problems(config: Any) -> Tuple[List[str], List[str]]:
         _validate_gpu_memory(config, warnings, cuda_count)
     _validate_data_params(config, errors, warnings)
     _validate_dataset_compat(config, warnings)
+    _validate_metric_allowlist(config, errors)
+    _validate_variant_rollup(config, errors)
     return errors, warnings
+
+
+def _validate_variant_rollup(config, errors):
+    """`variant_rollup:` (A1) must name a known reducer."""
+    how = getattr(config, "variant_rollup", "mean")
+    from ..evaluation.aggregate import _ROLLUP_REDUCERS
+
+    if how not in _ROLLUP_REDUCERS:
+        errors.append(
+            f"unknown variant_rollup '{how}'. Valid: {', '.join(sorted(_ROLLUP_REDUCERS))}"
+        )
+
+
+def _validate_metric_allowlist(config, errors):
+    """The `metrics:` allowlist (B1) must name registered metrics — caught at validate time
+    with the registered list named, not as a silent no-op at report time."""
+    names = getattr(config, "metrics", None)
+    if not names:
+        return
+    from ..evaluation.metric_registry import list_metrics
+
+    registered = {spec.name for spec in list_metrics()}
+    unknown = [n for n in names if n not in registered]
+    if unknown:
+        errors.append(
+            f"unknown metric(s) in `metrics:` allowlist: {', '.join(sorted(unknown))}. "
+            f"Registered: {', '.join(sorted(registered))}"
+        )
 
 
 def _validate_template(config, errors):
@@ -119,9 +147,15 @@ def _validate_devices(config, errors, warnings, cuda_available, cuda_count):
                     f"Consider using 'cpu' or calling with_auto_devices()."
                 )
             elif ":" in device and int(device.split(":")[1]) >= cuda_count:
+                import os
+
+                # CUDA_VISIBLE_DEVICES is what usually explains a surprising count (a launcher
+                # or scheduler narrowing the set), so name it rather than leaving a bare number.
+                visible = os.environ.get("CUDA_VISIBLE_DEVICES")
                 warnings.append(
                     f"{field_name} is set to '{device}' but only {cuda_count} "
                     f"CUDA device(s) available."
+                    + (f" CUDA_VISIBLE_DEVICES={visible!r}." if visible else "")
                 )
 
 
@@ -334,12 +368,7 @@ def preflight_check(config: Any) -> List[str]:
         import torch
 
         cuda_available = torch.cuda.is_available()
-        if cuda_available:
-            from ..devices.capability import usable_gpu_count
-
-            cuda_count = usable_gpu_count()
-        else:
-            cuda_count = 0
+        cuda_count = torch.cuda.device_count() if cuda_available else 0
     except ImportError:
         cuda_available = False
         cuda_count = 0

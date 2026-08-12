@@ -10,6 +10,7 @@ import numpy as np
 
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger, TimingContext
+from ...metrics.ir import report_depth
 from ..helpers import _search_results_to_keys
 from ..item_isolation import isolate_batch
 from ..executor.state import RunState
@@ -90,18 +91,16 @@ def _stage_index(s: RunState) -> None:
     if cv is None or s.config is None:
         return
     from ...models.retrieval.strategy import RetrievalStrategyConfig
-    from ...pipeline.factory import (
-        create_vector_store_from_config,
-        effective_vector_db_config,
-    )
+    from ...pipeline.factory import effective_vector_db_config
     from ...pipeline.retrieval_pipeline import RetrievalPipeline
     from ...services.corpus_index import build_index_from_vectors
+    from ...storage.registry import create_vector_store
 
     params = s.node_params
     effective = effective_vector_db_config(s.config.vector_db, params)
     vectors = np.asarray(cv.vectors)
     embedding_dim = int(vectors.shape[1]) if vectors.ndim == 2 else None
-    store = create_vector_store_from_config(effective, embedding_dim=embedding_dim)
+    store = create_vector_store(effective, embedding_dim=embedding_dim)
     rp = RetrievalPipeline(
         store,
         s.cache_manager,
@@ -109,7 +108,7 @@ def _stage_index(s: RunState) -> None:
         # The shared cross-encoder (built once by the factory) rides along so a
         # following rerank node refines with the configured model — same instance,
         # so the offload planner's free-after-last-use semantics are unchanged.
-        reranker=getattr(getattr(s, "retrieval_pipeline", None), "reranker", None),
+        reranker=getattr(s.retrieval_pipeline, "reranker", None),
     )
     build_index_from_vectors(rp, cv)
     rp.embedding_space = cv.space  # space tag rides the index (§4 V[s] typing)
@@ -164,7 +163,7 @@ def _stage_retrieval(s: RunState) -> None:
 
         rp.assert_query_space(resolve_query_space(s.config, vname))
     # Per-node k (R2): a branch may retrieve a different depth.
-    k = int(params.get("k", s.k))
+    k = report_depth(params.get("k", s.k))
     # Per-node retrieval mode (R-hybrid): the hybrid DAG runs its dense + sparse arms as two
     # retrieval nodes (mode=dense / mode=sparse) feeding result_fusion, instead of the
     # monolithic in-pipeline hybrid fuse. Absent ⇒ the pipeline's configured mode.
@@ -184,7 +183,7 @@ def _stage_retrieval(s: RunState) -> None:
         def _row_texts(i: int):
             return [qtexts[i]] if qtexts is not None else None
 
-        if rp.needs_refinement or s.refine_in_graph or getattr(s, "fuse_in_graph", False):
+        if rp.needs_refinement or s.refine_in_graph or s.fuse_in_graph:
             # Per-item isolation (T1): one query failing to fetch candidates drops out (empty
             # candidate list, recorded) instead of aborting; keyed report excludes it.
             candidates = isolate_batch(
@@ -243,7 +242,7 @@ def _refine_inputs(s: RunState):
         else [str(i) for i in range(len(candidates))]
     )
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
-    k = int(s.node_params.get("k", s.k))
+    k = report_depth(s.node_params.get("k", s.k))
     return candidates, ids, rp, k
 
 
@@ -267,8 +266,8 @@ def _stage_rerank(s: RunState) -> None:
     s.cb("phase_3_5_rerank", 0, s.total, "Phase 3.5: Rerank")
     with TimingContext("Rerank Phase", logger):
         candidates, ids, rp, k = _refine_inputs(s)
-        target = rp._fetch_k(k) if getattr(s, "mmr_in_graph", False) else k
-        with _node_reranking(rp, s.node_params, getattr(s, "service_provider", None)):
+        target = rp._fetch_k(k) if s.mmr_in_graph else k
+        with _node_reranking(rp, s.node_params, s.service_provider):
             refined = rp.rerank_only(candidates, _retrieval_query_texts(s, rp), target)
         _publish_retrieved(s, refined, ids)
     s.cb("phase_3_5_rerank", s.total, s.total, "Rerank complete")
@@ -338,8 +337,8 @@ def _stage_result_fusion(s: RunState) -> None:
         method = params.get("method") or core.hybrid_fusion_method
         weight = float(params.get("weight", core.hybrid_dense_weight))
         rrf_k = int(params.get("rrf_k", core.rrf_k))
-        k = int(params.get("k", s.k))
-        hybrid_top_k = rp._fetch_k(k) if getattr(s, "refine_in_graph", False) else k
+        k = report_depth(params.get("k", s.k))
+        hybrid_top_k = rp._fetch_k(k) if s.refine_in_graph else k
     else:
         method = params.get("method", "rrf")
         weight = float(params.get("weight", 0.5))

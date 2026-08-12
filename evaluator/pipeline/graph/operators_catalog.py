@@ -29,6 +29,7 @@ from .artifacts import (
     ARTIFACT_QUERY_TEXT,
     ARTIFACT_QUERY_TRACES,
     ARTIFACT_QUERY_VECTORS,
+    ARTIFACT_REFERENCE_TEXT,
     ARTIFACT_REFERENCE_TRANSCRIPTION,
     ARTIFACT_REFINED_QUERY_TEXT,
     ARTIFACT_RELEVANT_DOCS,
@@ -66,6 +67,10 @@ _SOURCE_FULL = (
     # now that asr/audio_embedding are pure transforms (Phase 3).
     ARTIFACT_REFERENCE_TRANSCRIPTION,
 )
+# Retrieval-side reference (question text) — published by the source handler, declared so
+# the branched aggregate can BIND it. Appended (not inlined above) so the tuple-order-
+# derived UI column order for the classic fields is untouched.
+_SOURCE_FULL = _SOURCE_FULL + (ARTIFACT_REFERENCE_TEXT,)
 _UNION_OUT = (
     ARTIFACT_QUERY_AUDIO,
     ARTIFACT_QUERY_TEXT,
@@ -331,6 +336,8 @@ def _transform_param_spec(params):
             "enabled": {"kind": "bool", "default": True},
             "use_default_rules": {"kind": "bool", "default": True},
             "kb_max_distance": {"kind": "number", "default": 1},
+            "phonetic_max_edits": {"kind": "number", "default": 2},
+            "constrain_to_vocab": {"kind": "bool", "default": False},
             "kb_terms": {"kind": "json"},
             "replacements": {"kind": "json"},
         })
@@ -397,9 +404,10 @@ register_stage_node(
     domain="retrieval",
     inputs=(ARTIFACT_CORPUS_VECTORS,),
     outputs=(ARTIFACT_VECTOR_INDEX,),
-    # CSE: an explicit `store: inmemory` collapses with an omitted one (S7). (Carried over
-    # from vector_db — the one node-type with a CSE-twin default.)
-    param_defaults={"store": "inmemory"},
+    # No `param_defaults` here: an omitted `store` inherits the run's global vector_db.type
+    # (`effective_vector_db_config`), so it is NOT equivalent to an explicit `inmemory` —
+    # declaring it as a CSE default would over-share the twins under a non-inmemory global
+    # (CRITIQUE A2). CSE defaults are sound only for constant, config-independent fallbacks.
     param_spec={
         "store": {
             "kind": "select",
@@ -536,6 +544,12 @@ register_stage_node(
 # ACTUAL (a transform output) and is present only when both exist (diagram honesty).
 # They set the per-item RunState intermediates the report + rag/judge stages read, and
 # publish a scores artifact the `metrics` node orders after.
+# Per-aspect judge outputs (finite set — publish is config-conditional, advertising is not).
+from ...config.judge import VALID_JUDGE_ASPECTS as _VALID_JUDGE_ASPECTS  # noqa: E402
+
+_JUDGE_ASPECT_OUT = tuple(
+    f"judge_aspect_{a}" for a in sorted(_VALID_JUDGE_ASPECTS)
+)
 # ── operator: measure (typed comparisons + report + traces + judge) ──
 # Collapses transcription/retrieval/answer/embedding_alignment metrics, the `metrics`
 # report assembler, `build_query_traces`, and `answer_judge`. `family` (or `trace: true`)
@@ -543,26 +557,40 @@ register_stage_node(
 # orders after them). build_query_traces is the one transform-category member (callable
 # category). Resolved byte-identically to the seven former nodes.
 _MEASURE = {
-    "transcription": {"inputs": (), "outputs": (ARTIFACT_TRANSCRIPTION_SCORES,),
+    # The typed comparison nodes also publish their PER-ITEM scores keyed — the
+    # trace/judge/diagnostics consumers bind + id-join them (no RunState side channel).
+    "transcription": {"inputs": (),
+                      "outputs": (ARTIFACT_TRANSCRIPTION_SCORES,
+                                  "per_query_wer", "per_query_cer"),
                       "optional": (ARTIFACT_QUERY_TEXT, ARTIFACT_REFERENCE_TRANSCRIPTION)},
-    "retrieval": {"inputs": (), "outputs": (ARTIFACT_RETRIEVAL_SCORES,),
+    "retrieval": {"inputs": (),
+                  "outputs": (ARTIFACT_RETRIEVAL_SCORES, "per_query_recall5"),
                   "optional": (ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS)},
     "alignment": {"inputs": (ARTIFACT_AUDIO_QUERY_VECTORS, ARTIFACT_TEXT_QUERY_VECTORS),
                   "outputs": (ARTIFACT_EMBEDDING_ALIGNMENT,), "optional": ()},
     "answer": {"inputs": (ARTIFACT_GENERATED_ANSWERS,), "outputs": (ARTIFACT_ANSWER_SCORES,),
                "optional": (ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS)},
     "judge": {"inputs": (ARTIFACT_METRICS,),
-              "outputs": (ARTIFACT_JUDGE_SCORES, ARTIFACT_JUDGE_PASS),
+              # every aspect artifact is advertised (publish is config-conditional) so the
+              # finalize sink can BIND them — an unpublished optional is a no-op read
+              "outputs": (ARTIFACT_JUDGE_SCORES, ARTIFACT_JUDGE_PASS) + _JUDGE_ASPECT_OUT,
               "optional": (ARTIFACT_QUERY_TRACES, ARTIFACT_GENERATED_ANSWERS,
-                           ARTIFACT_RETRIEVED)},
+                           ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS,
+                           "per_query_recall5")},
     "trace": {"inputs": (), "outputs": (ARTIFACT_QUERY_TRACES,),
               "optional": (ARTIFACT_RETRIEVED, ARTIFACT_GENERATED_ANSWERS,
-                           ARTIFACT_METRICS, ARTIFACT_REFERENCE_TRANSCRIPTION)},
+                           ARTIFACT_METRICS, ARTIFACT_REFERENCE_TRANSCRIPTION,
+                           ARTIFACT_RELEVANT_DOCS,
+                           "per_query_wer", "per_query_cer", "per_query_recall5")},
     "report": {"inputs": (), "outputs": (ARTIFACT_METRICS,),
                "optional": (ARTIFACT_TRANSCRIPTION_SCORES, ARTIFACT_RETRIEVAL_SCORES,
                             ARTIFACT_RETRIEVED, ARTIFACT_QUERY_TEXT,
                             ARTIFACT_REFERENCE_TRANSCRIPTION, ARTIFACT_RELEVANT_DOCS,
-                            ARTIFACT_EMBEDDING_ALIGNMENT)},
+                            ARTIFACT_EMBEDDING_ALIGNMENT,
+                            # the C7 corrected metrics read it
+                            ARTIFACT_CORRECTED_QUERY_TEXT,
+                            # per-item scores for the IR diagnostics
+                            "per_query_wer", "per_query_cer", "per_query_recall5")},
 }
 
 
@@ -624,7 +652,7 @@ register_stage_node(
     # `query_text` only (the dead `metrics` edge + non-asr `reference_transcription` fallback gone).
     inputs=(QUERY_TEXT_CHAIN,),
     outputs=(ARTIFACT_GENERATED_ANSWERS,),
-    optional_inputs=(ARTIFACT_RETRIEVED, ARTIFACT_SHORT_ANSWERS),
+    optional_inputs=(ARTIFACT_RETRIEVED, ARTIFACT_SHORT_ANSWERS, ARTIFACT_RELEVANT_DOCS),
     # answer-gen params (were config.answer_generation; now carried on the answer_gen node)
     param_spec={
         "enabled": {"kind": "bool", "default": False},
@@ -652,9 +680,14 @@ register_stage_node(
 # Collapses finalize / aggregate / dataset_sink / leaderboard_sink / tracking_sink — the
 # `target` field selects which terminal effect (+ its optional ordering inputs).
 _SINK_OPTIONAL = {
-    "finalize": (ARTIFACT_QUERY_TRACES, ARTIFACT_JUDGE_SCORES,
-                 ARTIFACT_GENERATED_ANSWERS, ARTIFACT_RETRIEVED),
-    "aggregate": (ARTIFACT_RETRIEVED, ARTIFACT_METRICS),
+    # judge_pass + the aspect artifacts must be declared here, or streaming's lifetime
+    # analysis and the graph miss the finalize sink's reads.
+    "finalize": (ARTIFACT_QUERY_TRACES, ARTIFACT_JUDGE_SCORES, ARTIFACT_JUDGE_PASS,
+                 ARTIFACT_GENERATED_ANSWERS, ARTIFACT_RETRIEVED) + _JUDGE_ASPECT_OUT,
+    # everything the branched report reads — declared so the reads are visible in the graph
+    "aggregate": (ARTIFACT_RETRIEVED, ARTIFACT_METRICS, ARTIFACT_QUERY_TEXT,
+                  ARTIFACT_CORRECTED_QUERY_TEXT, ARTIFACT_RELEVANT_DOCS,
+                  ARTIFACT_REFERENCE_TEXT, ARTIFACT_REFERENCE_TRANSCRIPTION),
     "dataset": (ARTIFACT_QUERY_AUDIO, ARTIFACT_GENERATED_ANSWERS),
     "leaderboard": (ARTIFACT_METRICS,),
     "tracking": (ARTIFACT_METRICS,),

@@ -19,6 +19,36 @@ graph:
   - retrieval_metrics
   - metrics
   - finalize
+  edges:
+  - {from: dataset_source, to: corpus_embedding, input: corpus}
+  - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
+  - {from: dataset_source, to: asr, input: query_audio}
+  - {from: dataset_source, to: asr, input: reference_transcription}
+  - {from: dataset_source, to: text_embedding, input: query_text}
+  - {from: asr, to: text_embedding, input: query_text}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
+  - {from: vector_db, to: retrieval, input: vector_index}
+  - {from: dataset_source, to: retrieval, input: query_text}
+  - {from: asr, to: retrieval, input: query_text}
+  - {from: dataset_source, to: retrieval, input: reference_transcription}
+  - {from: dataset_source, to: retrieval, input: relevant_docs}
+  - {from: dataset_source, to: transcription_metrics, input: query_text}
+  - {from: asr, to: transcription_metrics, input: query_text}
+  - {from: dataset_source, to: transcription_metrics, input: reference_transcription}
+  - {from: retrieval, to: retrieval_metrics, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
+  - {from: transcription_metrics, to: metrics, input: transcription_scores}
+  - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
+  - {from: retrieval, to: metrics, input: retrieved}
+  - {from: dataset_source, to: metrics, input: query_text}
+  - {from: asr, to: metrics, input: query_text}
+  - {from: dataset_source, to: metrics, input: reference_transcription}
+  - {from: dataset_source, to: metrics, input: relevant_docs}
+  - {from: transcription_metrics, to: metrics, input: per_query_wer}
+  - {from: transcription_metrics, to: metrics, input: per_query_cer}
+  - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
+  - {from: metrics, to: finalize, input: metrics}
+  - {from: retrieval, to: finalize, input: retrieved}
 nodes:
   asr:
     model: whisper
@@ -37,7 +67,7 @@ nodes:
   vector_db:
     store: inmemory
   retrieval:
-    k: 5
+    k: 10
     mode: dense
 runtime:
   cache:

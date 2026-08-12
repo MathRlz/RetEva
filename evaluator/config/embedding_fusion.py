@@ -25,7 +25,8 @@ class EmbeddingFusionConfig:
         dimension_reduction: Method for reducing concatenated dimensions. Default: None.
             Options: None, "pca", "random_projection", "learned" (future).
         target_dim: Target dimension after reduction (only for concatenate). Default: None.
-        require_same_dimensions: If True, require audio and text embeddings to have same dim. Default: False.
+        require_same_dimensions: If True, require audio and text embeddings to have same
+            dim. Default: False.
 
     Examples:
         >>> # Balanced audio-text fusion

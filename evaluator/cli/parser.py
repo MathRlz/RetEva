@@ -29,16 +29,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--print_graph", action="store_true",
                         help="Print the execution DAG for the config and exit (no models loaded)")
 
-    # Output
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Directory to write results into")
 
-    # Devices (GPU pool)
     parser.add_argument("--devices", type=str, default=None,
                         help="Comma-separated devices for the GPU pool (e.g., 'cuda:0,cuda:1')")
-    parser.add_argument("--allocation_strategy", type=str, default=None,
-                        choices=["memory_aware", "round_robin", "packing"],
-                        help="GPU allocation strategy for distributing models")
 
     # Execution knobs — machine-specific; do not change what is measured
     parser.add_argument("--service_startup_mode", type=str, default=None,
@@ -153,23 +148,17 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
     if verbosity:
         config.logging.verbosity = verbosity
 
-    # Apply all mapped (operational) CLI arguments
     for arg_name, config_path in _CLI_ARG_MAP.items():
         value = getattr(args, arg_name, None)
         if value is not None:
             _set_nested_attr(config, config_path, value)
 
-    # Device pool configuration
-    if args.devices is not None or args.allocation_strategy is not None:
+    if args.devices is not None:
         if config.device_pool is None:
             config.device_pool = DevicePoolConfig()
-
-        if args.devices is not None:
-            config.device_pool.available_devices = [
-                d.strip() for d in args.devices.split(",")
-            ]
-        if args.allocation_strategy is not None:
-            config.device_pool.allocation_strategy = args.allocation_strategy
+        config.device_pool.available_devices = [
+            d.strip() for d in args.devices.split(",")
+        ]
 
     # Dataset validation flag (inverted logic)
     if args.skip_dataset_validation:

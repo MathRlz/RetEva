@@ -63,7 +63,6 @@ _LAZY_EXPORTS = {
     "MMSTTS": ".tts",
     "M4TTTS": ".tts",
     # Reranker models
-    "BaseReranker": ".retrieval.rag.reranker",
     "CrossEncoderReranker": ".retrieval.rag.reranker",
 }
 
@@ -126,7 +125,6 @@ __all__ = [
     "M4TTTS",
 
     # Reranker models
-    "BaseReranker",
     "CrossEncoderReranker",
 
     # Factory functions

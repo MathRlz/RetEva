@@ -185,7 +185,8 @@ def load_admed_voice_corpus(
         rec_place = example["rec_place"]
         speaker_id = example["speaker_id"]
         filename = example["filename"]
-        file_path = admed_voice_base / source / f"cat_{cat_code}" / f"{rec_place}-{speaker_id}" / filename
+        file_path = (admed_voice_base / source / f"cat_{cat_code}"
+                     / f"{rec_place}-{speaker_id}" / filename)
         return str(file_path)
 
     corpus_csv_path = admed_voice_base / "corpus_summary_all.csv"

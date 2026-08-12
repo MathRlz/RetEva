@@ -8,7 +8,8 @@ Two perturbation families, both medically motivated:
 
 - **homophones** — words an ASR confuses acoustically (``to``/``two``, ``ileum``/``ilium``,
   ``hypo``/``hyper`` prefixes), the everyday source of retrieval drift.
-- **unit/dose corruption** — the *dangerous* class: ``mg``↔``mcg``, ``ml``↔``l``, ``once``↔``twice``.
+- **unit/dose corruption** — the *dangerous* class: ``mg``↔``mcg``, ``ml``↔``l``,
+  ``once``↔``twice``.
   A 1000× dose error from a unit swap is exactly what a clinical retrieval system must be robust to,
   and what CEER (`metrics/clinical.py`) measures the cost of.
 

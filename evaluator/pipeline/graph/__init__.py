@@ -13,8 +13,7 @@ Two registries drive graph construction:
   (``GRAPH_TEMPLATE_SPECS``) are just ordered node-id lists fed to this engine.
 
 This ``__init__`` re-exports the full public (and historically-imported private) surface
-so ``from evaluator.pipeline.graph import X`` and the legacy ``evaluator.pipeline.stage_graph``
-shim both keep working unchanged.
+so ``from evaluator.pipeline.graph import X`` keeps working unchanged.
 """
 
 from .branches import build_branched_graph, expand_branches  # noqa: F401

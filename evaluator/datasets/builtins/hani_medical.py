@@ -9,6 +9,13 @@ if TYPE_CHECKING:
     from ...config.data import DataConfig
     from ..core import QueryDataset
 
+# Reproducibility (R1b): pinned by ``repo@revision`` so an upstream re-upload cannot move the
+# data under a rerun — the HF loader splits on '@'. Override (or unpin) with
+# ``data.huggingface_dataset``; re-pin here after a deliberate, reviewed dataset bump.
+_HANI_DATASET = (
+    "Hani89/medical_asr_recording_dataset@8b2b2bd4233140705f1f7bb48411b49cd188d89c"
+)
+
 
 @register_eval_dataset(
     id="hani_medical",
@@ -39,7 +46,9 @@ class HaniMedicalDataset(AudioTranscriptionDataset):
         for hf_split in hf_splits:
             loader = create_dataset_loader(
                 source="huggingface",
-                huggingface_dataset="Hani89/medical_asr_recording_dataset",
+                huggingface_dataset=(
+                    getattr(data, "huggingface_dataset", None) or _HANI_DATASET
+                ),
                 huggingface_split=hf_split,
                 column_mapping=column_mapping,
                 max_samples=getattr(data, "max_samples", None),

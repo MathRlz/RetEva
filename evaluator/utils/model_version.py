@@ -9,7 +9,10 @@ the legacy key unchanged (back-compat — existing caches still hit).
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_model_version(model: Any) -> Optional[str]:
@@ -29,8 +32,8 @@ def resolve_model_version(model: Any) -> Optional[str]:
             v = versioner()
             if v:
                 return str(v)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - version probing is best-effort
+            logger.debug("model version probe failed: %s", exc)
 
     for attr in ("model_version", "revision", "_commit_hash"):
         v = getattr(model, attr, None)

@@ -22,10 +22,6 @@ class AudioAugmentationConfig:
         pitch_semitones_range: Pitch shift range in semitones. Default: (-2, 2).
         volume_change: Apply volume changes. Default: False.
         volume_range: Volume multiplier range. Default: (0.8, 1.2).
-        codec_simulation: Simulate audio codec compression. Default: False.
-        codec: Audio codec to simulate. Default: "mp3".
-            Options: "mp3", "opus", "speex".
-        bitrate: Codec bitrate in kbps. Default: 64.
         n_variants: Number of augmented variants per sample. Default: 1.
 
     Examples:
@@ -46,7 +42,4 @@ class AudioAugmentationConfig:
     pitch_semitones_range: Tuple[int, int] = (-2, 2)
     volume_change: bool = False
     volume_range: Tuple[float, float] = (0.8, 1.2)
-    codec_simulation: bool = False
-    codec: str = "mp3"
-    bitrate: int = 64
     n_variants: int = 1

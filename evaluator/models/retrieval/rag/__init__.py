@@ -1,7 +1,7 @@
 """RAG (Retrieval-Augmented Generation) components for search and retrieval."""
 
 from .hybrid import reciprocal_rank_fusion
-from .reranker import BaseReranker, CrossEncoderReranker
+from .reranker import CrossEncoderReranker
 from .strategies import (
     DistanceMetric,
     compute_similarity,
@@ -16,7 +16,6 @@ __all__ = [
     "reciprocal_rank_fusion",
 
     # Reranking
-    "BaseReranker",
     "CrossEncoderReranker",
 
     # Advanced strategies

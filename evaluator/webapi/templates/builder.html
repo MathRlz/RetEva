@@ -405,7 +405,12 @@ document.getElementById('btn-add-branch').onclick = () => {
   renderBranches();
 };
 
-// E4/E5: serialize the canvas → node-centric {mode, nodes:[{id,type,params}], edges:[{from,to}]}.
+// Serialize the canvas → node-centric {mode, nodes:[{id,type,params}], edges:[...]}.
+// Edges are PORT-LEVEL (explicit wiring): {from, output, to, input} — the connection's
+// Drawflow port indices map back through the producer's rendered outputs and the consumer's
+// collapsed input_ports (same lists the canvas drew from), so what you connected is exactly
+// what the config says. A connection whose ports can't be resolved falls back to an
+// ordering-only {from, to} edge.
 function exportSpec() {
   const dr = editor.export().drawflow.Home.data;
   const nodes = [], edges = [];
@@ -416,10 +421,21 @@ function exportSpec() {
           !(typeof v === 'object' && Object.keys(v).length === 0)) params[k] = v;
     });
     nodes.push({id: n.name, type: n.data.type, params});
-    Object.values(n.outputs || {}).forEach(out =>
+    Object.entries(n.outputs || {}).forEach(([outKey, out]) => {
+      const outIdx = parseInt(outKey.split('_')[1], 10);
+      const art = ((n.data._form || {}).outputs || [])[outIdx - 1];
       (out.connections || []).forEach(c => {
-        const to = dr[c.node]; if (to) edges.push({from: n.name, to: to.name});
-      }));
+        const to = dr[c.node]; if (!to) return;
+        const inIdx = parseInt(String(c.output).split('_')[1], 10);
+        const ports = DagView.inputPorts(to.data._form || {});
+        const port = ports[inIdx - 1];
+        if (art && port) {
+          edges.push({from: n.name, output: art, to: to.name, input: port.label});
+        } else {
+          edges.push({from: n.name, to: to.name});
+        }
+      });
+    });
   });
   const spec = {mode: document.getElementById('mode').value, nodes, edges};
   const branches = BRANCHES

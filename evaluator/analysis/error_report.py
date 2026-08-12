@@ -14,26 +14,12 @@ from .errors import (
 
 
 def generate_error_report(results: dict, categories: Optional[dict] = None) -> str:
-    """Generate a human-readable summary of error analysis.
-
-    Produces a formatted text report summarizing ASR errors, retrieval
-    failures, and optionally categorized errors.
+    """Generate a formatted text report summarizing ASR errors, retrieval
+    failures, and (when ``categories`` is given) categorized errors.
 
     Args:
         results: Results dictionary containing evaluation data.
         categories: Optional category definitions for error categorization.
-
-    Returns:
-        Formatted string report suitable for display or logging.
-
-    Example:
-        >>> results = {
-        ...     "details": [
-        ...         {"reference": "hello world", "hypothesis": "hello word",
-        ...          "query": "greeting", "retrieved": ["d1"], "relevant": {"d1": 1}}
-        ...     ]
-        ... }
-        >>> print(generate_error_report(results))
     """
     lines = []
     lines.append("=" * 70)
@@ -41,7 +27,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
     lines.append("=" * 70)
     lines.append("")
 
-    # ASR Error Analysis
     asr_analysis = analyze_asr_errors(results)
     if asr_analysis["error_counts"]["total_errors"] > 0:
         lines.append("-" * 70)
@@ -49,7 +34,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
         lines.append("-" * 70)
         lines.append("")
 
-        # Error counts
         ec = asr_analysis["error_counts"]
         lines.append(f"Total Errors: {ec['total_errors']}")
         lines.append(f"  Substitutions: {ec['substitutions']}")
@@ -57,7 +41,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
         lines.append(f"  Deletions: {ec['deletions']}")
         lines.append("")
 
-        # Error rates
         er = asr_analysis["error_rates"]
         lines.append("Error Rates (per reference word):")
         lines.append(f"  Substitution Rate: {er['substitution_rate']:.4f}")
@@ -65,28 +48,24 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
         lines.append(f"  Deletion Rate: {er['deletion_rate']:.4f}")
         lines.append("")
 
-        # Common substitutions
         if asr_analysis["common_substitutions"]:
             lines.append("Top 10 Substitutions (reference -> hypothesis):")
             for ref_w, hyp_w, count in asr_analysis["common_substitutions"][:10]:
                 lines.append(f"  '{ref_w}' -> '{hyp_w}': {count} times")
             lines.append("")
 
-        # Common deletions
         if asr_analysis["common_deletions"]:
             lines.append("Top 10 Deleted Words:")
             for word, count in asr_analysis["common_deletions"][:10]:
                 lines.append(f"  '{word}': {count} times")
             lines.append("")
 
-        # Common insertions
         if asr_analysis["common_insertions"]:
             lines.append("Top 10 Inserted Words:")
             for word, count in asr_analysis["common_insertions"][:10]:
                 lines.append(f"  '{word}': {count} times")
             lines.append("")
 
-        # Error by word length
         if asr_analysis["by_word_length"]:
             lines.append("Error Rate by Word Length:")
             for length, stats in list(asr_analysis["by_word_length"].items())[:10]:
@@ -96,7 +75,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
                 )
             lines.append("")
 
-    # Retrieval Failure Analysis
     retrieval_analysis = analyze_retrieval_failures(results)
     if retrieval_analysis["total_queries"] > 0:
         lines.append("-" * 70)
@@ -110,7 +88,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
         lines.append(f"Success Rate: {retrieval_analysis['success_rate']:.2%}")
         lines.append("")
 
-        # Failed queries
         if retrieval_analysis["failed_queries"]:
             lines.append(
                 f"Failed Queries ({len(retrieval_analysis['failed_queries'])}):"
@@ -125,7 +102,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
                 )
             lines.append("")
 
-        # Near misses
         if retrieval_analysis["near_misses"]:
             lines.append(f"Near Misses ({len(retrieval_analysis['near_misses'])}):")
             for q in retrieval_analysis["near_misses"][:5]:
@@ -138,7 +114,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
                 )
             lines.append("")
 
-        # Query characteristics
         qc = retrieval_analysis["query_characteristics"]
         if qc:
             lines.append("Query Characteristics:")
@@ -150,7 +125,6 @@ def generate_error_report(results: dict, categories: Optional[dict] = None) -> s
             )
             lines.append("")
 
-    # Category Analysis
     if categories:
         cat_analysis = categorize_errors(results, categories)
         if cat_analysis["total_errors"] > 0:

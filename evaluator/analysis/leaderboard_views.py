@@ -64,4 +64,3 @@ def pareto_rows(
         "rows": annotate_pareto(runs, objs),
         "frontier": pareto_frontier(runs, objs),
     }
-

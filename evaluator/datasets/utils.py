@@ -15,18 +15,8 @@ from typing import Any, Dict, List, Optional, Union
 
 
 def load_json(path: Union[str, Path]) -> Union[Dict[str, Any], List[Any]]:
-    """Load a JSON file.
-
-    Args:
-        path: Path to the JSON file.
-
-    Returns:
-        Parsed JSON content (dict or list).
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        json.JSONDecodeError: If the file contains invalid JSON.
-    """
+    """Load a JSON file into a dict or list.
+    Raises FileNotFoundError if missing, json.JSONDecodeError on invalid JSON."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"JSON file not found: {path}")
@@ -35,18 +25,8 @@ def load_json(path: Union[str, Path]) -> Union[Dict[str, Any], List[Any]]:
 
 
 def load_jsonl(path: Union[str, Path]) -> List[Dict[str, Any]]:
-    """Load a JSONL file (one JSON object per line).
-
-    Args:
-        path: Path to the JSONL file.
-
-    Returns:
-        List of parsed JSON objects.
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        ValueError: If a line contains invalid JSON.
-    """
+    """Load a JSONL file (one JSON object per line), skipping blank lines.
+    Raises FileNotFoundError if missing, ValueError on an invalid line."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"JSONL file not found: {path}")
@@ -65,17 +45,8 @@ def load_jsonl(path: Union[str, Path]) -> List[Dict[str, Any]]:
 
 
 def detect_format(path: Union[str, Path]) -> str:
-    """Detect the format of a data file based on extension.
-
-    Args:
-        path: Path to the data file.
-
-    Returns:
-        Format string: "json", "jsonl", or "csv".
-
-    Raises:
-        ValueError: If the format is not supported.
-    """
+    """Detect a data file's format from its extension: "json", "jsonl", or "csv".
+    Raises ValueError for unsupported extensions."""
     path = Path(path)
     suffix = path.suffix.lower()
 
@@ -93,18 +64,8 @@ def detect_format(path: Union[str, Path]) -> str:
 
 
 def load_data_file(path: Union[str, Path]) -> Union[Dict[str, Any], List[Any]]:
-    """Load a data file with automatic format detection.
-
-    Args:
-        path: Path to the data file (.json, .jsonl, or .csv).
-
-    Returns:
-        Parsed data (dict or list).
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        ValueError: If the format is not supported or data is invalid.
-    """
+    """Load a .json/.jsonl/.csv file with automatic format detection.
+    Raises FileNotFoundError if missing, ValueError on unsupported format or invalid data."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Data file not found: {path}")
@@ -137,52 +98,27 @@ class DatasetLoader:
     """
 
     def __init__(self, path: Union[str, Path]):
-        """Initialize the dataset loader.
-
-        Args:
-            path: Path to the dataset file.
-        """
+        """Initialize the dataset loader."""
         self.path = Path(path)
         self._data: Optional[Union[Dict[str, Any], List[Any]]] = None
         self._format: Optional[str] = None
 
     def detect_format(self) -> str:
-        """Detect and return the file format.
-
-        Returns:
-            Format string: "json", "jsonl", or "csv".
-        """
+        """Detect and return the file format: "json", "jsonl", or "csv"."""
         if self._format is None:
             self._format = detect_format(self.path)
         return self._format
 
     def load(self) -> Union[Dict[str, Any], List[Any]]:
-        """Load the dataset.
-
-        Returns:
-            Parsed data (dict or list).
-
-        Raises:
-            FileNotFoundError: If the file does not exist.
-            ValueError: If the format is not supported or data is invalid.
-        """
+        """Load the dataset (cached after first call); returns parsed data (dict or list).
+        Raises FileNotFoundError if missing, ValueError on unsupported/invalid data."""
         if self._data is None:
             self._data = load_data_file(self.path)
         return self._data
 
     def validate_schema(self, required_fields: List[str]) -> bool:
-        """Validate that all items in the dataset have the required fields.
-
-        Args:
-            required_fields: List of field names that must be present.
-
-        Returns:
-            True if all items have all required fields, False otherwise.
-
-        Note:
-            For dict datasets, checks if required_fields are top-level keys.
-            For list datasets, checks if each item has all required fields.
-        """
+        """Return True if the dataset has all required fields: top-level keys
+        for dict datasets, per-item fields for list datasets."""
         data = self.load()
 
         if isinstance(data, dict):
@@ -200,51 +136,21 @@ class DatasetLoader:
 
 
 def normalize_text(text: str) -> str:
-    """Normalize text for consistent comparison.
-
-    Performs the following normalizations:
-    - Unicode normalization (NFC)
-    - Lowercase conversion
-    - Whitespace normalization (multiple spaces to single space)
-    - Strip leading/trailing whitespace
-
-    Args:
-        text: Input text to normalize.
-
-    Returns:
-        Normalized text string.
-    """
+    """Normalize text for consistent comparison:
+    Unicode NFC, lowercase, collapse whitespace runs, strip."""
     if not text:
         return ""
-    # Unicode normalization
     text = unicodedata.normalize("NFC", text)
-    # Lowercase
     text = text.lower()
-    # Normalize whitespace
     text = re.sub(r"\s+", " ", text)
-    # Strip
     text = text.strip()
     return text
 
 
 def extract_field(item: Any, field_path: str) -> Any:
-    """Extract a field from a nested data structure.
-
-    Supports dot notation for nested access (e.g., "metadata.author").
-
-    Args:
-        item: The data structure to extract from (dict, list, or object).
-        field_path: Dot-separated path to the field (e.g., "user.name").
-
-    Returns:
-        The extracted value, or None if the path does not exist.
-
-    Examples:
-        >>> extract_field({"user": {"name": "Alice"}}, "user.name")
-        'Alice'
-        >>> extract_field({"items": [{"id": 1}]}, "items.0.id")
-        1
-    """
+    """Extract a field from a nested structure via dot notation ("metadata.author";
+    numeric parts index lists: "items.0.id"). Supports dict, list/tuple, and
+    attribute access; returns None if the path does not exist."""
     if item is None:
         return None
 

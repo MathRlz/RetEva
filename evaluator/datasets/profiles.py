@@ -150,3 +150,24 @@ def list_known_dataset_names() -> List[str]:
         names = set()
     names.update(_PROFILE_REGISTRY.keys())
     return sorted(names)
+
+
+def profile_snapshot(config) -> Dict[str, Any]:
+    """The serialized dataset-profile dict both the run metadata and the graph
+    preview attach (was duplicated in evaluation_service + form_builder)."""
+    profile = resolve_dataset_profile(
+        dataset_name=config.data.dataset_name,
+        dataset_type=config.data.dataset_type,
+    )
+    return {
+        "name": profile.name,
+        "dataset_type": str(profile.dataset_type),
+        "requires_audio": profile.requires_audio,
+        "requires_text": profile.requires_text,
+        "supports_generation": profile.supports_generation,
+        "evaluation_mode": profile.evaluation_mode,
+        "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
+        "pipeline_mode_supported": profile.supports_pipeline_mode(
+            str(config.graph_template)
+        ),
+    }

@@ -14,7 +14,9 @@ from tqdm import tqdm
 from ...utils.progress import progress_disabled
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
+from ...metrics.ir import report_depth
 from ..executor.state import RunState
+from ._common import publish_keyed_or_plain
 from ...models.retrieval.query.optimization import (
     rewrite_query,
     generate_hypothetical_document,
@@ -36,17 +38,12 @@ def _augment_one_text(id_text, *, augmenter, base_seed, node_id):
 
 
 def _node_correction_config(s: "RunState") -> Any:
-    """The correction config for the current node: the GLOBAL config with any
-    `current_node.params` overlaid (per-branch divergence, R2). Overlaying — not rebuilding
-    from scratch — keeps the global LLM backend (model/api_base/api_key_env/temperature/…)
-    when a node overrides only e.g. `method`; the operator discriminator fields the alias
-    injects ({op: correct, axis: query}) are ignored by the allowlist."""
-    return s.node_overlay(
-        s.query_correction_config,
-        ("enabled", "method", "replacements", "use_default_rules", "kb_terms",
-         "kb_max_distance"),
-        casts={"enabled": bool, "use_default_rules": bool, "kb_max_distance": int},
-    )
+    """The correction config for the current node — resolved before execution:
+    the GLOBAL config with this node's params overlaid, so a branch that overrides only
+    e.g. `method` keeps the global LLM backend. Every QueryCorrectionConfig field is
+    overridable by construction (the allowlist is the dataclass), and the operator's
+    discriminator fields ({op: correct, axis: query}) never overlay."""
+    return s.resolved_config(default=s.query_correction_config)
 
 
 @register_stage_handler("transform", time_key="query_opt_s")
@@ -67,9 +64,10 @@ def _stage_transform(s: "RunState") -> None:
 
 
 def _stage_query_correction(s: "RunState") -> None:
-    """Post-ASR query correction node (rule-based domain repair). Rewrites the query
-    hypotheses in place and republishes ``query_text`` so the next consumer (query
-    optimization / text embedding) reads the corrected text.
+    """Post-ASR query correction node (domain repair). Does NOT mutate ``query_text``:
+    it publishes the corrected text under the distinct ``corrected_query_text`` artifact
+    (plus a per-query ``correction_diff``), and downstream consumers (query optimization /
+    text embedding) pick it up via QUERY_TEXT_CHAIN.
 
     Per-branch divergence (R2): a node's ``params`` build a transient ``QueryCorrectionConfig``
     so correction can be enabled on *one* branch only (the `corr` branch) while others no-op.
@@ -78,19 +76,32 @@ def _stage_query_correction(s: "RunState") -> None:
     if cfg is None or not getattr(cfg, "enabled", False):
         return
     from ..query_correction import (
-        correct_one_text,
+        correct_one_text_status,
         resolve_correction_client,
         correction_diff,
     )
     from ..executor.cpu_parallel import run_per_item
-    from ..item_set import ItemSet
 
     items = s.input_items("query_text")
     texts = list(items.values) if items is not None else list(s.input("query_text"))
     # The llm client is built once and shared across items; the process backend can't pickle a
     # live client, so llm correction runs sync/thread.
     client = resolve_correction_client(cfg)
-    corrected = run_per_item(s, correct_one_text, texts, config=cfg, client=client)
+    results = run_per_item(s, correct_one_text_status, texts, config=cfg, client=client)
+    corrected = [text for text, _n in results]
+    fallbacks = sum(n for _text, n in results)
+    if fallbacks:
+        # Surfaced in report.provenance.correction_fallbacks — a dead LLM endpoint must
+        # not read as "correction ran and changed nothing" (mirrors optimization_fallbacks).
+        from ..executor.engine import _STAGE_TIMES_LOCK
+
+        with _STAGE_TIMES_LOCK:
+            s.correction_fallbacks += fallbacks
+        logger.warning(
+            "Query correction fell back to the ORIGINAL query for %d/%d items "
+            "(the llm corrector failed — check the LLM endpoint)",
+            fallbacks, len(results),
+        )
     n_changed = sum(1 for a, b in zip(texts, corrected) if a != b)
     # Publish the corrected text under a DISTINCT name (no query_text mutation); downstream
     # reads it via QUERY_TEXT_CHAIN. Per-item identity rides the incoming ItemSet (M1d-2).
@@ -99,14 +110,10 @@ def _stage_query_correction(s: "RunState") -> None:
         if items is not None
         else [str(i) for i in range(len(corrected))]
     )
-    if len(ids) == len(corrected) and len(set(ids)) == len(ids):
-        s.put_items("corrected_query_text", ItemSet(ids, corrected))
-        # Correction-diff artifact (C1): what the corrector changed, per query — the evidence
-        # behind the asr-vs-asr+correction comparison.
-        s.put_items("correction_diff", ItemSet(ids, correction_diff(texts, corrected)))
-    else:
-        s.put_artifact("corrected_query_text", corrected)
-        s.put_artifact("correction_diff", correction_diff(texts, corrected))
+    publish_keyed_or_plain(s, "corrected_query_text", corrected, ids)
+    # Correction-diff artifact (C1): what the corrector changed, per query — the evidence
+    # behind the asr-vs-asr+correction comparison.
+    publish_keyed_or_plain(s, "correction_diff", correction_diff(texts, corrected), ids)
     logger.info(
         "Query correction complete: %d/%d texts changed", n_changed, len(corrected)
     )
@@ -138,7 +145,7 @@ def _stage_augmenter(s: "RunState") -> None:
         # Corpus axis (§4.1 T2): perturb each DOCUMENT's text, republish `corpus` —
         # downstream corpus_embedding reads the newest producer. Same per-item
         # determinism, seeded by doc_id.
-        corpus_items = s.get_items("corpus", default=None)
+        corpus_items = s.keyed_items("corpus")  # corpus is always keyed
         if not isinstance(corpus_items, ItemSet):
             logger.warning("augmenter '%s' (docs axis): no corpus on the bus", node_id)
             return
@@ -180,10 +187,7 @@ def _stage_augmenter(s: "RunState") -> None:
     )
     n_changed = sum(1 for a, b in zip(texts, augmented) if a != b)
     # Distinct output (no query_text mutation); downstream reads QUERY_TEXT_CHAIN.
-    if len(ids) == len(augmented) and len(set(ids)) == len(ids):
-        s.put_items("augmented_query_text", ItemSet(ids, augmented))
-    else:
-        s.put_artifact("augmented_query_text", augmented)
+    publish_keyed_or_plain(s, "augmented_query_text", augmented, ids)
     logger.info(
         "augmenter '%s': %d/%d query texts perturbed",
         node_id,
@@ -194,13 +198,16 @@ def _stage_augmenter(s: "RunState") -> None:
 
 def _optimize_one_text(q, *, fn, cfg):
     """Per-item query optimization (rewrite / HyDE) — the 4b ``parallel_map`` unit. A bad query
-    falls back to its original (one failure never kills the map). Top-level + picklable so the
-    ``process`` backend can run it."""
+    falls back to its original (one failure never kills the map). Returns ``(text, ok)`` so the
+    caller can count fallbacks — an unreachable LLM would otherwise yield a complete,
+    plausible-looking report in which optimization silently did nothing. Top-level + picklable
+    so the ``process`` backend can run it (which is also why the count is returned, not
+    accumulated in shared state)."""
     try:
-        return fn(q, cfg)
+        return fn(q, cfg), True
     except Exception as exc:  # noqa: BLE001 — a bad query falls back to the original
         logger.warning("Query optimization failed for %r: %s", q[:80], exc)
-        return q
+        return q, False
 
 
 def _stage_query_optimization(s: "RunState") -> None:
@@ -223,10 +230,24 @@ def _stage_query_optimization(s: "RunState") -> None:
     # back to the original query on failure.
     from ..executor.cpu_parallel import run_per_item
 
-    optimized = run_per_item(s, _optimize_one_text, texts, fn=fn, cfg=cfg)
-    from .asr import _publish_keyed_or_plain
+    results = run_per_item(s, _optimize_one_text, texts, fn=fn, cfg=cfg)
+    optimized = [text for text, _ok in results]
+    fallbacks = sum(1 for _text, ok in results if not ok)
+    publish_keyed_or_plain(s, "optimized_query_text", optimized, ids)
+    if fallbacks:
+        # Surfaced in report.provenance.optimization_fallbacks — a run whose LLM endpoint was
+        # unreachable must not read as "optimization ran and changed nothing".
+        # _SHARED field: lock the read-modify-write like engine.py does for stage_times.
+        from ..executor.engine import _STAGE_TIMES_LOCK
 
-    _publish_keyed_or_plain(s, "optimized_query_text", optimized, ids)
+        with _STAGE_TIMES_LOCK:
+            s.optimization_fallbacks += fallbacks
+        logger.warning(
+            "Query optimization fell back to the ORIGINAL query for %d/%d items "
+            "(the optimizer failed — check the LLM endpoint); the report's "
+            "optimization arm is unoptimized for those items",
+            fallbacks, len(results),
+        )
     logger.info("Query optimization complete: %d queries transformed", len(optimized))
 
 
@@ -257,7 +278,7 @@ def _stage_multi_query_retrieval(s: "RunState") -> None:
         if items is not None
         else [str(i) for i in range(len(texts))]
     )
-    k = int(s.node_params.get("k", s.k))
+    k = report_depth(s.node_params.get("k", s.k))
     results_with_scores = []
     for q in tqdm(texts, desc=f"multi_query_retrieval ({method})", disable=progress_disabled()):
         try:
@@ -279,30 +300,10 @@ def _stage_multi_query_retrieval(s: "RunState") -> None:
 
 
 def _node_query_opt_config(s: "RunState") -> Any:
-    """The optimization config for the current node: the global config with this
-    node's params overlaid transiently (per-branch divergence — branch A rewrite vs
-    branch B HyDE; precedent ``_node_correction_config``). No params → global."""
-    base = s.query_opt_config
-    params = s.node_params
-    overlay = {
-        k: v
-        for k, v in params.items()
-        if k in ("method", "temperature", "max_iterations", "combine_strategy",
-                 "context_top_k", "use_initial_context")
-        and v not in (None, "")
-    }
-    if base is None or not overlay:
-        return base
-    from dataclasses import replace
-
-    if "temperature" in overlay:
-        overlay["temperature"] = float(overlay["temperature"])
-    for int_key in ("max_iterations", "context_top_k"):
-        if int_key in overlay:
-            overlay[int_key] = int(overlay[int_key])
-    if "use_initial_context" in overlay:
-        overlay["use_initial_context"] = bool(overlay["use_initial_context"])
-    return replace(base, **overlay)
+    """The optimization config for the current node — resolved before execution:
+    the global config with this node's params overlaid (per-branch divergence — branch A
+    rewrite vs branch B HyDE). Was a hand-rolled overlay with its own key list + casts."""
+    return s.resolved_config(default=s.query_opt_config)
 
 
 def _retrieved_doc_texts(results: Any, top_k: int) -> list:
@@ -326,7 +327,6 @@ def _stage_query_refine(s: "RunState") -> None:
     retrieve."""
     from ...models.retrieval.query.optimization import refine_query
     from ...config.query_optimization import QueryOptimizationConfig
-    from .asr import _publish_keyed_or_plain
 
     params = s.node_params
     method = params.get("method", "rewrite_with_context")
@@ -348,5 +348,5 @@ def _stage_query_refine(s: "RunState") -> None:
         refined.append(
             refine_query(q, doc_texts, cfg, method=method, context_top_k=top_k)
         )
-    _publish_keyed_or_plain(s, "refined_query_text", refined, ids)
+    publish_keyed_or_plain(s, "refined_query_text", refined, ids)
     logger.info("query_refine (%s): reformulated %d queries", method, len(refined))

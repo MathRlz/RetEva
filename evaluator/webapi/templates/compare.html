@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_chart.html" import chart_panel %}
 {% block body %}
 <div class="panel">
   <h2>Run comparison</h2>
@@ -7,6 +8,8 @@
     &nbsp;·&nbsp;
     B = run {{ run_b.run_id }} ({{ run_b.experiment_name }} · {{ run_b.dataset_name }} · {{ run_b.pipeline_mode }})
   </p>
+
+  {{ chart_panel(compare_spec, height=320) }}
 
   <h3>Metrics</h3>
   {% if metric_rows %}

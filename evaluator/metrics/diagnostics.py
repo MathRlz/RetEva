@@ -12,9 +12,12 @@ Functions:
     - per_speaker_breakdown: group WER / Recall@5 by speaker_id from traces
     - judge_calibration: correlate per-query judge score with Recall@5 / MRR
 """
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def first_relevant_rank_distribution(
@@ -25,14 +28,15 @@ def first_relevant_rank_distribution(
 
     Returns:
         (distribution, failure_rate) where distribution has buckets
-        "1", "2", "3-5", "6-10", "not_found" and failure_rate is the fraction
-        of queries with no relevant doc retrieved.
+        "1", "2", "3-5", "6+", "not_found" and failure_rate is the fraction
+        of queries with no relevant doc retrieved. Relevance is graded: a doc
+        with grade 0 in the relevance map does not count as relevant (matches ir.py).
     """
-    rank_dist: Dict[str, int] = {"1": 0, "2": 0, "3-5": 0, "6-10": 0, "not_found": 0}
+    rank_dist: Dict[str, int] = {"1": 0, "2": 0, "3-5": 0, "6+": 0, "not_found": 0}
     for retrieved, relevant in zip(all_retrieved, all_relevant):
         first_rank = None
         for pos, doc in enumerate(retrieved, start=1):
-            if doc in relevant:
+            if relevant.get(doc, 0) > 0:
                 first_rank = pos
                 break
         if first_rank is None:
@@ -44,7 +48,7 @@ def first_relevant_rank_distribution(
         elif first_rank <= 5:
             rank_dist["3-5"] += 1
         else:
-            rank_dist["6-10"] += 1
+            rank_dist["6+"] += 1
 
     n_queries = len(all_retrieved)
     failure_rate = rank_dist["not_found"] / n_queries if n_queries > 0 else 0.0
@@ -81,6 +85,7 @@ def categorize_failures(
     - corpus_gap: missed and the relevant doc is not in the corpus at all
     - asr_failure: missed and WER high (>0.3)
     - embedding_mismatch: missed despite near-perfect WER (<0.1)
+    - uncategorized_miss: missed with WER in [0.1, 0.3] — neither cause is clear
     - near_miss: partial recall while some relevant docs landed at rank 2-5
 
     ``corpus_gap`` is only detectable when both ``all_relevant`` (per-query relevance
@@ -89,7 +94,8 @@ def categorize_failures(
     misattributed to ASR/embedding. The key is always present (0 when uncheckable).
     """
     cats: Dict[str, int] = {
-        "corpus_gap": 0, "asr_failure": 0, "embedding_mismatch": 0, "near_miss": 0,
+        "corpus_gap": 0, "asr_failure": 0, "embedding_mismatch": 0,
+        "uncategorized_miss": 0, "near_miss": 0,
     }
     near_miss_possible = rank_dist.get("2", 0) + rank_dist.get("3-5", 0) > 0
     can_check_corpus = corpus_doc_ids is not None and all_relevant is not None
@@ -103,6 +109,9 @@ def categorize_failures(
             cats["asr_failure"] += 1
         elif rec_v == 0.0 and wer_v < 0.1:
             cats["embedding_mismatch"] += 1
+        elif rec_v == 0.0:
+            # WER in [0.1, 0.3]: no clear cause, but the miss must still be counted
+            cats["uncategorized_miss"] += 1
         elif 0.0 < rec_v < 1.0 and near_miss_possible:
             cats["near_miss"] += 1
     return cats
@@ -157,10 +166,14 @@ def per_speaker_breakdown(traces: List[Dict[str, Any]]) -> Optional[Dict[str, Di
         return None
 
     all_spks = set(spk_wer) | set(spk_rec)
+    def _mean(vals: List[float]) -> Optional[float]:
+        # a speaker with no samples must not read as wer 0.0 ("perfect")
+        return sum(vals) / len(vals) if vals else None
+
     return {
         spk: {
-            "wer": sum(spk_wer.get(spk, [])) / max(len(spk_wer.get(spk, [])), 1),
-            "recall_5": sum(spk_rec.get(spk, [])) / max(len(spk_rec.get(spk, [])), 1),
+            "wer": _mean(spk_wer.get(spk, [])),
+            "recall_5": _mean(spk_rec.get(spk, [])),
             "n_queries": max(len(spk_wer.get(spk, [])), len(spk_rec.get(spk, []))),
         }
         for spk in sorted(all_spks)
@@ -182,7 +195,13 @@ def judge_calibration(
     out: Dict[str, float] = {}
     scores_arr = np.array(judge_scores)
     valid_mask = ~np.isnan(scores_arr)
-    if valid_mask.sum() < 5 or len(per_query_recall) < len(judge_scores):
+    if len(per_query_recall) < len(judge_scores):
+        logger.warning(
+            "judge calibration skipped: %d recall values vs %d judge scores (misaligned)",
+            len(per_query_recall), len(judge_scores),
+        )
+        return out
+    if valid_mask.sum() < 5:
         return out
 
     js_clean = scores_arr[valid_mask]
@@ -193,7 +212,7 @@ def judge_calibration(
     rr_for_judge = np.array([
         1.0 / (pos + 1) if pos >= 0 else 0.0
         for pos in (
-            next((i for i, d in enumerate(all_retrieved[qi]) if d in all_relevant[qi]), -1)
+            next((i for i, d in enumerate(all_retrieved[qi]) if all_relevant[qi].get(d, 0) > 0), -1)
             for qi in range(len(judge_scores))
         )
     ])[valid_mask]

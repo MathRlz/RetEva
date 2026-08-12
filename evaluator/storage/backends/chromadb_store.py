@@ -45,7 +45,6 @@ class ChromaDBVectorStore(VectorStore):
         self.distance_fn = distance_fn
         self._payloads: List[Any] = []
 
-        # Initialize client
         self._init_client()
 
     def _init_client(self) -> None:
@@ -62,15 +61,11 @@ class ChromaDBVectorStore(VectorStore):
         )
 
     def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
-        """Build the vector store from vectors and payloads.
-
-        Args:
-            vectors: Array of vectors with shape (n_samples, dim).
-            payloads: List of payload objects corresponding to each vector.
-        """
+        """Build the vector store from vectors and payloads."""
         if len(vectors) != len(payloads):
             raise ValueError(
-                f"Number of vectors ({len(vectors)}) must match number of payloads ({len(payloads)})"
+                f"Number of vectors ({len(vectors)}) must match "
+                f"number of payloads ({len(payloads)})"
             )
 
         # Store payloads locally for retrieval
@@ -89,7 +84,6 @@ class ChromaDBVectorStore(VectorStore):
             metadata={"hnsw:space": self.distance_fn}
         )
 
-        # Add vectors to collection
         ids = [str(i) for i in range(len(vectors))]
 
         # Convert payloads to metadata (ChromaDB requires string/int/float/bool values)
@@ -123,25 +117,14 @@ class ChromaDBVectorStore(VectorStore):
         where: Optional[Dict] = None,
         where_document: Optional[Dict] = None,
     ) -> List[Tuple[Any, float]]:
-        """Search for similar vectors.
-
-        Args:
-            query: Query vector.
-            k: Number of results to return.
-            where: Optional metadata filter dict for ChromaDB.
-            where_document: Optional document content filter for ChromaDB.
-
-        Returns:
-            List of (payload, score) tuples, sorted by relevance.
-        """
-        # Handle empty collection
+        """Search for similar vectors; ``where``/``where_document`` are optional
+        ChromaDB filters. Returns (payload, score) tuples sorted by relevance."""
         count = self.collection.count()
         if count == 0:
             return []
 
         query = l2_normalize(query)
 
-        # Prepare query kwargs
         query_kwargs = {
             "query_embeddings": [query.tolist()],
             "n_results": min(k, count),
@@ -152,13 +135,12 @@ class ChromaDBVectorStore(VectorStore):
         if where_document:
             query_kwargs["where_document"] = where_document
 
-        # Query collection
         results = self.collection.query(**query_kwargs)
 
-        # Extract results
         output = []
         if results["ids"] and results["ids"][0]:
-            distances = results["distances"][0] if results["distances"] else [0.0] * len(results["ids"][0])
+            distances = (results["distances"][0] if results["distances"]
+                         else [0.0] * len(results["ids"][0]))
 
             for idx, (doc_id, distance) in enumerate(zip(results["ids"][0], distances)):
                 payload_idx = int(doc_id)
@@ -184,19 +166,10 @@ class ChromaDBVectorStore(VectorStore):
         k: int = 5,
         where: Optional[Dict] = None,
     ) -> List[List[Tuple[Any, float]]]:
-        """Search for similar vectors in batch.
-
-        Args:
-            queries: Array of query vectors with shape (n_queries, dim).
-            k: Number of results to return per query.
-            where: Optional metadata filter dict for ChromaDB.
-
-        Returns:
-            List of result lists, one per query.
-        """
+        """Search for similar vectors in batch; ``where`` is an optional ChromaDB
+        metadata filter. Returns one result list per query."""
         normalized_queries = l2_normalize(queries, axis=1)
 
-        # Prepare query kwargs
         query_kwargs = {
             "query_embeddings": normalized_queries.tolist(),
             "n_results": min(k, self.collection.count()) if self.collection.count() > 0 else k,
@@ -205,10 +178,8 @@ class ChromaDBVectorStore(VectorStore):
         if where:
             query_kwargs["where"] = where
 
-        # Query collection
         results = self.collection.query(**query_kwargs)
 
-        # Extract results for each query
         all_outputs = []
         for query_idx in range(len(queries)):
             output = []
@@ -238,22 +209,14 @@ class ChromaDBVectorStore(VectorStore):
         return all_outputs
 
     def save(self, path: Union[str, Path]) -> None:
-        """Save vector store to disk.
-
-        For persistent storage, this persists the ChromaDB data.
-        Also saves payloads separately for full reconstruction.
-
-        Args:
-            path: Directory path to save to.
-        """
+        """Save vector store to disk: payloads + metadata, plus the full collection
+        data when running in-memory (persistent mode is already on disk)."""
         save_path = Path(path)
         save_path.mkdir(parents=True, exist_ok=True)
 
-        # Save payloads
         with open(save_path / "payloads.json", "w") as f:
             json.dump(self._payloads, f, indent=2)
 
-        # Save metadata
         metadata = {
             "collection_name": self.collection_name,
             "persist_path": self.persist_path,
@@ -265,7 +228,6 @@ class ChromaDBVectorStore(VectorStore):
 
         # If using in-memory storage, export collection data
         if not self.persist_path:
-            # Get all data from collection
             all_data = self.collection.get(include=["embeddings", "metadatas"])
 
             # Convert numpy arrays to lists for JSON serialization
@@ -284,25 +246,18 @@ class ChromaDBVectorStore(VectorStore):
                 json.dump(export_data, f)
 
     def load(self, path: Union[str, Path]) -> None:
-        """Load vector store from disk.
-
-        Args:
-            path: Directory path to load from.
-        """
+        """Load vector store from disk."""
         load_path = Path(path)
 
-        # Load payloads
         with open(load_path / "payloads.json", "r") as f:
             self._payloads = json.load(f)
 
-        # Load metadata
         with open(load_path / "metadata.json", "r") as f:
             metadata = json.load(f)
 
         self.collection_name = metadata["collection_name"]
         self.distance_fn = metadata["distance_fn"]
 
-        # Re-initialize client
         self._init_client()
 
         # If collection data was exported (in-memory mode), restore it
@@ -311,7 +266,6 @@ class ChromaDBVectorStore(VectorStore):
             with open(collection_data_path, "r") as f:
                 export_data = json.load(f)
 
-            # Clear and recreate collection
             try:
                 self.client.delete_collection(self.collection_name)
             except Exception as exc:
@@ -322,7 +276,6 @@ class ChromaDBVectorStore(VectorStore):
                 metadata={"hnsw:space": self.distance_fn}
             )
 
-            # Add data back
             if export_data["ids"]:
                 self.collection.add(
                     ids=export_data["ids"],

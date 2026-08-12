@@ -16,10 +16,13 @@ LLM-judged ones (RAGAS-style), each in ``[0, 1]`` (1 = best):
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Optional, Sequence
 
 from .clinical import DEFAULT_CRITICAL_TERMS
+
+logger = logging.getLogger(__name__)
 
 # A dose mention = a number followed by a clinically-critical unit (mg, mcg, ml, units, …).
 _DOSE = re.compile(
@@ -70,7 +73,9 @@ def _judged_score(client: Any, system: str, user: str) -> Optional[float]:
         content = client.call(
             [{"role": "system", "content": system}, {"role": "user", "content": user}]
         )
-    except Exception:
+    except Exception as exc:
+        # transport failure ≠ unparseable reply — make the judge being down visible
+        logger.warning("judge call failed: %s", exc)
         return None
     m = re.search(r"(\d+(?:\.\d+)?)", content or "")
     if not m:

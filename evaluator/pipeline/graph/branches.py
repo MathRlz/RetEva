@@ -16,8 +16,8 @@ def expand_branches(
     base_node_ids: Sequence[str],
     branches: Sequence[Dict[str, Any]],
     *,
-    edges: Optional[Dict[str, Sequence[str]]] = None,
-) -> Tuple[List[dict], Dict[str, Sequence[str]]]:
+    edges: Any = None,
+) -> Tuple[List[dict], Any]:
     """Expand a per-branch template into one namespaced node-spec list (pre-CSE).
 
     ``base_node_ids`` is the shared ordered node-type template; ``branches`` is a list of
@@ -28,7 +28,7 @@ def expand_branches(
     one, so shared work runs once while divergent nodes keep their ``@branch`` provenance.
     """
     specs: List[dict] = []
-    new_edges: Dict[str, Sequence[str]] = {}
+    new_edges: Any = [] if isinstance(edges, (list, tuple)) else {}
     for branch in branches:
         bid = str(branch["id"])
         overrides = {k: v for k, v in branch.items() if k != "id"}
@@ -56,8 +56,17 @@ def expand_branches(
             else:
                 params = {**(base_params or {}), "model": override}
             specs.append({"id": nid, "type": ntype, "params": params})
-        for to_t, froms in (edges or {}).items():
-            new_edges[idmap.get(to_t, to_t)] = [idmap.get(f, f) for f in froms]
+        if isinstance(edges, (list, tuple)):
+            # port-level / ordering edge LIST (E2): remap both endpoint ids per branch;
+            # output/input port names ride along unchanged.
+            for e in edges:
+                new_edges.append(
+                    {**e, "from": idmap.get(e["from"], e["from"]),
+                     "to": idmap.get(e["to"], e["to"])}
+                )
+        else:
+            for to_t, froms in (edges or {}).items():
+                new_edges[idmap.get(to_t, to_t)] = [idmap.get(f, f) for f in froms]
     return specs, new_edges
 
 
@@ -66,7 +75,7 @@ def build_branched_graph(
     branches: Sequence[Dict[str, Any]],
     *,
     mode: str = "custom",
-    edges: Optional[Dict[str, Sequence[str]]] = None,
+    edges: Any = None,
 ) -> StageGraph:
     """Expand ``branches`` over the template and CSE-collapse shared nodes.
 
@@ -98,9 +107,24 @@ def build_branched_graph(
         # in operator form (it bypasses _normalize_spec_item) so it has a registered handler,
         # keeping the pinned id "aggregate".
         agg_op, agg_params = expand_alias("aggregate", None)
+        # The aggregate reads through DECLARED bindings, not a global bus scan: bind every
+        # collapsed producer of each declared optional input in node order, so the
+        # runtime's newest-first read yields the newest producer. Streaming's lifetime
+        # analysis accumulates off these bindings.
+        from .registry import _effective_outputs, _resolve, get_stage_node_def
+
+        agg_def = get_stage_node_def(agg_op)
+        wanted = tuple(_resolve(agg_def.optional_inputs, agg_params))
+        agg_binds = tuple(
+            (art, n.id)
+            for n in collapsed
+            for art in wanted
+            if art in _effective_outputs(n.stage, n.params)
+        )
         collapsed = collapsed + (
             StageNode(
-                id="aggregate", stage=agg_op, depends_on=ordering, params=agg_params
+                id="aggregate", stage=agg_op, depends_on=ordering,
+                bindings=agg_binds, params=agg_params,
             ),
         )
     return StageGraph(mode=mode, nodes=collapsed)

@@ -274,7 +274,8 @@ class HuggingFaceDatasetLoader:
                     break
                 samples.append(self._map_item(item, idx))
         else:
-            n_samples = len(dataset) if self.max_samples is None else min(len(dataset), self.max_samples)
+            n_samples = (len(dataset) if self.max_samples is None
+                         else min(len(dataset), self.max_samples))
             for idx in range(n_samples):
                 samples.append(self._map_item(dataset[idx], idx))
 

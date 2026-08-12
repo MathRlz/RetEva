@@ -52,6 +52,10 @@ class QueryOptimizationConfig(LLMBackendMixin):
     timeout_s: int = 30
     use_local_server: bool = False
     local_server_url: Optional[str] = None
+    # Sampling seed forwarded to the LLM request (inherited from the top-level
+    # `llm:` block unless set here); None = omit. temperature 0 alone does not
+    # pin an LLM's sampling.
+    seed: Optional[int] = None
 
     def __post_init__(self) -> None:
         valid_methods = {"rewrite", "hyde", "decompose", "multi_query"}

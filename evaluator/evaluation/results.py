@@ -39,53 +39,11 @@ HEADLINE_METRICS = (
 class EvaluationResults:
     """Structured container for evaluation results.
 
-    This class provides a typed interface for evaluation metrics, configuration,
-    and metadata. It supports serialization to/from dictionaries and JSON files,
-    as well as pretty printing for human-readable output.
-
     Attributes:
         metrics: Dictionary of evaluation metrics (e.g., MRR, WER, Recall@k).
         config: The EvaluationConfig used for this evaluation run.
-        metadata: Additional metadata including timestamps, versions, etc.
-            Common metadata fields:
-            - start_time: ISO format timestamp of evaluation start
-            - end_time: ISO format timestamp of evaluation end
-            - duration_seconds: Total evaluation duration
-            - evaluator_version: Version of the evaluator package
-            - num_samples: Number of samples evaluated
-            - pipeline_mode: Pipeline mode used (asr_text_retrieval, etc.)
-
-    Example:
-        Creating and saving results::
-
-            >>> from evaluator import EvaluationConfig, EvaluationResults
-            >>> config = EvaluationConfig.from_yaml("config.yaml")
-            >>> metrics = {"MRR": 0.7523, "WER": 0.1234, "Recall@5": 0.8912}
-            >>> metadata = {
-            ...     "start_time": "2024-01-15T10:30:00",
-            ...     "duration_seconds": 123.45,
-            ...     "num_samples": 1000
-            ... }
-            >>> results = EvaluationResults(
-            ...     metrics=metrics,
-            ...     config=config,
-            ...     metadata=metadata
-            ... )
-            >>> results.save("results/my_eval.json")
-
-        Loading and inspecting results::
-
-            >>> results = EvaluationResults.load("results/my_eval.json")
-            >>> print(results)  # Pretty printed output
-            >>> print(f"MRR: {results.metrics['MRR']:.4f}")
-            >>> print(f"Duration: {results.metadata['duration_seconds']:.2f}s")
-
-        Converting to dictionary for backward compatibility::
-
-            >>> results_dict = results.to_dict()
-            >>> # Dictionary contains all metrics at top level for compatibility
-            >>> print(results_dict["MRR"])
-            0.7523
+        metadata: Additional run metadata (start_time/end_time, duration_seconds,
+            evaluator_version, num_samples, pipeline_mode, ...).
     """
 
     metrics: Dict[str, Any]
@@ -105,49 +63,24 @@ class EvaluationResults:
         if not isinstance(self.metadata, dict):
             raise TypeError(f"metadata must be a dict, got {type(self.metadata)}")
 
-        # Add creation timestamp if not present
         if "created_at" not in self.metadata:
             self.metadata["created_at"] = datetime.now().isoformat()
 
     def to_dict(self, include_config: bool = False) -> Dict[str, Any]:
-        """Convert results to dictionary format.
-
-        Returns a dictionary with metrics at top level and structured
-        `_config`/`_metadata` sections.
+        """Return a dict with metrics at top level plus structured
+        ``_config``/``_metadata`` sections.
 
         Args:
-            include_config: If True, include full config in _config key.
-                If False, include only minimal config info. Default: False.
-
-        Returns:
-            Dictionary with metrics and structured sections.
-
-        Example:
-            >>> results = EvaluationResults(
-            ...     metrics={"MRR": 0.75, "WER": 0.12},
-            ...     config=config,
-            ...     metadata={"num_samples": 100}
-            ... )
-            >>> d = results.to_dict()
-            >>> print(d["MRR"])
-            0.75
-            >>> print(d["_metadata"]["num_samples"])
-            100
-
-            >>> # With full config
-            >>> d_full = results.to_dict(include_config=True)
-            >>> print(d_full["_config"]["experiment_name"])
+            include_config: If True, include the full config under ``_config``;
+                otherwise only experiment_name/pipeline_mode. Default: False.
         """
         result = dict(self.metrics)
 
-        # Add metadata section
         result["_metadata"] = dict(self.metadata)
 
-        # Add config section
         if include_config:
             result["_config"] = self.config.to_dict(include_config=True)
         else:
-            # Minimal config info
             result["_config"] = {
                 "experiment_name": self.config.experiment_name,
                 "pipeline_mode": self.config.graph_template,
@@ -156,71 +89,41 @@ class EvaluationResults:
         return result
 
     def save(self, path: Union[str, Path], indent: int = 2) -> None:
-        """Save results to JSON file.
+        """Save results (with full config) to a JSON file.
 
         Args:
-            path: File path to save to. Parent directory will be created if needed.
-            indent: JSON indentation level for pretty printing. Default: 2.
-
-        Example:
-            >>> results.save("results/my_eval.json")
-            >>> results.save("results/compact.json", indent=None)  # Compact
+            path: File path to save to. Parent directory is created if needed.
+            indent: JSON indentation level. Default: 2.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save with full config
         data = self.to_dict(include_config=True)
 
         with open(path, "w") as f:
             json.dump(data, f, indent=indent)
 
     def __str__(self) -> str:
-        """Pretty print results for human-readable output.
-
-        Returns:
-            Formatted string with experiment info, metrics, and metadata.
-
-        Example:
-            >>> print(results)
-            Evaluation Results: my_experiment
-            ================================================================================
-            Pipeline Mode: asr_text_retrieval
-
-            Metrics:
-              MRR                 : 0.7523
-              WER                 : 12.34%
-              Recall@5            : 0.8912
-
-            Metadata:
-              num_samples         : 1000
-              duration_seconds    : 123.45
-        """
+        """Pretty print results: experiment info, metrics, and metadata."""
         lines = []
 
-        # Header
         exp_name = self.config.experiment_name or "Unknown"
         lines.append(f"Evaluation Results: {exp_name}")
         lines.append("=" * 80)
 
-        # Pipeline info
         pipeline_mode = self.config.graph_template
         lines.append(f"Pipeline Mode: {pipeline_mode}")
         lines.append("")
 
-        # Metrics section
         if self.metrics:
             lines.append("Metrics:")
             max_key_len = max(len(k) for k in self.metrics.keys())
 
             for key, value in sorted(self.metrics.items()):
                 if isinstance(value, float):
-                    # Format floats nicely
                     if "WER" in key or "CER" in key or "error" in key.lower():
-                        # Error rates as percentages
                         formatted_value = f"{value:.2%}"
                     elif value < 1.0:
-                        # Metrics like MRR, Recall, etc.
                         formatted_value = f"{value:.4f}"
                     else:
                         formatted_value = f"{value:.2f}"
@@ -230,7 +133,6 @@ class EvaluationResults:
                 lines.append(f"  {key:<{max_key_len}} : {formatted_value}")
             lines.append("")
 
-        # Metadata section
         if self.metadata:
             lines.append("Metadata:")
             max_key_len = max(len(k) for k in self.metadata.keys())
@@ -246,11 +148,7 @@ class EvaluationResults:
         return "\n".join(lines)
 
     def __repr__(self) -> str:
-        """Return detailed representation for debugging.
-
-        Returns:
-            String representation showing class name and key attributes.
-        """
+        """Return detailed representation for debugging."""
         return (
             f"EvaluationResults("
             f"experiment='{self.config.experiment_name}', "
@@ -259,31 +157,28 @@ class EvaluationResults:
         )
 
     def get_metric(self, name: str, default: Any = None) -> Any:
-        """Get a metric value by name with optional default.
-
-        Args:
-            name: Metric name (e.g., "MRR", "WER", "Recall@5").
-            default: Default value if metric not found. Default: None.
-
-        Returns:
-            Metric value or default if not found.
-
-        Example:
-            >>> mrr = results.get_metric("MRR", 0.0)
-            >>> recall = results.get_metric("Recall@10")
-        """
+        """Return the metric value for ``name`` (e.g. "MRR", "Recall@5"),
+        or ``default`` if absent."""
         return self.metrics.get(name, default)
 
-    def summary(self) -> str:
-        """Return one-line summary of key metrics.
-
-        Returns:
-            Compact string with essential metrics.
+    def to_dataframe(self):
+        """Tidy per-branch metric rows as a pandas ``DataFrame`` (C2): one row per
+        ``(branch, metric)`` with mean / ci_lower / ci_upper / n from the keyed ``report``
+        — the notebook-side sibling of ``evaluator export -f metrics-table``. Empty
+        DataFrame when the run carries no keyed report.
 
         Example:
-            >>> print(results.summary())
-            MRR: 0.7523, Recall@5: 0.8912, WER: 12.34%
+            >>> df = results.to_dataframe()
+            >>> df[df.metric == "recall@5"].set_index("branch")["mean"]
         """
+        import pandas as pd
+
+        from ..analysis.report_export import report_to_metrics_table
+
+        return pd.DataFrame(report_to_metrics_table(self.metrics))
+
+    def summary(self) -> str:
+        """Return a one-line summary: headline metrics first, then the rest."""
         key_metrics = []
 
         for metric in HEADLINE_METRICS:
@@ -297,7 +192,6 @@ class EvaluationResults:
                 else:
                     key_metrics.append(f"{metric}: {value}")
 
-        # Add any other metrics not in the headline list
         for metric, value in self.metrics.items():
             if metric not in HEADLINE_METRICS:
                 if isinstance(value, float):

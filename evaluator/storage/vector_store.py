@@ -128,10 +128,8 @@ class InMemoryVectorStore(VectorStore):
         save_path = Path(path)
         save_path.mkdir(parents=True, exist_ok=True)
 
-        # Save vectors
         np.save(save_path / "vectors.npy", self.vectors)
 
-        # Save payloads
         with open(save_path / "payloads.json", 'w') as f:
             json.dump(self.payloads, f, indent=2)
 
@@ -139,10 +137,8 @@ class InMemoryVectorStore(VectorStore):
         """Load vector store from disk."""
         load_path = Path(path)
 
-        # Load vectors
         self.vectors = np.load(load_path / "vectors.npy")
 
-        # Load payloads
         with open(load_path / "payloads.json", 'r') as f:
             self.payloads = json.load(f)
         self._verify_payload_count(self.vectors.shape[0], self.payloads, str(load_path))
@@ -349,15 +345,12 @@ class FaissGpuVectorStore(VectorStore):
         save_path = Path(path)
         save_path.mkdir(parents=True, exist_ok=True)
 
-        # Convert GPU index to CPU for saving
         cpu_index = faiss.index_gpu_to_cpu(self.index)
         faiss.write_index(cpu_index, str(save_path / "faiss.index"))
 
-        # Save payloads
         with open(save_path / "payloads.json", 'w') as f:
             json.dump(self.payloads, f, indent=2)
 
-        # Save metadata
         with open(save_path / "metadata.json", 'w') as f:
             json.dump({'dim': self.dim, 'gpu_id': self.gpu_id}, f)
 
@@ -365,17 +358,13 @@ class FaissGpuVectorStore(VectorStore):
         """Load FAISS index from disk and move to GPU."""
         load_path = Path(path)
 
-        # Load CPU index
         cpu_index = faiss.read_index(str(load_path / "faiss.index"))
 
-        # Move to GPU
         self.index = faiss.index_cpu_to_gpu(self.res, self.gpu_id, cpu_index)
 
-        # Load payloads
         with open(load_path / "payloads.json", 'r') as f:
             self.payloads = json.load(f)
 
-        # Load metadata
         with open(load_path / "metadata.json", 'r') as f:
             metadata = json.load(f)
             self.dim = metadata['dim']

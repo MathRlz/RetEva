@@ -39,7 +39,7 @@ def _collect_cache_stats(s: "Any") -> Optional[Dict[str, Any]]:
 
 def _llm_cost_summary() -> Optional[Dict[str, Any]]:
     """The run's accumulated LLM token/latency cost for the provenance block (T8)."""
-    from ...llm.cost import COST
+    from ...llm_client.cost import COST
 
     return COST.summary()
 
@@ -57,7 +57,7 @@ def _run_provenance(s: "Any", dropped_by_branch: Optional[Dict] = None):
     from ..provenance import build_provenance, dataset_content_fingerprint
 
     seed = getattr(getattr(s.config, "audio_synthesis", None), "seed", None)
-    return build_provenance(
+    prov = build_provenance(
         s.config,
         seed=seed,
         dataset=dataset_content_fingerprint(getattr(s, "dataset", None)),
@@ -69,7 +69,26 @@ def _run_provenance(s: "Any", dropped_by_branch: Optional[Dict] = None):
         cost=_llm_cost_summary(),
         offload=_offload_summary(s),
         models=_build_provenance(s),  # structured per-pipeline identity (F30/C6)
+        optimization_fallbacks=getattr(s, "optimization_fallbacks", 0) or None,
+        correction_fallbacks=getattr(s, "correction_fallbacks", 0) or None,
     )
+    flow = getattr(s, "data_flow", None)
+    if flow:
+        # A3: which producer/alternative actually fed each input port — the OneOf-priority +
+        # newest-published resolution is otherwise invisible in a saved run.
+        prov["data_flow"] = {nid: dict(ports) for nid, ports in sorted(flow.items())}
+        fired = [
+            f"{nid}.{key} ← {e['producer']}:{e['artifact']}"
+            for nid, ports in sorted(flow.items())
+            for key, e in sorted(ports.items())
+            if e.get("fallback")
+        ]
+        if fired:
+            logger.warning(
+                "data-flow fallbacks fired (a lower-priority producer served an input): %s",
+                "; ".join(fired),
+            )
+    return prov
 
 
 def _record_model_info(results: "Any", s: "Any") -> None:

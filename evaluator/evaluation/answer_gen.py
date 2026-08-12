@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..llm.client import LLMClient
+from ..llm_client.client import LLMClient
 
 logger = logging.getLogger(__name__)
 

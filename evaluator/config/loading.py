@@ -62,7 +62,7 @@ def _construct_subconfig(cls_: Any, data: Dict[str, Any], path: str) -> Any:
         raise
 
 
-def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> "Any":
+def build_from_dict(cls, config_dict: Dict[str, Any], *, validate: bool = True) -> "Any":
     """Create configuration from a dictionary.
 
     Args:
@@ -128,8 +128,13 @@ def build_from_dict(cls, config_dict: Dict[str, Any], validate: bool = True) -> 
         "timeout_s",
         "use_local_server",
         "local_server_url",
+        "seed",
     }
-    _llm_base = {k: v for k, v in vars(llm_config).items() if k in _llm_fields}
+    # A component config that does not declare a propagated field (e.g. an older one without
+    # `seed`) simply doesn't receive it — never a constructor error.
+    _llm_base = {
+        k: v for k, v in vars(llm_config).items() if k in _llm_fields
+    }
 
     def _merge_llm(comp_dict: dict) -> dict:
         merged = dict(_llm_base)
@@ -217,13 +222,36 @@ def build_from_yaml(cls, yaml_path: str, validate: bool = True) -> "Any":
     with open(yaml_path, "r") as f:
         config_dict = yaml.safe_load(f)
     if config_dict is None:
-        raise AttributeError("Empty configuration file.")
-    return cls.from_dict(to_legacy_dict(config_dict), validate=validate)
+        raise ConfigurationError("Empty configuration file.")
+    return cls.from_dict(
+        to_legacy_dict(_expand_env(config_dict)), validate=validate
+    )
 
 
-# Config sections addressable by the legacy underscore override notation. Matched
-# longest-prefix-first so "vector_db_k" resolves to the vector_db section (there is no
-# standalone "vector" section); a key matching no section is set at the top level.
+def _expand_env(value: Any) -> Any:
+    """Expand ``${VAR}`` / ``$VAR`` in every string of a loaded config tree.
+
+    Machine-specific absolute paths (dataset roots, model checkpoints) belong in the
+    environment, not in a committed config: a campaign config says
+    ``${APM_CHECKPOINT_DIR}/apm_whisper_jina.pt`` and runs anywhere the variable is set.
+    An UNSET variable is left verbatim (``os.path.expandvars`` semantics) so the
+    downstream path check reports the literal, un-substituted path — which names the
+    variable that was missing.
+    """
+    import os
+
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(v) for v in value]
+    return value
+
+
+# Config sections addressable by the legacy underscore override notation. Matched in
+# declaration order; "vector_db_k" resolves to the vector_db section simply because no
+# "vector" section exists. A key matching no section is set at the top level.
 _OVERRIDE_SECTIONS = (
     "audio_synthesis",
     "service_runtime",

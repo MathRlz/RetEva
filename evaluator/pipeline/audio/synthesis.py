@@ -126,25 +126,9 @@ class AudioSynthesizer:
 
     def _resample_if_needed(self, audio: np.ndarray, source_sr: int) -> np.ndarray:
         """Resample provider output to configured sample rate when required."""
-        target_sr = int(self.config.sample_rate)
-        if source_sr == target_sr:
-            return audio
-        try:
-            import librosa
-        except ImportError:
-            logger.warning(
-                "Provider output sample rate is %dHz but target is %dHz; "
-                "librosa not installed, audio will not be resampled.",
-                source_sr, target_sr,
-            )
-            return audio
-        try:
-            resampled = librosa.resample(audio, orig_sr=source_sr, target_sr=target_sr)
-            logger.debug("Resampled audio from %dHz to %dHz", source_sr, target_sr)
-            return np.asarray(resampled, dtype=np.float32)
-        except (ValueError, RuntimeError) as e:
-            logger.warning("Audio resampling failed (%d->%d): %s", source_sr, target_sr, e)
-            return audio
+        from ...utils.audio import resample_audio
+
+        return resample_audio(audio, source_sr, int(self.config.sample_rate))
 
     def log_cache_stats(self) -> None:
         """Log cache hit/miss summary."""

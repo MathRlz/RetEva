@@ -61,7 +61,8 @@ class TextEmbeddingPipeline(CacheMixin):
             embedding = self.model.encode([text])[0]
 
         if self.cache is not None:
-            self._store_cache(lambda: self.cache.set_embedding(text, model_name, embedding, model_version))  # type: ignore[union-attr]
+            self._store_cache(lambda: self.cache.set_embedding(  # type: ignore[union-attr]
+                text, model_name, embedding, model_version))
         return embedding
 
     def process_batch(

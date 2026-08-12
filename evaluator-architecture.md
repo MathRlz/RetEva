@@ -9,6 +9,14 @@ typed functions that transform artifacts; **metrics and aggregation are nodes to
 yet built · `⊘` reclassified won't-do / deferred (with rationale). Everything in this doc is
 `[impl]` unless tagged otherwise; the short list of open items lives in §13.
 
+**Scope.** Built for **spoken clinical QA evaluation** (the thesis domain): voice query →
+ASR → correction → retrieval/RAG over medical corpora, with safety-oriented metrics (CEER).
+The operator algebra and the registries are designed domain-general — and the extension
+points are real (per-family model registries, dataset ABCs, the corrector/metric
+registries) — but end-to-end
+validation today covers the spoken-clinical path; generality beyond it (image modality,
+non-medical benchmarks) is designed, not demonstrated.
+
 ```
  datasources ──artifacts──▶ transform nodes ──artifacts──▶ metric nodes ─item_scores─▶ aggregate
   (typed fields:            (asr, embed, tts,             (auto-injected where         (reduce +
@@ -19,7 +27,24 @@ yet built · `⊘` reclassified won't-do / deferred (with rationale). Everything
 
 This doc is the **single architecture reference** — all architecture detail (incl. the former
 DAG-execution doc) lives here, including the node-centric config schema (§10). Status of each
-area is tracked inline in §13 (the completed task-trackers were retired once their work landed).
+area is tracked inline in §13 (the completed task-trackers were retired once their work landed;
+their history lives in `docs/archive/ARCHITECTURE_TASKS.md`).
+
+## Quickstart
+
+```bash
+pip install -e .[dev]                                     # editable install + test deps
+python3 -m pytest -q                                      # unit suite — no models needed
+evaluator run --config configs/e2e_pubmed_qa_small.yaml   # real e2e (downloads Whisper + LaBSE)
+evaluator graph --config configs/e2e_pubmed_qa_small.yaml # print the DAG without running it
+```
+
+The report lands under the config's `experiment.output_dir` as JSON, next to a
+`…config_resolved.yaml` sidecar (the executed DAG). Inspect it from Python
+(`results.to_dataframe()`, §15.4), the web UI (`/ui` — leaderboard, Pareto, builder), or
+`evaluator export -f metrics-table`. A behavior-preserving change must reproduce the
+committed parity baselines byte-for-byte: `python3 m1c_check.py <config> baselines/<file>`
+(see `baselines/README.md`). Full authoring guide: §15.
 
 ---
 
@@ -51,9 +76,15 @@ area is tracked inline in §13 (the completed task-trackers were retired once th
 2. **Nodes are typed functions over artifacts.** A node declares the artifacts it consumes and
    produces; the executable handler is the function. Identity (`id`) is separate from type, so a
    type may appear many times (duplicate/parallel instances).
-3. **Edges are derived from data, not hand-wired.** Given an ordered node list, each node
-   auto-wires to the earlier nodes that produce its inputs. Parallel branches and merges fall out
-   of the data dependencies.
+3. **Edges are explicit, port-level, and part of the spec** `[impl]` (2026-07-09). Every config
+   edge names both ends:
+   `{from: <node>, output: <artifact>, to: <node>, input: <port>}`; a portless `{from, to}` adds
+   ordering only. Derivation survives solely as an **authoring assistant** (the builder's plumbing
+   derive + `evaluator graph --emit-edges`, which prints a ready-to-paste `edges:` block) — never
+   as a load-time fallback. Multiple edges into one input stay legal (fallback producers); the
+   runtime read (priority + published-fallback, §3) is unchanged. A multi-name (OneOf) port is
+   **type-open**: an edge may route any registered artifact of the same modality into it — the
+   declared chain is a default and a tiebreak, not a closed gate (§3, B2).
 4. **Metrics are nodes.** A metric node is `metric(*artifacts) → item_scores` (ground-truth is one
    *optional* input — reference-free metrics exist). Metric nodes are **auto-injected** wherever
    their declared inputs are present (every satisfiable metric lands in the report; the dataset's
@@ -64,9 +95,13 @@ area is tracked inline in §13 (the completed task-trackers were retired once th
 6. **One config, one core.** The full `EvaluationConfig` *is* the experiment; every entry point
    (CLI, webapi, API) runs the same execution core.
 7. **The graph is the spec.** What runs is the explicit node graph — it drives both pipeline
-   construction and handler behaviour. A config carries `graph.nodes` (+ optional `edges`/`branches`)
-   and nothing else graph-wise: there is no `graph.mode` template and no `features:` block (both are
-   rejected), no `pipeline_mode` runtime field. Every capability is a node; its settings ride on that
+   construction and handler behaviour. A config carries `graph.nodes` **+ `graph.edges`**
+   (required at load; + optional `branches`) and
+   nothing else graph-wise: there is no `graph.mode` template and no `features:` block (both are
+   rejected), no `pipeline_mode` runtime field. (One deliberate shim: a legacy `model.pipeline_mode`
+   key is still *accepted* at load and rewritten to a template hint —
+   `config/loading.py:build_from_dict` — kept because `api.py:quick_evaluate` builds on it.)
+   Every capability is a node; its settings ride on that
    node; the run label is *derived* from the node kinds (`label_from_graph`). Named templates survive
    only as a builder skeleton (`pipeline/graph/templates.py`), never referenced by a config.
 
@@ -125,7 +160,7 @@ so builder-authored graphs run through the standard multi-source loader unchange
 | query ↔ document-pair | a query and its relevant corpus docs (graded) | `relevant_docs` via `doc_id` `[impl]` |
 | query ↔ transcription | a spoken query and its spoken-GT text | `reference_transcription` `[impl]` |
 | query ↔ question | a query and the dataset's question text | `reference_text` `[impl]` |
-| patient ↔ history | a patient's prior medications + visits, grounding query correction | `patient_context` `[planned]` (C7) |
+| patient ↔ history | a patient's prior medications + visits, grounding query correction | `patient_context` — cut from scope (C7-c, 2026-08; design in `docs/archive/C7_GROUNDED_CORRECTION_PLAN.md`) |
 | corpus | the document collection (each doc = a typed record) | `[impl]` (text); multi-field/image `[planned]` |
 
 Both references are **published as graph artifacts** so metric nodes auto-pair the scored text
@@ -133,7 +168,7 @@ against the right one (§3/§7): `reference_text` (= `question_text`, by `datase
 retrieval-side reference; `reference_transcription` (the dataset's `transcription` field, by the
 `asr`/`audio_embedding` node) is the ASR-quality reference. The two coincide **only** on
 TTS-bridge datasets where the spoken text *is* the question — conflating them was the migration's
-semantic trap, now guarded by `tests/test_reference_semantics_parity.py`.
+semantic trap, now pinned by `tests/test_typed_port_routing.py` + `tests/test_run_graph_parity.py`.
 
 **Dataset types today** (`datasets/types.py`, `descriptor.py`) — capability flags
 (`requires_audio/text`, `supports_generation`, `evaluation_mode`, `compatible_pipeline_modes` — now
@@ -146,8 +181,8 @@ naming graph templates) drive validation + default metrics:
 | `text_query_retrieval` | `query_text` + `corpus` + `relevant_docs` | retrieval |
 | `multimodal_qa` | `query_text` + `corpus` + `relevant_docs` + `short_answers` | qa_retrieval |
 
-Builtins `[impl]`: `admed_voice`, `fleurs` (transcription); `local`, `huggingface` (audio
-retrieval); `pubmed_qa` (multimodal QA).
+Builtins `[impl]`: `admed_voice`, `fleurs`, `hani_medical` (transcription); `local`,
+`huggingface` (audio retrieval); `pubmed_qa` (multimodal QA).
 
 **TTS bridge** `[impl]`. Pipeline modes are audio-first; a text dataset with
 `supports_generation=True` synthesizes `query_audio` from its text at run time
@@ -155,7 +190,7 @@ retrieval); `pubmed_qa` (multimodal QA).
 
 **Multiple datasources in one graph** (corpus from A + questions from B):
 - A `dataset_source` node carries a `role`: `corpus` / `questions` / `both` (default). Role
-  narrows advertised outputs (`stage_graph.py:_effective_outputs`) so downstream nodes wire to
+  narrows advertised outputs (`pipeline/graph/registry.py:_effective_outputs`) so downstream nodes wire to
   the right source.
 - Config: a `datasets:` map (id → `{questions, corpus, role}`); a node references it via
   `params.dataset: <id>`.
@@ -185,9 +220,10 @@ reads via **bindings** — `(artifact_name, producer_id)` pairs resolved when th
 Per-producer keying lets two nodes produce the *same* artifact type without collision (the basis
 for duplicate nodes, multi-dataset, and multi-branch).
 
-Read semantics (`RunState.get_artifact`): for input `x`, scan this node's bound producers of
-`x` **newest→oldest** and return the first that actually published — so a skipped producer (e.g.
-fusion bailing) falls back to an earlier one.
+Read semantics: for input `x`, scan this node's bound producers of `x` **newest→oldest** and
+return the first that actually published — so a skipped producer (e.g. fusion bailing) falls
+back to an earlier one. `RunState.get_artifact` implements this for a single artifact name;
+`RunState.input` layers the `one_of` alternative resolution on top (see "Reading the bus").
 
 Consumers that chain (query-text variants, vector streams) read a `one_of(...)` of distinct
 names — the highest-priority alternative an upstream producer actually published — rather than
@@ -207,7 +243,7 @@ relying on newest-wins over one mutated name (see "consumption order" below).
 | `short_answers` | query↔answer (GT) | dataset_source |
 | `reference_text` | the dataset's question text (retrieval-side GT) | dataset_source |
 | `reference_transcription` | the spoken-transcription text (ASR-quality GT) | dataset_source (sole producer) |
-| `patient_context` | per-query patient record: prior meds + visits | dataset_source `[planned]` (C7) |
+| `patient_context` | per-query patient record: prior meds + visits | — cut from scope (C7-c, 2026-08) |
 | `correction_diff` | per-item raw→corrected record | query_correction |
 | `audio_query_vectors` / `text_query_vectors` | `V[s]` per-stream query embeddings | audio_embedding / text_embedding |
 | `fused_query_vectors` | `V[s]` embedding-level fused query | fusion |
@@ -216,19 +252,34 @@ relying on newest-wins over one mutated name (see "consumption order" below).
 | `vector_index` | searchable index `[s]` | vector_db |
 | `corpus_vectors` | `V[s]` embedded corpus (vectors + payloads) | corpus_embedding, corpus_merge |
 | `retrieved` | ranked `(payload, score)` | retrieval, rerank, mmr, threshold, result_fusion, multi_query_retrieval |
-| `generated_answers` | text | answer_gen |
+| `generated_answers` | text — per-query answer detail (question, generated + reference answer) | answer_gen |
 | `transcription_scores` / `retrieval_scores` / `answer_scores` / `judge_scores` | per-comparison summary | the typed metric nodes (`*_metrics`) / answer_judge |
+| `per_query_wer` / `per_query_cer` / `per_query_recall5` | per-item scores (keyed) the trace/judge/diagnostics consumers id-join | transcription_metrics / retrieval_metrics |
 | `query_traces` | per-query retrieval/answer trace | build_query_traces |
 | `report` | reduced result: scalars, CIs, cross-branch deltas + provenance | metrics / aggregate node |
 
 **Consumption order (no in-place mutation).** The query-text transforms each emit a DISTINCT
 name; consumers (text_embedding, retrieval, answer_gen, …) declare a `one_of(optimized,
-augmented, corrected, query_text)` and read the most-processed variant an upstream node
-published. Wiring restricts each node to the variants produced before it, so the same chain
-expresses every correction/optimization on/off combination. The retrieval vector input is
-likewise `one_of(fused, audio, text, query_vectors)`, so a bailing fusion falls back to the
-audio stream by construction. Because `query_text` is never overwritten, it is the
-un-rewritten ASR hypothesis — `wer`/`cer` score it directly (no `raw_query_text`).
+augmented, corrected, query_text)` port and read the most-processed variant an upstream node
+published. Which variants a node can see is decided by **the config's edges**: an input port
+may carry several edges, and a OneOf port is **type-open** — an edge may route any registered
+same-modality artifact into it (e.g. `optimized_query_text` into `query_correction`'s input
+for correction-after-optimization, or a non-chain artifact like `reference_transcription`
+into an embedder); plain single-name ports stay closed (their handlers may read by literal
+name). A port's bound candidates are ranked by **derivation**: a candidate produced from
+another bound candidate supersedes it (so in an inverted chain, `corrected` outranks the
+`optimized` it was made from — the fallback still works when the corrector bails); unrelated
+candidates (parallel streams) keep the declared-chain order, routed extras rank first among
+unrelated, and for the same artifact from several producers the LATER node in `graph.nodes`
+wins (node-list order is the tiebreak; YAML edge order is not semantic).
+The retrieval vector input is likewise `one_of(fused, audio, text, query_vectors)`, so a
+bailing fusion falls back to the audio stream — the fallback edge is visible in the config and
+the diagram (drawn faded). The **resolved** flow is recorded per run:
+`report.provenance.data_flow` names, per consumer port, the producer/alternative actually
+read, flags fired fallbacks (`fallback: true`), and a run warning lists them — so a saved
+report never leaves "which alternative actually ran" to the reader's simulation of the
+priority rules. Because `query_text` is never overwritten, it is the un-rewritten
+ASR hypothesis — `wer`/`cer` score it directly (no `raw_query_text`).
 
 **Ground-truth is first-class.** `relevant_docs` / `short_answers` / `reference_text` /
 `reference_transcription` are all published artifacts, so metric nodes (§7) auto-pair a scored
@@ -260,8 +311,12 @@ batch path** (embedders still receive/return arrays) while making identity expli
   shrinks; the count of dropped ids (per node) is recorded in the run provenance/`report` so a
   silently-smaller denominator is visible. (Retry/backoff is explicitly out of scope for now.)
 - **fan-out (cardinality up)** — augmentation / `multi_query` emit **new ids with lineage**:
-  `q42 → q42·aug0, q42·aug1`. The parent id is recoverable, so variants can later be rolled up
-  (mean / worst-case) or aligned across branches.
+  `q42 → q42·aug0, q42·aug1`. A variant scores against its lineage parent's GT
+  (`metric_registry.compute_metric` aligns with a parent fallback), and per-item scores are
+  **rolled up to parent level** before any reduction or pairing
+  (`aggregate.rollup_variants`; the top-level `variant_rollup: mean|min|max` config knob,
+  default mean) — variants of one item are correlated, so the parent is the cluster-safe
+  unit for CIs and paired deltas.
 - **join** — keyed consumers (the metric registry / `aggregate`) align two `ItemSet`s by id
   via `align` (not by position); a producer that published a subset still lines up.
 
@@ -270,22 +325,34 @@ batch path** (embedders still receive/return arrays) while making identity expli
 cross-branch deltas** (§8): two branches can only be compared per query because both carry the
 same `query_id`.
 
-**Reading the bus.** Three accessors on `RunState`: `get_artifact` returns the plain values
-(an `ItemSet` is unwrapped — positional consumers like embedders see arrays); `get_items`
-returns an `ItemSet` (a plain-list publish is wrapped with index ids, best-effort);
-`keyed_items` returns an `ItemSet` **only if the producer published true keyed identity** —
-this is the per-item-identity source (no positional wrap), and a node that needs ids takes
-them from the keyed artifact it reads (`ItemSet.ids` rides along).
+**Reading the bus.** Four accessors on `RunState`, a 2×2 of (single name vs `one_of`) ×
+(plain values vs keyed): `get_artifact(name)` returns the plain values for one artifact name
+(an `ItemSet` is unwrapped — positional consumers like embedders see arrays; raises without
+a default); `keyed_items(name)` returns an `ItemSet` **only if the producer published true
+keyed identity** — the per-item-identity source (a node that needs ids takes them from the
+keyed artifact it reads; a plain publish is never wrapped positionally, since index ids join
+nothing real). `input(key)` / `input_items(key)` are their `one_of`-resolving siblings for
+chained streams: they walk the port's ranked alternatives (`input_aliases`) and return the
+highest-priority candidate actually published, recording the winner in
+`provenance.data_flow`. All four resolve through the node's **declared bindings**; there is
+no bus-wide scan.
 
 **One bus.** The keyed `ctx`/`ItemSet` bus is the **single cross-node carrier** (it builds the
 report + powers branching); the former flat per-branch accumulators (`all_hypotheses`,
 `all_retrieved`, …) were retired by the staged M1 migration (2026-06 audit, parity-gated
-byte-identical). Only per-branch *control* attrs stay on `RunState` — `current_node`, the
-transiently-swapped pipelines, `query_opt_bypassed` — each scope-marked
+byte-identical), and the last per-item side channels — WER/CER/recall lists and the
+answer-detail map, which the trace/judge stages read *positionally* and which a branched
+run overwrote per branch — became keyed artifacts in 2026-07 (`per_query_wer`,
+`per_query_cer`, `per_query_recall5`, `generated_answers`; consumers `align` by id).
+Per-branch state on `RunState` is limited to *control* attrs — `current_node` + the four
+transiently-swapped pipelines — each scope-marked
 (`executor/state.py:per_branch_field_names` drives `_NodeView` isolation; an unclassified field
-fails a test). The migration's semantic trap (spoken *transcription* vs `question_text` as the
-WER reference) is resolved by the `reference_transcription` artifact and pinned by
-`tests/test_reference_semantics_parity.py`.
+fails a test). The rest of `RunState` (~45 fields total) is deliberately **shared run scope**:
+config, dataset/load info, the model pipelines, per-feature configs, graph-shape flags, and
+diagnostics sinks — a wide surface handlers read directly (§9). The migration's semantic trap
+(spoken *transcription* vs `question_text` as the WER reference) is resolved by the
+`reference_transcription` artifact and pinned by `tests/test_typed_port_routing.py` +
+`tests/test_run_graph_parity.py`.
 
 ---
 
@@ -306,7 +373,7 @@ V[s]=vector in embedding space `s`; dimension implied by the space):
 | `query_optimization` | `T → T` | pre-retrieval rewrite / HyDE (pure) → `optimized_query_text` | `[impl]` |
 | `query_refine` | `T × retrieved → T` | post-retrieval reformulation (rewrite-with-context / relevance_feedback / self_rag_critique) → `refined_query_text` | `[impl]` |
 | `multi_query_retrieval` | `T → retrieved` | RAG-fusion composite: expand → embed → retrieve → fuse (decompose / multi_query) | `[impl]` |
-| `query_correction` | `T → T` | post-ASR domain correction (rule / KB-fuzzy / LLM) + `correction_diff` | `[impl]` |
+| `query_correction` | `T → T` | post-ASR domain correction (rule / kb / llm / phonetic / clinical, registry-driven §11) + `correction_diff` | `[impl]` |
 | `augmenter` | `T → T` | robustness perturbation (ASR-homophone / dose-unit corruption, seeded) | `[impl]` |
 | `corpus_embedding` | `corpus → V[s]` | embed corpus docs (text, or audio via TTS) | `[impl]` |
 | `corpus_merge` | `V[s] × … → V[s]` | concatenate embedded corpora (set union; space/dim validated) | `[impl]` |
@@ -391,9 +458,10 @@ design therefore tags vector artifacts with their space and the graph validator 
 retrieval whose query and corpus vectors carry different `s`**. Consequently `image_embedding`
 only "drops into" existing retrieval when it shares the corpus space (a cross-modal model, e.g.
 CLIP-style) — it is *not* free polymorphism. The space id is **model-declared** (`embedding_space`;
-default unique per model, joint/cross-modal models share one) and the graph builder hard-fails a
+default unique per model, joint/cross-modal models share one) and the pre-flight hard-fails a
 retrieval whose query/corpus spaces differ (`models/embedding_space.py`,
-`validate_embedding_spaces` wired into `_run_core`).
+`validate_graph_embedding_spaces` — the per-node check in `evaluation/validation.py`,
+called from `run_pre_flight`).
 
 **Compatible-space registry + runtime guard** `[impl]`. Two *distinct* ids can be declared
 cross-comparable when a model puts both modalities in one geometry — `register_compatible_spaces` /
@@ -511,24 +579,37 @@ their sub-query count is runtime-variable so they cannot be static DAG nodes.
 context; methods `simple` / `chain_of_thought` / `multi_query`; `context_docs`,
 `context_max_chars`, prompt templates.
 
-**RAG-grounded entity correction** `[planned]` (C7). Beyond the rule / KB-fuzzy / LLM correctors
-(§4, C1), the medical `query_correction` is grounded in a knowledge base by retrieval, with
-**constrained decoding** — snap the ASR hypothesis to a *validated* entity, never free-generate
-(free generation risks hallucinating a non-existent drug). Two ordered stages:
-1. **Drug name.** A **phonetic** index (Soundex / Metaphone; ASR errors are phonetic, not semantic)
-   retrieves nearest valid names from a drug registry; the corrector picks *among the retrieved
-   candidates* — no out-of-registry invention.
-2. **Dose.** For the resolved drug, retrieve its admissible strengths/forms; reject infeasible
-   values (e.g. paracetamol `500 mcg` → `500 mg`), normalize units, range-check against the
-   therapeutic / max-daily dose. Stage order matters: the admissible-dose set depends on the drug.
+**Grounded clinical entity correction** (C7) — the vocabulary-grounded stages are `[impl]`
+(2026-07-15); the patient-context grounding was cut from scope (C7-c, 2026-08-05). Beyond the rule / KB-fuzzy / LLM
+correctors (§4, C1), two grounded correctors repair the clinically dangerous ASR error classes
+(`evaluation/query_correction.py`). Both are **constrained by construction**: a word only ever
+snaps to a term already in the vocabulary — no free generation, so no hallucinated drugs. Two
+ordered stages:
+1. **Drug name — `phonetic`.** A compact Metaphone-style code index over the canonical drug
+   vocabulary (`resources/drug_terms.json` ∪ the `kb_terms` channel; override via
+   `drug_terms_path`) retrieves same-*sounding* candidates; a word snaps only when it is
+   code-equal, within `phonetic_max_edits` residual edits (default 2) and unambiguous — a tie
+   between candidates skips the word. This reaches the sound-alike class (`ph`/`f`, soft `c`,
+   `z`/`s`, `x`/`ks`, vowel slips) the edit-distance `kb` corrector can't reach safely.
+2. **Dose — `clinical`.** Runs phonetic first (the snapped drug anchors the dose check), then
+   unit-slip repair against a plausible-dose table (`resources/drug_doses.json`, override via
+   `drug_doses_path`): when the stated dose is implausible in the stated unit and **exactly one**
+   metric-mass unit makes it plausible, the unit — never the number — is rewritten
+   (`levothyroxine 125 mg` → `125 mcg`); ambiguous, unknown-drug, and cross-family cases
+   (insulin `units`) are left alone.
 
-No confident candidate → the item is flagged for **human review**, not guessed (a clinical-safety
-requirement). Retrieval spans **two sources** — the general drug registry and the per-patient
-history (`patient_context`: prior meds + visits, §2/§3) — weighting the personalized source higher,
-since a drug or dose from a prior visit strongly disambiguates an unclear hypothesis. Evaluated as a
-branch beside the uncorrected and reference branches (§8), scored by **CEER** + **drug-dosage-safety**;
-the safety metric penalizes errors the correction **introduces** (a correct entity flipped to a wrong
-one) harder than ones it leaves, since a new error is clinically more dangerous than an existing one.
+**Constrained decode for the LLM corrector** `[impl]` (C7.5): `constrain_to_vocab: true`
+post-processes the `llm` corrector's output through the phonetic snap, so an LLM cannot invent an
+out-of-vocabulary drug (server-agnostic; grammar-constrained decoding proper is a deferred
+extension). The correction effect is measured by the **opt-in corrected metrics** (§7) and the
+branch-comparison config `configs/c7_correction_branches.yaml` (an uncorrected `asr` baseline +
+rule/kb/phonetic/clinical branches, paired deltas vs the baseline).
+
+The remaining C7 leg — grounding by **retrieval** over a per-patient source (`patient_context`),
+human-review flagging, and introduced-error-weighted safety scoring (C7-c / C7.3 / C7.4) — was
+**cut from scope** (2026-08-05): no available dataset carries patient history, and the C7.7 run
+showed the retrieval task saturated, so a grounding benefit is unmeasurable on this data. The
+design and the reasoning live in `docs/archive/C7_GROUNDED_CORRECTION_PLAN.md`.
 
 ---
 
@@ -550,7 +631,7 @@ needs: `register_metric(name, inputs=(scored_type, gt_type?), …)`. The builder
 and injects a metric node wherever its declared inputs are all present:
 
 ```
-query_text(asr hypothesis) + reference_text  ⇒  wer / cer / ceer   [transcription_metrics]
+query_text(asr hypothesis) + reference_transcription  ⇒  wer / cer / ceer   [transcription_metrics]
 retrieved        + relevant_docs   ⇒  recall@k, precision@k, mrr, ndcg, ap  [retrieval_metrics]
 generated_answers + short_answers  ⇒  rougeL, llm_judge
 retrieved        (no GT)           ⇒  score distribution, retrieval_failure_rate
@@ -561,9 +642,20 @@ The registry is what makes "auto-inject where appropriate" concrete — without 
 to match scored artifacts to metrics (`evaluation/metric_registry.py`, `register_metric` +
 `compute_metric(s)`).
 
+> The ASR metrics' registry entries declare `gt="reference_transcription"`, and the report
+> paths publish the spoken-transcription values into exactly that slot (the "M1a guard").
+> (Until 2026-07 the slot was misleadingly *named* `reference_text` while carrying the
+> transcription — renamed registry-locally in REMEDIATION B9; the bus artifacts
+> `reference_text` / `reference_transcription` (§2/§3) were always distinct and unaffected.)
+
 - The report computes **every metric whose inputs are satisfiable** (collect-all is the
   effective behavior of both report paths); the dataset's `evaluation_mode` set
   (`METRICS_BY_MODE`) defines which of them surface as the flat headline aliases.
+- A top-level **`metrics:` allowlist** (B1) preregisters the panel: when set, the run
+  computes EXACTLY those registry metrics — explicit naming bypasses `MetricSpec.opt_in`, a
+  name whose inputs the graph doesn't produce is skipped, and an unregistered name is a
+  validate-time `ConfigurationError` naming the registered set. Absent = collect-all
+  (byte-identical reports, m1c-safe).
 
 The registry-selected metrics run per branch (the aggregate scans the ctx per branch, computes
 the metric ItemSets, and reduces). **The registry is the single scalar source**: the flat
@@ -571,8 +663,8 @@ headline keys (`WER`/`MRR`/`Recall@k`/…) are **report-derived aliases** (`_der
 WER/CER gated to ASR modes). Because `query_text` is the IMMUTABLE ASR hypothesis (correction/
 optimization emit distinct names), `wer`/`cer` always measure ASR quality against
 `reference_transcription` — the former `raw_wer`/`raw_cer` (a separate raw snapshot) are
-subsumed. A "corrected WER" is now expressible by registering a metric that scores
-`corrected_query_text`. The metric computation is decomposed into typed comparison nodes
+subsumed. The corrected text is scored by the opt-in `corrected_*` metrics (below), which
+consume `corrected_query_text`. The metric computation is decomposed into typed comparison nodes
 (`transcription_metrics`, `retrieval_metrics`); the `metrics` node assembles the report from
 them. CEER (critical drug/dose/unit entity error) superseded the term-weighted `TW_WER` as the
 safety-relevant instrument. The
@@ -597,21 +689,37 @@ ranking       → ndcg, precision
 ```
 WER = (S + D + I) / N_ref           # word substitutions/deletions/insertions over ref length
 CER = same over characters          # scored on query_text (the IMMUTABLE ASR hypothesis)
-# a "corrected WER" is opt-in: register a metric scoring corrected_query_text vs reference
 CEER = critical-entity (drug/dose/unit) error rate   # metrics/clinical.py
+ceer_rx = CEER over units ∪ the drug vocabulary      # opt-in (C7): drug-name errors count too
+corrected_wer / corrected_cer / corrected_ceer / corrected_ceer_rx   # opt-in: scored on corrected_query_text
 embedding_alignment = mean cosine(audio_emb, text_emb)   # fused mode; computed by the fusion node
 ```
+
+The C7 metrics are **opt-in** via `query_correction.corrected_metrics: true` (default off —
+reports stay byte-identical, m1c-safe even for configs that already run correction). Mechanism:
+they are registered with `MetricSpec.opt_in`, and `compute_metrics` skips opt-in specs unless the
+handler passes the run's flag — a default run never even computes them. `ceer_rx` exists because
+default CEER counts dose units only, so a fixed drug name doesn't move it; it is identical across
+branches (it scores the shared ASR hypothesis) — the per-branch correction effect is
+`corrected_ceer_rx` vs `ceer_rx`.
 
 **Retrieval (ranking)** — score `retrieved` vs `relevant_docs`. `[impl]` (`metrics/ir.py`)
 ```
 Recall@k    = |retrieved_k ∩ rel| / |rel|
 Precision@k = |retrieved_k ∩ rel| / k
 MRR         = mean_i ( 1 / rank_i(first relevant) )
-DCG@k       = Σ_{j=1..k} (2^{grade_j} − 1) / log₂(j + 1)
-NDCG@k      = DCG@k / IDCG@k
+DCG@k       = Σ_{j=1..k} grade_j / log₂(j + 1)     # linear gain — the trec_eval ndcg_cut
+NDCG@k      = DCG@k / IDCG@k                       # definition (BEIR-comparable); binary
+                                                   # grades identical to 2^g − 1
 AP          = mean of Precision@j at each relevant rank j
 ```
-Aggregated at k ∈ {1,5,10} (`compute_ir_metrics`, `metrics/ir_aggregate.py`).
+Per-query functions in `metrics/ir.py` (`reciprocal_rank`, `precision_at_k`, `recall_at_k`,
+`ndcg_at_k`, `average_precision`), registered and aggregated at k ∈ {1,5,10} by
+`evaluation/metric_registry.py`. Every IR
+metric is cross-checked per query against `pytrec_eval` (the trec_eval reference bindings)
+to 1e-9 (`tests/test_ir_reference_impl.py`, dev-only dependency); CEER, which has no
+reference implementation, is pinned against a hand-computed table over its error classes
+(`tests/test_ceer_pins.py`).
 
 **Cross-stage (whole-pipeline)** — consume other metrics / multiple artifacts. `[impl]`
 (`metrics/diagnostics.py`, `analysis/`)
@@ -639,6 +747,10 @@ terms, `metrics/clinical.py`), per-branch WER/CER + wer↔recall correlation in 
 
 A terminal **`aggregate` / `report` node** consumes *all* `metric` artifacts in the graph and
 produces the final result object. `[impl]` (`_stage_aggregate` + `aggregate.py:build_report`).
+Like every other node it reads through its **declared bindings** (the branch-expander
+populates them from the collapsed graph) — never by scanning the bus, so two independent
+subgraphs stay independent and the windowed driver's lifetime analysis, which is
+binding-derived, sees every terminal read.
 
 - **Within a run**: collect every `metric` (whatever ran) → one result; persist + ingest into the
   leaderboard (`leaderboard.sqlite`, `[impl]`).
@@ -654,7 +766,9 @@ produces the final result object. `[impl]` (`_stage_aggregate` + `aggregate.py:b
   `GridSearch` to a tagged run-group); the leaderboard carries `experiment_group`/`tags` with a
   group filter so a sweep's runs query/pivot as one experiment; and the offline `compare`
   (`analysis/significance.py:compare_experiments`) applies **BH-FDR** across the metric panel +
-  flags **under-powered** comparisons (n < 20). A **cross-run Pareto frontier** over a run group
+  flags **under-powered** comparisons (n < 20). (A second, programmatic multi-run mechanism —
+  `services/matrix.py:run_evaluation_matrix`, a list of per-run config overrides sharing one
+  base — predates sweeps and remains the API-side comparison path.) A **cross-run Pareto frontier** over a run group
   `[impl]` surfaces the non-dominated trade-off set across objectives (`analysis/pareto.py`
   multi-objective non-domination; `ExperimentStore.group_runs`; `GET /api/leaderboard/pareto` +
   a server-rendered `/ui/pareto` scatter/table; objectives like `MRR:max,latency_ms:min`). A
@@ -667,14 +781,20 @@ The cross-branch comparison is the thesis claim, so the deltas are *statisticall
 means (`aggregate.py`, `analysis/significance.py`):
 - **Honest paired denominators** — `paired_delta` reports `n_paired` / `n_branch` / `n_baseline` /
   `n_only_branch` / `n_only_baseline` + `denominator_policy`, so a shrinking, asymmetric paired
-  sample can't hide behind a silent intersection.
+  sample can't hide behind a silent intersection. Beyond 5% one-sided exclusions the delta
+  additionally carries `drop_biased: true` and the run warns — items rarely drop at random
+  (hard items fail more), so past that point the intersection measures the easy survivors,
+  not the branch.
 - **Significance per delta** — a seeded bootstrap CI on the mean delta, a Wilcoxon signed-rank
   p-value, paired **Cohen's d**, and a **Benjamini–Hochberg FDR** q-value across the whole family of
   delta tests (so a panel of ΔRecall/ΔWER comparisons can't accumulate false positives).
 - **Reproducibility** — RNGs are seeded globally + per item at run start (`set_global_determinism`
   in `_run_core`; `item_seed(seed, query_id, node_id, variant)`), and the actual determinism state
   (seed, `PYTHONHASHSEED`, cuDNN / deterministic-algorithm flags — recorded honestly, GPU caveats
-  and all) lands in `report.provenance.determinism`. Same config + seed → identical metrics.
+  and all) lands in `report.provenance.determinism`. Same config + seed → identical metrics
+  **for local models**; LLM-backed nodes (judge, answer_gen, the `llm` corrector) call a server
+  whose sampling the harness cannot pin, so their outputs can vary across reruns even at
+  temperature 0 — reproducibility for judge/RAG metrics is per-server, not absolute.
 
 ```
             ┌─ branch A (ref)        → ir_metric ─┐
@@ -692,10 +812,20 @@ graph-build time; the executor stays a plain topological DAG (no new runtime).
    differs:
    ```yaml
    branches:
-     - { id: ref,  query_text: reference }          # oracle: use reference text
-     - { id: asr,  asr: whisper }                    # transcribe
-     - { id: corr, asr: whisper, query_correction: rules }   # transcribe + correct
+     - { id: ref,  asr: { oracle: true },  query_correction: { enabled: false } }  # oracle text
+     - { id: asr,  asr: whisper,           query_correction: { enabled: false } }  # transcribe
+     - { id: corr, asr: whisper, query_correction: { enabled: true, method: rule } }  # + correct
    ```
+
+   **What a branch may override.** An override entry is `{<node id>: <params-dict |
+   model-string>}` — a dict merges over that node's params, a bare string is shorthand for
+   `{model: <string>}`. Which params a handler honors per-branch is decided by **per-node
+   config resolution** (§9): the overlay keys are the feature's config dataclass's own
+   fields, resolved once before execution (`evaluation/node_config.py:resolve_node_config`
+   — the former hand-maintained `*_OVERLAY_KEYS` allowlists are gone;
+   `tests/test_overlay_allowlists.py` now pins that none reappears). A key that is not a
+   config field changes nothing at run time but still splits the branch at CSE
+   (under-share, never over-share).
 2. **Expand** — the builder emits namespaced node copies per branch (`asr@asr`, `asr@corr`, …).
 3. **Auto-CSE (common-subexpression elimination)** — nodes with identical
    `(type, params, resolved input producers)` collapse to one. So `dataset_source → asr@asr` and
@@ -710,7 +840,7 @@ graph-build time; the executor stays a plain topological DAG (no new runtime).
    shared ASR silently **runs twice** (lost reuse); conversely a too-loose key could **over-share**
    nodes that should differ (wrong results). CSE is applied bottom-up so that input-producer
    identity is itself already canonicalized when a node's key is computed
-   (`stage_graph.py:collapse_common_subexpressions`; `_freeze_params` resolves a node's declared
+   (`pipeline/graph/cse.py:collapse_common_subexpressions`; `_freeze_params` resolves a node's declared
    `param_defaults` before hashing, so explicit-vs-default twins collapse).
 4. **Provenance** — every node (hence every terminal `metric`) carries its branch label from the
    namespace, so `aggregate` knows which series belongs to which branch.
@@ -718,7 +848,10 @@ graph-build time; the executor stays a plain topological DAG (no new runtime).
 **Delta join (where keyed items §3 × branching meet).** `aggregate` groups each metric's `item_scores` by
 `query_id`, pivots by branch label, and computes **paired** deltas
 `ΔRecall@k(q) = Recall_corr(q) − Recall_asr(q)`, then reduces (mean + bootstrap CI). Pairing is
-only sound because every branch carries the same `query_id` (the `ItemSet`, §3).
+only sound because every branch carries the same `query_id` (the `ItemSet`, §3). Fan-out
+variants are rolled up to their lineage parent first (§3), so an augmented branch pairs with a
+clean baseline at parent granularity and the bootstrap resamples independent items, never
+correlated variants.
 
 **Results ownership.** `aggregate` owns computation and emits `report`; terminal
 `leaderboard_sink` / `tracking_sink` nodes consume `report` and persist it (mirrors `dataset_sink`),
@@ -730,8 +863,9 @@ framework's job is comparable numbers. It records (`evaluation/provenance.py:bui
 `config_hash`, resolved model identities + versions, the run `seed`, library/runtime versions (same
 data as the `RUNTIME` log line), per-node `timing`, the `git_commit`, and — added since — the
 `determinism` block (§8 statistical rigor), the `cache` hit/miss counts per stage (§14),
-`dropped_by_node` / `dropped_by_branch` (which items each node/branch dropped, §14), and the
-LLM `cost` block (tokens/latency per component, §14). Combined with the deterministic per-item
+`dropped_by_node` / `dropped_by_branch` (which items each node/branch dropped, §14), the
+LLM `cost` block (tokens/latency per component, §14), and `data_flow` (per consumer port,
+the producer actually read + fired fallbacks, §3). Combined with the deterministic per-item
 seeds, a rerun reproduces the same numbers.
 
 Two reproducibility fields are **content-addressed, not just config-addressed** (R1): `dataset` is
@@ -751,8 +885,9 @@ on-by-default (`set_global_determinism`, opt-out `EVALUATOR_NONDETERMINISM=1`).
 ## 9. Graph construction & execution
 
 Two registries: **node type** — `register_stage_node(stage, category=, domain=, model_field=,
-inputs=, outputs=, optional_inputs=)` (`pipeline/graph/`, the package re-exported via
-`pipeline/stage_graph.py`) declares the taxonomy class (§ Node taxonomy) + data contract;
+inputs=, outputs=, optional_inputs=)` (the `pipeline/graph/` package, re-exported via
+`pipeline/graph/__init__.py` + `pipeline/__init__.py`) declares the taxonomy class
+(§ Node taxonomy) + data contract;
 **handler** — `@register_stage_handler("name")`
 (`evaluation/stage_registry.py`; the handler functions live in `evaluation/handlers/`, one module
 per stage family) is the executable. A pre-flight check (`validate_graph_handlers`, run before
@@ -760,19 +895,31 @@ dispatch) fails a typo'd/unregistered node type before any heavy work.
 
 **Formal model.** A graph `G = (V, E)`. Each node `v` has type `τ(v)`, params `θ(v)`, effective
 outputs `Out*(v)` (role-scoped for `dataset_source`). For each input artifact `x` of `v`, the
-binding `β(v, x)` is the ordered list of earlier producers `p` with `x ∈ Out*(p)`. The blackboard
-`B` is a partial map `(id, name) ↦ value`. `read(v, x)` returns `B[(p*, x)]` for the newest
-`p ∈ β(v,x)` that has published `x`.
+binding `β(v, x)` is the ordered producer list reconstructed from the config's **declared edge
+set** (ordered by input port declaration, then per port by candidate **derivation** — a
+candidate produced from another bound candidate precedes it; unrelated candidates by OneOf
+declared order, routed extras first — then the producer's `graph.nodes` index). The
+blackboard `B` is a partial map `(id, name) ↦ value`. `read(v, x)` returns `B[(p*, x)]` for the
+newest `p ∈ β(v,x)` that has published `x` — unchanged either way.
 
-**Build** (`build_graph_from_spec`): auto-wire each node to producers of its required + present-
-optional inputs (`edges` add ordering not implied by data); `validate_graph_artifacts` checks
-every required input is satisfiable in topological order; `topological_levels()` yields
+**Build** (`build_graph_from_spec`): bind each node's ports from the config's explicit
+`graph.edges` — port-level `{from, output, to, input}` entries define bindings, the
+portless `{from, to}` form adds ordering only; a `graph.nodes` list without `edges:` is a load
+error (generate them with `evaluator graph --emit-edges`). `validate_graph_artifacts` checks
+every required input is satisfiable in topological order (plus that every edge
+names a real node, a real output, and a compatible input port); `topological_levels()` yields
 deterministic levels and detects cycles. `build_graph_for_config` wires the config's explicit
 `graph.nodes` (with `graph.branches` expanded + CSE-collapsed when present); its `mode` label is
 *derived* from the node kinds (`label_from_graph`). The run uses the sibling `build_run_graph` (same
 assembly tail, `_wire_mode_graph`), which sources its feature flags from the *built pipelines* + run
-features rather than the config. There is no `pipeline_mode` field — the graph is the spec.
-(`assemble_specs`/templates remain, but only as the builder skeleton — a config never selects one.)
+features rather than the config; the two builders produce **one identical
+graph** (`attach_fields` is display-only; §1.7 states the graph-is-the-spec principle —
+`assemble_specs`/templates remain only as the builder skeleton, the auto-wirer only as the
+authoring assistant behind the builder's plumbing derive and `--emit-edges`). One honesty
+note: a handful of runtime predicates (`handlers/_common.py`: `asr_ran`, `retrieval_ran`,
+`is_asr_text_retrieval`) derive from **pipeline presence** on `RunState` (the built
+`PipelineBundle`), not from the node set — equivalent in practice because the bundle is
+constructed for the same config, but it is a second derivation path, not the graph itself.
 
 **Execute** (`run_from_bundle` → `run_graph`, `evaluation/executor/`). `run_graph(dataset,
 context, *, service_provider, offload_policy, eval_config, load_info, graph_override)` takes an
@@ -800,16 +947,21 @@ sparse-tolerant, lineage-carrying.
 **Windowed streaming execution** `[impl]` (opt-in `streaming.window_size`, `executor/streaming.py`).
 For corpus-scale runs, a windowed driver replaces the whole-dataset pass: the **prelude** (source +
 corpus embed/index) runs once and is shared; the **query producers** (asr/embed/retrieve/refine) run
-per query window; only the finalize-bound per-item bus slots (`query_text`, `retrieved`) accumulate
+per query window; only the finalize-bound per-item bus slots (`query_text`, `retrieved`, …) accumulate
 across windows while the heavy query vectors are released each window (bounded RAM); the **finalize**
-nodes (per-item metrics + report + bootstrap CIs) run once over the full accumulated set. The phase
+nodes (per-item metrics + report + bootstrap CIs) run once over the full accumulated set. Which slots
+accumulate is derived from what the finalize nodes **bind**, which is why every terminal read must be
+declared (§8) — an undeclared bus read would survive only the last window. Window bounds are computed
+*after* the prelude, since the dataset loads in-graph (`dataset_source`). The phase
 split is taxonomy-driven (`partition_phases`); accumulation preserves dataset order, so the report —
 metrics and rankings — is byte-identical to a whole run (container-gated on real models; raw scores
 differ only ≤2e-7 from per-window embedding batch-shape). Checkpoint/resume is window-granular
 (`_setup_window_journal`: a crashed run resumes at the first incomplete window). **CPU-stage
 parallelism** `[impl]`: a `cpu_stage_executor` knob (sync/thread/process, `executor/cpu_parallel.py`)
 runs a stage's per-item map over an order-preserving, determinism-neutral `parallel_map` — wired
-into the WER/CER fold so far; default `sync` is the serial path.
+into the WER/CER fold, query correction, the text augmenter, query optimization
+(`handlers/query.py`) and audio augmentation (`handlers/audio.py`), each with a dedicated
+`tests/test_cpu_stage_*.py`; default `sync` is the serial path.
 
 **Node taxonomy** (`pipeline/graph/taxonomy.py`). Every node declares two orthogonal axes at
 registration (both required + validated): **category** — the data-flow *role*
@@ -868,6 +1020,16 @@ contract (the exact consumes → produces) is declared per operator in
 > `registry.py` to populate the node registry. `registry.py` re-exports the vocabulary, so
 > `from …graph.registry import ARTIFACT_CORPUS` (and the package `__init__` surface) is unchanged.
 
+**Per-node config resolution.** A feature node's effective config is resolved **once,
+before execution** (`evaluation/node_config.py:resolve_graph_node_configs`, called from the
+executor setup): the global sub-config with that node's params overlaid, keyed by node id
+on `RunState` and read via `resolved_config()`. The overlay keys are the config
+dataclass's **own fields** and the casts come from its **field types**, so a per-feature
+allowlist cannot drift out of sync (it no longer exists); the operator's discriminator
+fields never overlay, an unset param inherits, a globally-disabled feature stays disabled,
+and a node whose presence implies the feature forces `enabled=True`. This is what makes a
+branch override (`{id: corr, query_correction: {method: kb}}`) reach the handler.
+
 **Builder-settable params (two sources, by design).** The pipeline builder keeps node
 forms minimal: a registry-backed node shows only its **model select** (+ `device`) — every
 model-specific field appears *after* a model is chosen and is **declared by the model
@@ -886,9 +1048,9 @@ whisper tiny/base/small/medium/large-v2/large-v3 — and `CHOICES` for enumerate
 | `rerank` | `mode` (none/token_overlap/cross_encoder), `k`, `top_k`; model picker from the Reranker registry |
 | `mmr` | `k` (diversity re-selection; `mmr_lambda` from the global config) |
 | `threshold` | `k` (similarity-cutoff filter) |
-| `query_correction` | `enabled`, `method` (rule/kb/llm), `use_default_rules`, `kb_max_distance`, `kb_terms` (json), `replacements` (json) |
+| `query_correction` | `enabled`, `method` (rule/kb/llm/phonetic/clinical — choices read the Corrector registry), `use_default_rules`, `kb_max_distance`, `kb_terms` (json), `replacements` (json), `phonetic_max_edits`, `constrain_to_vocab`; YAML-only: `drug_terms_path`, `drug_doses_path`, and the run-level `corrected_metrics` (§7) |
 | `augmenter` | `homophones`, `unit_corruption` (bools), `char_swap_prob`, `max_edits` |
-| `query_optimization` | `method` (rewrite/hyde), `temperature`, `max_iterations` — transient overlay on the global config (branch A rewrite vs branch B HyDE) |
+| `query_optimization` | `method` (rewrite/hyde), `temperature`, `max_iterations` — resolved per node before execution (§9; branch A rewrite vs branch B HyDE) |
 | `query_refine` | `method` (rewrite_with_context/relevance_feedback/self_rag_critique), `context_top_k` |
 | `multi_query_retrieval` | `method` (multi_query/decompose), `combine_strategy` (rrf/weighted/union/intersection), `k` |
 
@@ -901,32 +1063,39 @@ not default form fields.
 
 **Graph templates** (the former pipeline *modes*) are assembled declaratively
 (`pipeline/graph/assembly.py:assemble_specs`, driven by a `FeatureSet` dataclass of ~14 capability
-flags — no hardcoded per-template node list). A template is now a **builder skeleton only**: a config
-never selects one. `pipeline/graph/templates.py` serves them to the web canvas and can emit an
+flags — no hardcoded per-template node list). A template is a **builder skeleton only** (§1.7):
+`pipeline/graph/templates.py` serves them to the web canvas and can emit an
 embeddable `{nodes, edges}` block via `template_graph_spec`, which the builder fills in; the saved
-config is an explicit `graph.nodes` list. The executed graph drives both building
-(`factory._graph_build_plan`) and handler behaviour — there is no `pipeline_mode`;
+config is an explicit `graph.nodes` list.
 `GraphTemplateSpec`/`resolve_graph_template` only validate a template name + its required model
 fields for the builder. The named templates are `asr_only`, `asr_text_retrieval`,
 `audio_emb_retrieval`, `audio_text_retrieval`; feature flags slot in the optional nodes:
 `tts`, `augment_audio`, `query_correction`, `query_optimization`, `query_refine`,
 `multi_query_retrieval`, `rerank`/`mmr`/`threshold`, `fusion`/`result_fusion`,
 `embedding_alignment_metrics`, `answer_gen`/`answer_metrics`, `build_query_traces`,
-`answer_judge`, `dataset_sink`. Preview: `--print_graph`, `/api/graph/preview`, `/ui/graph`.
+`answer_judge`, `dataset_sink`. Preview: `--print_graph`, `/ui/graph`.
 
 **Composable / iterative RAG.** A RAG flow is a sequence of pure nodes — improve the query →
 embed → retrieve → reformulate on the retrieved docs → retrieve again. The loop is a strict
 DAG, so it is **unrolled** into distinct instances rather than cycled: the config lists the hops
 explicitly — `text_embedding@h1, retrieval@h1, query_refine@h1, text_embedding@h2,
 …, retrieval@hN` (the builder-skeleton path derives the same list from `rag.rounds`).
-No per-hop artifact names are needed — `_wire_nodes` binds each instance
-only to **prior** producers and the `one_of` chains read the highest-priority *published*
-variant, so hop `k`'s embedder automatically picks `refine@h(k-1)`'s `refined_query_text` and
-hop `k`'s retrieval picks its own hop's vectors. One hop is byte-identical to a single
+No per-hop artifact names are needed — each hop's edges route
+`refine@h(k-1).refined_query_text → text_embedding@hk` and `text_embedding@hk → retrieval@hk`
+explicitly, and the
+`one_of` priority still lets hop `k` fall back to the base query when a refine published nothing. One hop is byte-identical to a single
 pass. The RAG-fusion fan-out (`decompose`/`multi_query`) — whose sub-query count is
 runtime-variable and so cannot be static nodes — is the one explicit composite,
 `multi_query_retrieval` (`query_text → retrieved`); it replaces the old in-handler
 `query_opt_bypassed` short-circuit.
+
+**The static-DAG boundary.** What runs is fixed at build time. Control flow that changes the
+graph *shape* at run time — self-RAG-until-confident, adaptive hop counts, agentic tool
+loops — is not expressible as nodes, and dynamic graph execution is deliberately out of
+scope. The sanctioned escape hatch is a **composite node** wrapping the runtime-variable
+subflow behind a fixed artifact contract (`multi_query_retrieval` is the pattern); the cost
+is that the wrapped flow is opaque to the DAG surfaces (diagram, CSE, per-node provenance)
+— use it for genuinely runtime-variable subflows only, never to hide a fixed pipeline.
 
 ---
 
@@ -944,6 +1113,15 @@ datasets:                                   # multi-source; or single `dataset:`
 graph:
   nodes: [dataset_source, corpus_embedding, vector_db, asr, query_correction,  # the explicit spec
           text_embedding, retrieval, answer_gen, answer_metrics, metrics, finalize]
+  edges:                                    # port-level: output → input, per artifact
+    - { from: dataset_source, output: corpus,      to: corpus_embedding, input: corpus }
+    - { from: corpus_embedding, output: corpus_vectors, to: vector_db,   input: corpus_vectors }
+    - { from: asr, output: query_text, to: query_correction, input: query_text }
+    - { from: query_correction, output: corrected_query_text, to: text_embedding, input: query_text }
+    - { from: asr, output: query_text, to: text_embedding, input: query_text }   # fallback (correction off)
+    - { from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors }
+    - { from: vector_db, output: vector_index, to: retrieval, input: vector_index }
+    # … (GT side-channels + metric inputs; `evaluator graph --emit-edges` generates the block)
   branches:                                 # expand+CSE (§8); each overrides only diffs
     - { id: ref,  asr: { oracle: true },  query_correction: { enabled: false } }
     - { id: asr,  asr: whisper,           query_correction: { enabled: false } }
@@ -959,21 +1137,21 @@ runtime: { cache: { enabled: true }, tracking: { backend: mlflow }, parallel_ena
 Config surface `[impl]`: `augmenter`, `query_correction`, and the `aggregate` node are expressed as
 graph/branch nodes with `params`;
 `parallel_enabled` turns on intra-level branch concurrency (§14). **Unknown/misspelled keys are
-rejected** with a path-named `ConfigurationError` before any heavy work (§14). Sub-configs
+rejected** with a path-named `ConfigurationError` before any heavy work (§14) — with one
+deliberate exception: an unknown **top-level** key is passed through as legacy-style config
+(`graph_config.py:to_legacy_dict` escape hatch, kept for partial migration / power users);
+sub-config keys and `graph:`/`nodes:`/`edges:` content are strictly rejected. Sub-configs
 (`config/*.py`): `data`, `model`, `vector_db`, `cache`, `logging`, `tracking`, `service_runtime`,
-`llm`(+`llm_server`), `dataset_sink`, and features (`judge`, `answer_generation`,
-`query_optimization`, `query_correction`, `embedding_fusion`, `audio_synthesis`,
-`audio_augmentation`, `device_pool`).
+`streaming`, `rag`, `llm_backend`(+`llm_server`), `dataset_sink`, and features (`judge`,
+`answer_generation`, `query_optimization`, `query_correction`, `embedding_fusion`,
+`audio_synthesis`, `audio_augmentation`, `device_pool`).
 
 ---
 
 ## 11. Models & registries
 
 Models register via decorators into five `ModelRegistry` instances (`models/registry.py`);
-selection is by config string. **Third-party plugins** `[impl]`: each registry's first-lookup hook
-also runs `importlib.metadata` entry-point discovery (`evaluator/plugins.py`, groups
-`evaluator.models` / `nodes` / `handlers` / `metrics` / `datasets`), so an external package registers
-a model/node/metric/dataset without editing core (no-op when none are installed).
+selection is by config string, and each family module imports lazily on first lookup.
 
 | Registry | Decorator | Registered types |
 |----------|-----------|------------------|
@@ -981,7 +1159,7 @@ a model/node/metric/dataset without editing core (no-op when none are installed)
 | TextEmbedding | `@register_text_embedding_model` | `labse`, `jina_v4`, `bge_m3`, `clip`, `nemotron`, `sonar` |
 | AudioEmbedding | `@register_audio_embedding_model` | `attention_pool`, `attention_pool_m4t`, `clap_style`, `hubert`, `wavlm`, `sonar_speech` |
 | Reranker | `@register_reranker_model` | `cross_encoder` |
-| TTS | `@register_tts_model` | `piper`, `xtts_v2`, `m4t`/`m4t_v2`, `mms`, `seamless_m4t` |
+| TTS | `@register_tts_model` | `piper`, `xtts_v2`, `m4t`, `mms`, `seamless_m4t` |
 
 **Model-author param declaration.** A model's inner `Params` dataclass is the single
 source of its tunable surface: field defaults, `SIZES` (size name → checkpoint; becomes
@@ -996,10 +1174,13 @@ from a one-sample GPU memory delta instead of the static `batch_size` (`devices/
 warm_up_batch_size`, opt-in, no-op on CPU) `[impl]` (1b).
 
 The `query_correction` correctors live in a **Corrector registry**
-(`evaluation/query_correction.py`: `@register_corrector("rule"|"kb"|"llm")`, a corrector is
-`(texts, config, client?) → corrected texts`); the node's `method` choices and
+(`evaluation/query_correction.py`: `@register_corrector("rule"|"kb"|"llm"|"phonetic"|"clinical")`,
+a corrector is `(texts, config, client?) → corrected texts`); the node's `method` choices and
 `QueryCorrectionConfig` validation both read the registry, so a custom corrector is valid
-config + a builder choice the moment it registers — no core edit (C7 groundwork). An **ImageEmbedding registry** (`I→V`) is `[planned]` (image modality).
+config + a builder choice the moment it registers — no core edit (proven by C7: phonetic and
+clinical landed as pure registrations). A drift-pin test set (`tests/test_phonetic_corrector.py`)
+keeps registry ↔ builder choices ↔ config fields in sync (branch overrides resolve through
+per-node config resolution, §9). An **ImageEmbedding registry** (`I→V`) is `[planned]` (image modality).
 LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`,
 `config/llm_backend.py`, `config/llm_server.py`); per-component token/latency cost is metered (§14).
 
@@ -1022,12 +1203,30 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
   stage/run re-acquires it with a CPU→device move, not a full reload; offload events recorded in
   `report.provenance.offload`). `devices/capability.py:usable_gpu_indices` filters CUDA
   devices whose arch is absent from `torch.cuda.get_arch_list()` (AMD iGPUs / unbuilt `sm_XX`).
-  TTS runs + offloads before embedders load (no co-resident native runtimes).
+  A configured `device_pool` allocates model families to GPUs via `devices/pool.py:GPUPool`
+  (one builder, `pool_from_config`) with exactly two strategies: **manual** when
+  `model_device_overrides` maps families to devices, **memory-aware** (most free memory)
+  otherwise. TTS runs + offloads before embedders load (no co-resident native runtimes).
+- **CLI** (`cli/main.py`, 13 subcommands): `run`, `graph` (preview / `--emit-edges` /
+  `--emit-metrics`), `presets`, `datasets`, `cache`, `leaderboard`, `sweep`, `compare`,
+  `export`, `replay`, `branch-report`, `benchmark`, `gpu`.
+- **Model benchmarking** (`benchmarks/`, `evaluator benchmark`): standalone latency/memory
+  benchmarking of registered models + retrieval pipelines (`model_benchmark.py` +
+  `timer.py:PerformanceStats`), separate from the evaluation DAG — a hardware-fit tool,
+  not a metric source.
+- **Failure analysis** (`analysis/errors.py` + `error_report.py`, ~500 LOC): word-level ASR
+  error breakdowns, retrieval-failure categorization (ASR-caused vs embedding vs
+  not-in-corpus), and the per-run error report the `branch-report` CLI + `categorize_failures`
+  diagnostics build on (§7 cross-stage).
 - **WebAPI & UI** (`webapi/`): FastAPI + routers; server-rendered Jinja2 + htmx at `/ui`
-  (Plotly from CDN). Endpoints: config/options/schema/presets, `/api/models…`, `/api/datasets…`,
-  `/api/graph/preview`, jobs (subprocess-run), `/api/leaderboard`, `/api/tts/preview`. Visual
+  (Plotly vendored at `webapi/static/plotly-basic-2.35.2.min.js`; htmx from CDN). Endpoints:
+  config schema, `/api/models…`, `/api/datasets…`,
+  job submission (subprocess-run; status/progress via `/ui`), `/api/leaderboard`. Visual
   builder `/ui/builder` (Drawflow, no build step) + `/api/graph/nodes` (catalogue) +
-  `/api/graph/build` (validate canvas → levels). The builder is **registry-driven end to
+  `/api/graph/node-form` (per-node form) + `/ui/validate-graph` / `/ui/validate-builder`
+  (non-blocking canvas validation) + `/ui/config-preview` (canvas → config YAML) +
+  saved-graph persistence (`webapi/graph_store.py`; `/api/graphs` list/save/load/delete
+  CRUD, so builder work survives a reload). The builder is **registry-driven end to
   end**: node ports are labeled with their artifact names (optional inputs marked), and each
   node's param form offers its model choices from `/api/models` plus that model's `Params`
   schema (sizes/choices/defaults via `/api/models/{family}/{type}/params`) — no model list or
@@ -1072,8 +1271,10 @@ spine (embedders, vector_db, retrieval, GT inputs) is all visible + wireable. (T
 meaningful nodes verbatim (so per-node models survive — the alternative, folding them into shared
 config fields, collapsed the embedding-space-mismatch invariant) and **appends** the structural
 plumbing that `assemble_specs(mode, inferred_features)` would add (`_complete_with_plumbing` +
-`_infer_features`, deduped by `node_kind`). Appended nodes carry no edges and auto-wire by data-flow
-(`build_graph_from_spec`), so the canvas graph runs as the full, byte-identical execution DAG. The
+`_infer_features`, deduped by `node_kind`). The derive step also **emits the appended nodes'
+edges** via the same authoring wirer the CLI `--emit-edges` generator uses, so the canvas graph runs as the full,
+byte-identical execution DAG. The canvas connections the user draws ARE the meaningful edges —
+export keeps every one of them. The
 read-only preview defaults to the simplified graph with a power-user "View full DAG" toggle.
 
 **Config & Run** (`/ui/config`, `ui/config.py`). Choose a saved config (`get_preset`) → its pipeline
@@ -1113,7 +1314,7 @@ fixing the nodes and re-validating. The run path still hard-validates.
 
 | Concern | File |
 |---------|------|
-| Node types + sockets, artifact auto-wiring (`build_graph_from_spec`), validation | `pipeline/graph/` (re-exported via `pipeline/stage_graph.py`) |
+| Node types + sockets, edge binding (`build_graph_from_spec`; auto-wiring survives as the authoring assistant), validation | `pipeline/graph/` |
 | Node taxonomy (category/domain axes + validation) | `pipeline/graph/taxonomy.py` |
 | Declarative graph-template assembly (`FeatureSet` → node spec list) | `pipeline/graph/assembly.py` |
 | Graph templates (former modes) + spec validation | `pipeline/graph/templates.py`, `graph/modes.py` |
@@ -1138,24 +1339,16 @@ fixing the nodes and re-validating. The run path still hard-validates.
 | Item | Status |
 |------|--------|
 | Image modality: `image_embedding` node + ImageEmbedding registry + n-ary fusion | `[planned]` (revisited when a 3rd modality lands, §4/§6) |
-| ~~T1: corpus as doc_id-keyed ItemSet~~ ~~T2: corpus-side transforms~~ | done (2026-06-12, §4.1) |
-| ~~T3/P4: query-set union + audio-ref bus + augment_audio brick~~ | done (2026-06-12, §4.1) |
-| ~~T4: precomputed-vector dataset columns~~ | done (2026-06-12, §4.1) |
-| ~~Flip default modes to the corpus split~~ | done (2026-06-12); parity baselines in amazing_curie need one regeneration |
-| RAG-grounded entity correction (phonetic drug-name → dose validation, `patient_context` retrieval, constrained decode) | `[planned]` (C7, §6) |
-| ~~Corrector registry~~ | done (2026-06-12, §11) |
-| ~~Dataset loading + TTS as graph nodes~~ — both **done**: TTS is the in-graph `tts` node, and dataset *loading* is now owned by the `dataset_source` node (`handlers/source.py:_ensure_dataset_loaded`; the run is exactly the DAG, no pre-graph load — only config validation stays pre-graph) | `[impl]` (2026-06-18, §2) |
-| Pareto / visual cross-run leaderboard views | `[impl]` (2026-06-17, Roadmap 4a): `analysis/pareto.py` (multi-objective non-domination), `ExperimentStore.group_runs` / `experiment_groups`, `GET /api/leaderboard/pareto` (objectives like `MRR:max,latency_ms:min`), and a server-rendered `/ui/pareto` view (frontier scatter + tagged table, `templates/_pareto.html`) on the Results page. A sweep-submit form remains. |
-| Streaming / out-of-core evaluation (windowed driver + off-RAM corpus/index) | 3a windowed query-side driver `[impl]` (2026-06-17, opt-in `streaming.window_size`): prelude (source + corpus index) runs once, the query producers (asr/embed/retrieve/refine) run per window, only the finalize-bound per-item slots (`query_text`, `retrieved`) accumulate while query vectors are released per window, and the metric/report/CI nodes run once over the full set. Mock equivalence test proves windowed == whole report (incl. bootstrap CIs) for window sizes 1–4; window-granular checkpoint/resume landed (`_setup_window_journal` — a crashed run resumes at the first incomplete window, re-running the cache-fast prelude and restoring the accumulator; a resume-after-crash test reproduces the full report). **Container m1c gate PASSED (2026-06-17, `amazing_curie`, real models):** on `e2e_pubmed_qa_small`, a windowed run (`--streaming_window_size 2`) reproduces the whole run's **metrics and rankings byte-for-byte** (MRR/MAP/Recall/NDCG/WER/CER + per-query doc order); the only divergence is ≤2.1e-7 in raw similarity scores, because the windowed run embeds fewer query texts per call (a different matmul shape → oneDNN float round-off — `data.batch_size` alone has 0.0 effect, confirming it's the per-window embedding-call size, not a logic difference). Intra-window parallelism remains. 3b off-RAM corpus/index: first increment `[impl]` (2026-06-17) — `vector_db.type: faiss_mmap` (`storage/vector_store.py:FaissMmapVectorStore`) memory-maps the FAISS index + fetches payloads by id from a Parquet store (`storage/payload_store.py:ParquetPayloadStore`, one row group resident), so neither the index nor the corpus is bounded by one box's RAM; search is byte-identical to `faiss` (container gate: faiss_mmap == faiss full report, sole diff the store-name echo). IVF on-disk indexes for huge corpora + a remote HTTP backend remain. |
-| ~~Typed embedding spaces~~ (compatible-space registry + runtime guard, 2b, §4.1) · ~~composable retrieval operators~~ (`refine_ops`, 2a, §6) · ~~plugin entry-points~~ (`evaluator/plugins.py`, 1c, §11) | `[impl]` (2026-06-17) |
-| ~~LRU+TTL model cache + soft-CPU offload~~ (`on_finish_soft_cpu`, 2c, §12) · ~~quantization knob~~ (1a, §11) · ~~warm-up batch sizing~~ (1b, §11) | `[impl]` (2026-06-17). Async CPU stages (4b, §9) `[impl]`: the order-preserving, determinism-neutral `parallel_map` primitive + `cpu_stage_executor` knob (sync/thread/process), now wired into the per-item WER/CER map (`handlers/metrics.py:_asr_item_scores`, the first GIL-bound stage) — a mock-equivalence test proves thread/process give a byte-identical report to the default sync, and the container gate confirms `--cpu_stage_executor process` == sync byte-for-byte (full report incl. scores + CIs) on the real e2e. Wiring the remaining stages (correction/augmentation) follows the same picklable-pure-fn pattern. |
-| ~~MLflow/W&B export bridge~~ (`analysis/tracking_export.py`, 1d, §8) · ~~item replay by query id~~ (`evaluator replay`, 2d, §14) | `[impl]` (2026-06-17) |
-| ~~APM weight loading + whiten/ABTT correctness~~ (`models/a2e/attention_pool.py`, `postprocessing.py`, §4.1) | `[impl]` (2026-06-17): the encoder is loaded from the checkpoint's `audio_enc.*` so it matches training (size mismatch → loud error), a missing pooling/projection weight raises instead of silently using random init, and ABTT is L2-normalized to match the training transform (whitening is not). Verified against `apm_new/apm` + an end-to-end load on a real whisper-large encoder in `amazing_curie`. |
-| ~~Simplified authoring UI (UI-graph ↔ execution-DAG split): meaningful-graph builder (full-width canvas, dropdown palette), Config&Run editable per-node forms, shared `node_form.js`, non-blocking `collect_problems` validate~~ — §12.1 | `[impl]` (2026-06-23): authoring shows only meaningful ops; the structural plumbing is derived at build (`graph_spec_to_config_dict`), byte-parity unchanged |
+| C7 patient-context grounding — `patient_context` artifact + retrieval-grounded corrector, human-review flagging, introduced-error-weighted safety scoring | ✂ cut from scope (C7-c / C7.3 / C7.4, 2026-08-05; §6) — no dataset carries patient history and C7.7 showed the retrieval task saturated; design archived in `docs/archive/C7_GROUNDED_CORRECTION_PLAN.md` |
+| Streaming 3b remainders: IVF on-disk indexes for huge corpora + a remote HTTP backend | `[planned]` (§9; the windowed driver + `faiss_mmap` are `[impl]`) |
+| Cross-run surface remainder: a sweep-submit web form | `[planned]` (§8) |
 | Per-node offload of branch models | `⊘ deferred` (memory opt) |
 
-The completed task-trackers and audit docs that drove the `[impl]` work have been retired
-(their history is in git).
+Completed roadmap rows (T1–T4, explicit edges, grounded correction, streaming 3a, the
+2026-06 operability wave, APM correctness, simplified UI, …) live in
+`docs/archive/ARCHITECTURE_TASKS.md` § "Completed roadmap history" — this table tracks only what is
+genuinely open. The completed task-trackers and audit docs that drove the `[impl]` work
+have been retired (their history is in git).
 
 ---
 
@@ -1168,14 +1361,14 @@ statistical rigor on the deltas (§8), the following operability layer is in pla
 |---------|------|-------|
 | **Per-item failure isolation + attribution** | One bad item does not abort the run — embed/retrieval drop the failing id (log + placeholder that keeps batch shape), the keyed report excludes it, `report.provenance.dropped_by_node` records which node dropped which ids, and `report.provenance.failure_analysis` (present only on drops) gives the *why* — per-node counts, top error types, examples (R7) | `evaluation/item_isolation.py` (`DropSink.failure_summary`, `isolate_batch`) |
 | **Live, machine-readable progress** | Node-lifecycle events stream to a callback + JSONL (`EVALUATOR_PROGRESS_FILE`); the typed `ProgressEvent` dataclass is the stable contract external dashboards consume. Opt-in `EVALUATOR_DUMP_ARTIFACTS=node,…` dumps a node's published ItemSets to JSONL for mid-run inspection (R7). `evaluator replay --query-id q42` re-runs a single item through the full graph (corpus kept whole) with that dump hook + a printed per-node trace — per-item seeding makes the replay reproduce the original run | `evaluation/progress.py` (`ProgressEvent`, `ProgressSink`), `evaluation/artifact_dump.py`, `cli/replay.py` |
-| **Tidy result export** | The nested report flattens to a stable metrics table (`branch,metric,mean,ci,n`) + per-query trace export (CSV/JSONL/Parquet); same shapes via CLI `evaluator export -f metrics-table\|traces` and `POST /api/report/metrics-table` (§6) | `analysis/report_export.py` |
+| **Tidy result export** | The nested report flattens to a stable metrics table (`branch,metric,mean,ci,n`) + per-query trace export (CSV/JSONL/Parquet); same shapes via CLI `evaluator export -f metrics-table\|traces` and `POST /api/report/metrics-table` (§8) | `analysis/report_export.py` |
 | **Vector-index integrity** | A reloaded index whose payload sidecar count mismatches the vector count fails loudly at load (`_verify_payload_count`), and a stale per-hit index is dropped+logged at search time (the H3 guard) | `storage/vector_store.py` |
 | **Config validation** | An unknown/misspelled key raises a path-named `ConfigurationError` (`model.asr_modal_type`) before any heavy work — no silent default → wrong experiment | `config/loading.py:_construct_subconfig`, `graph_config.to_legacy_dict` |
 | **Cache correctness + portability** | Model **version** folded into the cache keys (stale weights under the same name invalidate); paths stored **cache-dir-relative** (shareable across machines/containers); per-stage **hit/miss** in `report.provenance.cache` | `storage/cache_keys.py`, `storage/cache/` (pkg), `utils/model_version.py` |
 | **Intra-level parallel execution** | Independent same-level nodes (the ref/asr/corr branches) run concurrently when `parallel_enabled` — each on a private `_NodeView` whose isolation set derives from the RunState scope markers (§3), serialized per device (no single-GPU contention). The DAG executor is the single in-process parallel path; single-branch stays serial | `evaluation/executor/engine.py:_execute_stage_graph` + `executor/views.py:_NodeView` / `executor/parallel.py` |
 | **Checkpoint / resume** | Crash at node 8/12 does not recompute everything — the resumable state (ctx bus + control attrs) is snapshotted at each **level** boundary (keyed by config+graph) and a matching rerun resumes at the first incomplete level | `evaluation/run_journal.py` |
 | **OOM-resilient batching** | An oversized batch halves-and-retries on CUDA OOM instead of crashing (down to one item, then a real capacity error); `suggest_batch_size(free_gb, per_item_gb)` additionally *estimates* a safe batch from live free memory (a one-sample warm-up feeds `per_item_gb`) rather than discovering it by failing (§8) | `devices/memory.py:run_with_oom_backoff`, `suggest_batch_size` |
-| **LLM cost** | Per-component token + latency accounting (judge / answer_gen / query_correction / query_optimization) in `report.provenance.cost`, with an optional `max_tokens_budget` that aborts a runaway sweep | `llm/cost.py` |
+| **LLM cost** | Per-component token + latency accounting (judge / answer_gen / query_correction / query_optimization) in `report.provenance.cost`, with an optional `max_tokens_budget` that aborts a runaway sweep | `llm_client/cost.py` |
 | **Live observability** | Node-granular `node_start` / `node_complete` events (with per-node duration) stream to the progress callback **and** an optional JSONL file (`EVALUATOR_PROGRESS_FILE`) any observer can tail | `evaluation/progress.py:ProgressSink` |
 
 These compose cleanly: the executor gains parallel branches → checkpoint/resume at level boundaries
@@ -1203,7 +1396,7 @@ decorator (`models/registry.py:_make_register`). Implement the family's base-cla
 | ASR | `@register_asr_model` | `ASRModel` | `transcribe(audio, sampling_rates, language=None) → List[str]`, `name()`, `to(device)` |
 | Text embedding | `@register_text_embedding_model` | `TextEmbeddingModel` | `encode(texts, show_progress=False) → np.ndarray`, `name()` |
 | Audio embedding | `@register_audio_embedding_model` | `AudioEmbeddingModel` | `encode_audio(audio, sampling_rates) → np.ndarray`, `name()` |
-| Reranker | `@register_reranker_model` | `BaseReranker` (`models/retrieval/rag/reranker.py`) | `rerank(query, documents, top_k=None) → List[(doc, score)]`, `name()` |
+| Reranker | `@register_reranker_model` | duck-typed (no base class; `models/retrieval/rag/reranker.py`) | `rerank(query, documents, top_k=None) → List[(doc, score)]`, `name()` |
 | TTS | `@register_tts_model` | `BaseTTSModel` (`models/tts/base_tts.py`) | `synthesize(text) → np.ndarray` (float32 mono) |
 
 The **builder/UI gets its fields for free** from the `Params` dataclass (BUILDER_UX, §9): `SIZES`
@@ -1321,19 +1514,21 @@ descriptor. Select it with `dataset.id: my_text_retrieval` (+ `questions` / `cor
 ### 15.3 Build experiments by composing nodes
 
 An experiment **is** its config: a node-centric YAML that mirrors the DAG (§10). The `to_legacy_dict`
-loader (`config/graph_config.py`) is the one chokepoint that translates it. **A config is an explicit
-graph** — `graph.nodes` (+ optional `edges`/`branches`) IS the spec. There is no `graph.mode`
-template and no `features:` block in a config (both are rejected); every capability is a node, its
-settings ride on that node, and the run label is derived from the node kinds (`label_from_graph`).
-Named templates survive only as a **builder skeleton** (`pipeline/graph/templates.py` → the web
-canvas / `template_graph_spec`), never referenced by a config file.
+loader (`config/graph_config.py`) is the one chokepoint that translates it. The
+graph-is-the-spec rule — what a config must and must not contain — is principle §1.7; this
+section is the practice.
 
 **(a) The graph is the spec.** Each entry is a bare type string (id = type) or `{id, type, params}`.
 A model-bearing node's params (or a `nodes.<type>` map) carry its model; a **feature node** carries
 its capability config as params — the loader folds those into the sub-config so the built node stays
-structural, and the node's presence enables the capability. `graph.edges` adds ordering not implied
-by data (auto-wiring handles data edges by artifact name). The real
-`configs/showcase_hybrid_rerank_mmr.yaml`:
+structural, and the node's presence enables the capability. `graph.edges` names every data flow
+at PORT level — `{from, output, to, input}` — and a portless `{from, to}` adds ordering only.
+Write the block by hand, connect ports in the builder, or generate it with
+`evaluator graph --emit-edges <yaml>` — add `--write` to rewrite the file's `edges:` block
+**in place** (text-level and comment-preserving; hand-added ordering-only `{from, to}`
+edges are kept), so a topology tweak is one command, not a paste. The real
+`configs/showcase_hybrid_rerank_mmr.yaml` (its `edges:` block — one entry per drawn edge in §10's
+form — present in the file, elided here for brevity):
 
 ```yaml
 experiment: {name: showcase_hybrid_rerank_mmr, output_dir: evaluation_results/showcase}
@@ -1363,7 +1558,8 @@ nodes:                                      # per-node model config (mirrors the
 compute_confidence_intervals: true
 ```
 
-The **same node type appears multiple times** with distinct params — two retrieval arms fused by
+**(b) Duplicate node types + multi-source graphs.** The **same node type appears multiple
+times** with distinct params — two retrieval arms fused by
 `result_fusion` above, corpus-side robustness (`augmenter` with `axis: docs`), a
 `rerank → mmr → threshold` refine chain, or multi-source graphs:
 
@@ -1398,9 +1594,10 @@ graph:
 ```
 
 **(d) Iterative RAG.** Unroll the loop as explicit hop instances — `text_embedding@h1,
-retrieval@h1, query_refine@h1, text_embedding@h2, …` — no per-hop artifact names needed: the
-`one_of` chains read the newest published variant, so hop *k*'s embedder automatically picks hop
-*k−1*'s `refined_query_text` (§9).
+retrieval@h1, query_refine@h1, text_embedding@h2, …` — with each hop's edges naming the route
+(`refine@h1.refined_query_text → text_embedding@h2.query_text`, …). No per-hop artifact names
+are needed: the `one_of` port accepts the chain, and priority + published-fallback pick the
+most-processed variant at run time (§9).
 
 **What you can author** (composition → experiment; the pointer is a runnable showcase config or
 the expressiveness test pinning the shape — `tests/test_expressiveness.py` proves each of these
@@ -1420,7 +1617,9 @@ builds from an explicit `graph.nodes` config with the right wiring):
 | Multi-dataset join | `dataset_source(role: corpus)` + `dataset_source(role: questions)` | `showcase_multi_dataset_join.yaml` |
 | Query-set union | two `dataset_source(role: questions)` → `dataset_union` → one pipeline | `test_dataset_union_two_question_sources` |
 | Multi-corpus index | two `corpus_embedding` → `corpus_merge` → `vector_db` (union indexed once) | `test_corpus_merge_two_corpora_one_index` |
-| Query optimization / correction | `… → asr → query_optimization(rewrite/hyde)` or `query_correction(rule/kb/llm) → text_embedding` (feature params on the node) | `evaluation_config_m4t_asr.yaml` |
+| Query optimization / correction | `… → asr → query_optimization(rewrite/hyde)` or `query_correction(rule/kb/llm/phonetic/clinical) → text_embedding` (feature params on the node) | `evaluation_config_m4t_asr.yaml` |
+| Correction AFTER optimization (inverted chain, B2) | edges route `optimized_query_text → query_correction`; embed binds corrected + optimized-fallback and derivation ranking puts corrected first | `showcase_correction_after_optimization.yaml`, `test_typed_port_routing.py` |
+| Corrector comparison (C7) | correction branches (asr baseline + rule/kb/phonetic/clinical) + `corrected_metrics: true` → per-branch `corrected_*`/`ceer_rx` + deltas vs baseline | `c7_correction_branches.yaml` |
 | RAG-fusion fan-out | `… → asr → multi_query_retrieval(method: decompose/multi_query, combine_strategy)` | `test_multi_query_retrieval_composite` |
 | Iterative RAG | explicit hops `…@h1 → query_refine@h1 → …@h2` (see (d)) | `test_iterative_rag_hops_explicit` |
 | RAG answer + judge | `… → retrieval → answer_gen → answer_metrics → answer_judge` | `test_rag_generation_scoring_and_judge_chain` |
@@ -1431,5 +1630,30 @@ builds from an explicit `graph.nodes` config with the right wiring):
 
 **Preview before running** (no models loaded): `evaluator graph --config <yaml>` (or
 `--preset <name>`) prints the topological levels + each node's `inputs → outputs [deps]`;
-`POST /api/graph/preview` and `/ui/graph` render the same DAG in the web builder. Every node carries
+`/ui/graph` renders the same DAG in the web UI. Every node carries
 its declared `category` (DAG color) and `domain` (grouping) from the taxonomy (§9).
+
+### 15.4 Run from Python / notebooks
+
+The YAML surface is the spec; the Python surface runs it — same execution core as the
+CLI/web. `evaluator/public_api.py` is the stable top-level re-export; the implementation
+lives in `evaluator/api.py` (config assembly, error mapping to
+`ConfigurationError`/`EvaluationError`, the results wrapper). `quick_evaluate()` builds a
+flat `model: {pipeline_mode: …}` dict and rides the §1.7 load shim — pinned by
+`tests/test_quick_evaluate_shim.py`:
+
+```python
+from evaluator import EvaluationConfig, evaluate_from_config, run_evaluation
+
+results = evaluate_from_config("configs/e2e_pubmed_qa_small.yaml")          # YAML path…
+results = run_evaluation(EvaluationConfig.from_yaml("…").with_auto_devices())  # …or config
+
+results.get_metric("MRR")     # flat headline scalars
+results.metrics["report"]     # the full keyed report (branches, deltas, provenance)
+df = results.to_dataframe()   # tidy (branch, metric, mean, ci_lower, ci_upper, n) rows
+df[df.metric == "recall@5"].set_index("branch")["mean"]
+results.save("results/run.json")
+```
+
+`quick_evaluate()` / `evaluate_from_preset()` cover the one-liner cases; `evaluator sweep`
+and `evaluator compare` remain the CLI-side multi-run surface (§8).

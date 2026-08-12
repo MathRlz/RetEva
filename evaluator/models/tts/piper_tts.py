@@ -169,18 +169,7 @@ class PiperTTS(BaseTTSModel):
 
         # Resample if needed
         if sr != self.config.sample_rate:
-            try:
-                import librosa
-                audio = librosa.resample(
-                    audio,
-                    orig_sr=sr,
-                    target_sr=self.config.sample_rate
-                )
-                logger.debug(f"Resampled audio from {sr}Hz to {self.config.sample_rate}Hz")
-            except ImportError:
-                logger.warning(
-                    f"librosa not installed, cannot resample from {sr}Hz to "
-                    f"{self.config.sample_rate}Hz. Using original sample rate."
-                )
+            from ...utils.audio import resample_audio
+            audio = resample_audio(audio, sr, self.config.sample_rate)
 
         return audio.astype(np.float32)

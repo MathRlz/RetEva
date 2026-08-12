@@ -1,0 +1,120 @@
+# CAMPAIGN copy of e2e_pubmed_qa_3branch (the m1c gate config keeps trace_limit: 5 and
+# the 20-question set — do not repoint it). This one runs the full 200-question campaign
+# set for real statistical power: n=200 clears the CI floor (n>=20) and gives the
+# Wilcoxon signed-rank test room below p=0.05 (at n=5 its minimum attainable p is 0.0625).
+# Build the data first: python3 scripts/build_pubmed_campaign.py -n 200
+# C5: the thesis's 3-branch compare graph — ref (ASR oracle) / asr (raw whisper) /
+# corr (asr + rule query-correction) — each terminal metrics, cross-branch deltas reported.
+# CSE collapses the shared prefix (dataset_source, corpus_embedding, vector_db, tts) to one run.
+experiment:
+  name: pubmed200_3branch
+  output_dir: evaluation_results/campaign
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_campaign/questions.json
+  corpus: examples/data/pubmed_qa_campaign/corpus.json
+  trace_limit: 200   # the whole 200-question set AND per-query traces (0 would give the
+                     # full set but DISABLE traces — no failure analysis, no judge)
+  batch_size: 4
+data:
+  num_workers: 0
+graph:
+  branches:
+  - id: ref
+    asr:
+      oracle: true
+    query_correction:
+      enabled: false
+  - id: asr
+    query_correction:
+      enabled: false
+  - id: corr
+    query_correction:
+      enabled: true
+      method: rule
+  nodes:
+  - dataset_source
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      voice: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/campaign/audio
+  - corpus_embedding
+  - vector_db
+  - asr
+  - id: query_correction
+    type: query_correction
+    params:
+      method: rule
+  - text_embedding
+  - retrieval
+  - transcription_metrics
+  - retrieval_metrics
+  - metrics
+  - build_query_traces
+  - finalize
+  edges:
+  - {from: dataset_source, to: tts, input: query_text}
+  - {from: dataset_source, to: corpus_embedding, input: corpus}
+  - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
+  - {from: dataset_source, to: asr, input: query_audio}
+  - {from: tts, to: asr, input: query_audio}
+  - {from: dataset_source, to: asr, input: reference_transcription}
+  - {from: dataset_source, to: query_correction, input: query_text}
+  - {from: asr, to: query_correction, input: query_text}
+  - {from: query_correction, output: corrected_query_text, to: text_embedding, input: query_text}
+  - {from: dataset_source, to: text_embedding, input: query_text}
+  - {from: asr, to: text_embedding, input: query_text}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
+  - {from: vector_db, to: retrieval, input: vector_index}
+  - {from: query_correction, output: corrected_query_text, to: retrieval, input: query_text}
+  - {from: dataset_source, to: retrieval, input: query_text}
+  - {from: asr, to: retrieval, input: query_text}
+  - {from: dataset_source, to: retrieval, input: reference_transcription}
+  - {from: dataset_source, to: retrieval, input: relevant_docs}
+  - {from: dataset_source, to: transcription_metrics, input: query_text}
+  - {from: asr, to: transcription_metrics, input: query_text}
+  - {from: dataset_source, to: transcription_metrics, input: reference_transcription}
+  - {from: retrieval, to: retrieval_metrics, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
+  - {from: transcription_metrics, to: metrics, input: transcription_scores}
+  - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
+  - {from: retrieval, to: metrics, input: retrieved}
+  - {from: dataset_source, to: metrics, input: query_text}
+  - {from: asr, to: metrics, input: query_text}
+  - {from: dataset_source, to: metrics, input: reference_transcription}
+  - {from: dataset_source, to: metrics, input: relevant_docs}
+  - {from: query_correction, to: metrics, input: corrected_query_text}
+  - {from: transcription_metrics, to: metrics, input: per_query_wer}
+  - {from: transcription_metrics, to: metrics, input: per_query_cer}
+  - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
+  - {from: retrieval, to: build_query_traces, input: retrieved}
+  - {from: metrics, to: build_query_traces, input: metrics}
+  - {from: dataset_source, to: build_query_traces, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces, input: relevant_docs}
+  - {from: transcription_metrics, to: build_query_traces, input: per_query_wer}
+  - {from: transcription_metrics, to: build_query_traces, input: per_query_cer}
+  - {from: retrieval_metrics, to: build_query_traces, input: per_query_recall5}
+  - {from: metrics, to: finalize, input: metrics}
+  - {from: build_query_traces, to: finalize, input: query_traces}
+  - {from: retrieval, to: finalize, input: retrieved}
+nodes:
+  asr:
+    model: whisper
+    name: openai/whisper-base
+    device: cuda:0
+  text_embedding:
+    model: labse
+    device: cuda:0
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 10
+runtime:
+  cache:
+    enabled: false
+  logging:
+    console_level: WARNING

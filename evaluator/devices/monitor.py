@@ -43,22 +43,15 @@ class GPUMonitor:
         return self._cuda_available
 
     def get_device_count(self) -> int:
-        """Return the number of compute-usable CUDA devices."""
+        """Return the number of CUDA devices torch reports."""
         if not self.cuda_available:
             return 0
-        from .capability import usable_gpu_count
-        return usable_gpu_count()
+        import torch
+        return torch.cuda.device_count()
 
     def get_memory_usage(self, device_idx: int) -> Optional[MemoryInfo]:
-        """Get memory usage for a specific GPU.
-
-        Args:
-            device_idx: CUDA device index.
-
-        Returns:
-            MemoryInfo with total, used, and free memory in GB,
-            or None if the device is unavailable.
-        """
+        """Total/used/free memory for a GPU in GB, or None if the device is
+        unavailable."""
         if not self.cuda_available:
             return None
 
@@ -79,19 +72,14 @@ class GPUMonitor:
             return None
 
     def get_all_gpus(self) -> List[GPUInfo]:
-        """Get information about all available GPUs.
-
-        Returns:
-            List of GPUInfo objects for each available GPU.
-        """
+        """Get information about all available GPUs."""
         gpus = []
         if not self.cuda_available:
             return gpus
 
         try:
             import torch
-            from .capability import usable_gpu_indices
-            for idx in usable_gpu_indices():
+            for idx in range(torch.cuda.device_count()):
                 props = torch.cuda.get_device_properties(idx)
                 gpus.append(GPUInfo(
                     index=idx,
@@ -104,14 +92,7 @@ class GPUMonitor:
         return gpus
 
     def is_available(self, device: str) -> bool:
-        """Check if a device string is available.
-
-        Args:
-            device: Device string (e.g., "cuda:0", "cuda:1", "cpu").
-
-        Returns:
-            True if the device is available, False otherwise.
-        """
+        """True if a device string (e.g. "cuda:0", "cpu") is available."""
         if device == "cpu":
             return True
 
@@ -121,7 +102,6 @@ class GPUMonitor:
         if not self.cuda_available:
             return False
 
-        # Parse device index
         if ":" in device:
             try:
                 device_idx = int(device.split(":")[1])
@@ -130,8 +110,8 @@ class GPUMonitor:
         else:
             device_idx = 0
 
-        from .capability import is_usable_index
-        return is_usable_index(device_idx)
+        import torch
+        return device_idx < torch.cuda.device_count()
 
 
 # Global monitor instance for convenience

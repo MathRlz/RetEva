@@ -67,7 +67,8 @@ def _env_override(device_count: int) -> Optional[List[int]]:
         if 0 <= idx < device_count:
             indices.append(idx)
         else:
-            logger.warning("%s: index %d out of range (device_count=%d)", _ENV_OVERRIDE, idx, device_count)
+            logger.warning("%s: index %d out of range (device_count=%d)",
+                           _ENV_OVERRIDE, idx, device_count)
     return indices
 
 
@@ -110,7 +111,8 @@ def usable_gpu_indices() -> List[int]:
     for idx in range(device_count):
         try:
             props = torch.cuda.get_device_properties(idx)
-        except (RuntimeError, ValueError, OSError):
+        except (RuntimeError, ValueError, OSError) as exc:
+            excluded.append(f"cuda:{idx} (probe failed: {exc!r})")
             continue
         arch = _device_arch(props, idx)
         # Keep when we cannot determine support, or arch is in the build list.
@@ -120,9 +122,13 @@ def usable_gpu_indices() -> List[int]:
             excluded.append(f"cuda:{idx} ({props.name!r}, {arch})")
 
     if excluded:
-        logger.info(
-            "GPU filter: usable=%s; excluded unsupported arch (not in %s): %s",
+        # WARNING when nothing survives: "0 usable GPUs" on a CUDA box is never expected, and
+        # the reason (arch mismatch / probe failure) is the only thing that explains it.
+        log = logger.warning if not usable else logger.info
+        log(
+            "GPU filter: usable=%s of %d device(s); excluded (build archs=%s): %s",
             usable,
+            device_count,
             sorted(supported),
             ", ".join(excluded),
         )

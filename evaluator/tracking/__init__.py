@@ -5,11 +5,10 @@ parameters, and artifacts. Currently supports MLflow and a no-op tracker
 for when tracking is disabled.
 """
 
-from .base import BaseTracker, NoOpTracker
+from .base import NoOpTracker
 from .mlflow_tracker import MLflowTracker
 
 __all__ = [
-    "BaseTracker",
     "NoOpTracker",
     "MLflowTracker",
 ]

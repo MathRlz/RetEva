@@ -16,16 +16,7 @@ def generate_benchmark_report(
     title: str = "Benchmark Report",
     include_extra_metrics: bool = True,
 ) -> str:
-    """Generate a human-readable benchmark report.
-
-    Args:
-        results: List of benchmark results to include.
-        title: Report title.
-        include_extra_metrics: Whether to include extra metrics in report.
-
-    Returns:
-        Formatted report string.
-    """
+    """Generate a human-readable benchmark report string."""
     if not results:
         return "No benchmark results to report."
 
@@ -46,7 +37,6 @@ def generate_benchmark_report(
         lines.append(f"  Samples: {result.num_samples} (warmup: {result.num_warmup})")
         lines.append("")
 
-        # Timing stats
         if result.timing_stats:
             stats = result.timing_stats
             lines.append("  Timing Statistics:")
@@ -56,23 +46,21 @@ def generate_benchmark_report(
             lines.append(f"    Max:   {stats.max * 1000:.2f} ms")
             lines.append("")
 
-        # Throughput
         lines.append("  Throughput:")
         lines.append(f"    {result.throughput:.2f} {result.throughput_unit}")
         lines.append("")
 
-        # Memory
         lines.append("  Memory Usage:")
         lines.append(f"    Before: {result.memory_before_mb:.1f} MB")
         lines.append(f"    After:  {result.memory_after_mb:.1f} MB")
         lines.append(f"    Delta:  {result.memory_after_mb - result.memory_before_mb:+.1f} MB")
 
         if result.gpu_memory_mb > 0:
-            lines.append(f"    GPU:    {result.gpu_memory_mb:.1f} MB (peak: {result.gpu_memory_peak_mb:.1f} MB)")
+            lines.append(f"    GPU:    {result.gpu_memory_mb:.1f} MB "
+                         f"(peak: {result.gpu_memory_peak_mb:.1f} MB)")
 
         lines.append("")
 
-        # Extra metrics
         if include_extra_metrics and result.extra_metrics:
             lines.append("  Additional Metrics:")
             for key, value in result.extra_metrics.items():
@@ -84,7 +72,6 @@ def generate_benchmark_report(
 
     lines.append("=" * 70)
 
-    # Summary table
     lines.append("SUMMARY")
     lines.append("=" * 70)
     lines.append(f"{'Benchmark':<35} {'Throughput':>15} {'Mean Time':>12}")
@@ -105,13 +92,7 @@ def export_to_json(
     path: Union[str, Path],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Export benchmark results to JSON file.
-
-    Args:
-        results: List of benchmark results.
-        path: Output file path.
-        metadata: Optional metadata to include in the export.
-    """
+    """Export benchmark results (plus optional metadata) to a JSON file."""
     output = {
         "result_format_version": CURRENT_RESULT_FORMAT_VERSION,
         "generated_at": datetime.now().isoformat(),
@@ -133,12 +114,7 @@ def export_to_csv(
     results: List[BenchmarkResult],
     path: Union[str, Path],
 ) -> None:
-    """Export benchmark results to CSV file.
-
-    Args:
-        results: List of benchmark results.
-        path: Output file path.
-    """
+    """Export benchmark results to CSV file."""
     if not results:
         return
 
@@ -197,14 +173,7 @@ def export_to_csv(
 
 
 def load_benchmark_results(path: Union[str, Path]) -> List[Dict[str, Any]]:
-    """Load benchmark results from JSON file.
-
-    Args:
-        path: Path to JSON file.
-
-    Returns:
-        List of benchmark result dictionaries.
-    """
+    """Load benchmark result dicts from a JSON export."""
     path = Path(path)
 
     with open(path) as f:
@@ -217,15 +186,7 @@ def compare_benchmark_results(
     baseline: List[BenchmarkResult],
     current: List[BenchmarkResult],
 ) -> str:
-    """Compare two sets of benchmark results.
-
-    Args:
-        baseline: Baseline benchmark results.
-        current: Current benchmark results to compare.
-
-    Returns:
-        Comparison report string.
-    """
+    """Compare baseline vs current benchmark results; returns a report string."""
     lines = [
         "=" * 70,
         "BENCHMARK COMPARISON".center(70),
@@ -233,7 +194,6 @@ def compare_benchmark_results(
         "",
     ]
 
-    # Create lookup by name
     baseline_by_name = {r.name: r for r in baseline}
     current_by_name = {r.name: r for r in current}
 

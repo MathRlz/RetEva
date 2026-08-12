@@ -1,8 +1,19 @@
-from typing import List, Dict
+from typing import Any, List, Dict
 import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
+
+# The rank cutoffs the report always publishes (recall/precision/ndcg @ each). The retriever
+# must return at least the deepest one, else `retrieved[:10]` is a `[:k]` slice in disguise and
+# `@10` silently equals `@k` — the report would print a cutoff it never measured.
+IR_CUTOFFS = (1, 5, 10)
+RETRIEVAL_DEPTH = max(IR_CUTOFFS)
+
+
+def report_depth(k: Any) -> int:
+    """Floor a configured retrieval depth at :data:`RETRIEVAL_DEPTH`."""
+    return max(int(k), RETRIEVAL_DEPTH)
 
 
 def reciprocal_rank(retrieved: List[str], relevant: Dict[str, int]) -> float:
@@ -69,6 +80,11 @@ def recall_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float
 def dcg_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
     """Compute Discounted Cumulative Gain at rank k.
 
+    Linear gain (``rel / log2(rank+1)``, Järvelin) — the trec_eval ``ndcg_cut`` definition,
+    so graded results are comparable with BEIR/pytrec_eval-reported numbers; identical to the
+    former exponential gain (``2^rel − 1``) on binary grades. Cross-checked per query against
+    pytrec_eval in ``tests/test_ir_reference_impl.py``.
+
     Args:
         retrieved: List of retrieved document IDs
         relevant: Dict mapping doc IDs to relevance scores
@@ -80,7 +96,7 @@ def dcg_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
     if k <= 0 or not retrieved:
         return 0.0
 
-    return sum((2 ** relevant.get(doc_id, 0) - 1) / np.log2(i + 2)
+    return sum(relevant.get(doc_id, 0) / np.log2(i + 2)
                for i, doc_id in enumerate(retrieved[:k]))
 
 
@@ -106,7 +122,7 @@ def ndcg_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
         logger.warning("No relevant documents for NDCG computation")
         return 0.0
 
-    idcg = sum((2 ** rel - 1) / np.log2(i + 2) for i, rel in enumerate(ideal[:k]))
+    idcg = sum(rel / np.log2(i + 2) for i, rel in enumerate(ideal[:k]))
     return dcg / idcg if idcg > 0 else 0.0
 
 

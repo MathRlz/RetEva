@@ -14,7 +14,7 @@ import numpy as np
 import torchaudio
 from transformers import AutoModel, AutoTokenizer, WhisperFeatureExtractor, WhisperModel
 from ..base import AudioEmbeddingModel, TextEmbeddingModel
-from ..registry import register_audio_embedding_model
+from ..registry import register_audio_embedding_model, register_text_embedding_model
 
 
 def set_requires_grad(module: nn.Module, requires_grad: bool) -> None:
@@ -22,10 +22,6 @@ def set_requires_grad(module: nn.Module, requires_grad: bool) -> None:
     for param in module.parameters():
         param.requires_grad = requires_grad
 
-
-# ============================================================================
-# Custom Unpickler for Loading Checkpoints
-# ============================================================================
 
 def load_checkpoint_with_remap(path, map_location=None):
     """Load a CLAP checkpoint, remapping its pickled ``clap_model.*`` classes to local ones.
@@ -83,10 +79,6 @@ def load_checkpoint_with_remap(path, map_location=None):
             sys.modules.pop('clap_model.encoders', None)
 
 
-# ============================================================================
-# Configuration Classes
-# ============================================================================
-
 @dataclass
 class TextEncoderConfig:
     """Configuration for text encoder."""
@@ -129,10 +121,6 @@ class CLAPConfig:
     alignment_loss_weight: float = 0.1
     embedding_alignment_loss_weight: float = 0.1
 
-
-# ============================================================================
-# Encoder Classes
-# ============================================================================
 
 class AudioEncoder(nn.Module):
     """Audio encoder using Whisper's encoder."""
@@ -227,10 +215,6 @@ class TextEncoder(nn.Module):
         """Unfreeze encoder parameters."""
         set_requires_grad(self.model, True)
 
-
-# ============================================================================
-# CLAP Model Components
-# ============================================================================
 
 class CLAPOutput(NamedTuple):
     """Output from CLAP model."""
@@ -463,7 +447,6 @@ class CLAP(nn.Module):
         sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
         text_embed = sum_embeddings / sum_mask
 
-        # Normalize
         text_embed = F.normalize(text_embed, p=2, dim=-1)
         return text_embed
 
@@ -479,7 +462,6 @@ class CLAP(nn.Module):
         # Mean pooling over frames
         audio_embed = audio_features.mean(dim=1)
 
-        # Normalize
         audio_embed = F.normalize(audio_embed, p=2, dim=-1)
         return audio_embed
 
@@ -510,12 +492,17 @@ class CLAP(nn.Module):
         self.audio_encoder.unfreeze()
 
 
-# ============================================================================
-# Multimodal Wrapper for Evaluation Pipeline
-# ============================================================================
-
-
-@register_audio_embedding_model('clap_style', requires_path=True, description='CLAP-style multimodal audio-text embedding model')
+# The wrapper implements BOTH families, so it registers in both registries under one shared
+# embedding_space — that is the whole point of a contrastive audio-text model: the audio query
+# and the text corpus land in one geometry, so dense retrieval across them is meaningful.
+@register_audio_embedding_model(
+    'clap_style', requires_path=True, embedding_space='clap_space',
+    description='CLAP-style multimodal audio-text embedding model (audio side)',
+)
+@register_text_embedding_model(
+    'clap_text', requires_path=True, embedding_space='clap_space',
+    description='CLAP-style multimodal audio-text embedding model (text side)',
+)
 class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
     """Multimodal CLAP model that can encode both audio and text.
 
@@ -593,7 +580,6 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
 
             processed_audio.append(audio_list[idx].squeeze().numpy())
 
-        # Extract features
         inputs = self.feature_extractor(
             processed_audio,
             sampling_rate=self.sample_rate,
@@ -635,7 +621,6 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
         Returns:
             embeddings: (batch, emb_dim) numpy array
         """
-        # Preprocess audio
         input_features = self.preprocess_audio(audio_list, sampling_rates)
         input_features = input_features.to(self.device)
 
@@ -668,7 +653,6 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
         Returns:
             embeddings: (batch, emb_dim) numpy array
         """
-        # Tokenize texts
         encoded = self.tokenizer(
             texts,
             padding=True,

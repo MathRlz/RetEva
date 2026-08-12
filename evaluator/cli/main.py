@@ -68,6 +68,82 @@ def _cmd_presets(rest: List[str]) -> int:
     return 0
 
 
+def _edge_line(e: dict) -> str:
+    # `output` is omitted when it equals `input` (the same-name shorthand).
+    out = f"output: {e['output']}, " if e.get("output", e["input"]) != e["input"] else ""
+    return f"- {{from: {e['from']}, {out}to: {e['to']}, input: {e['input']}}}"
+
+
+def write_edges_block(path: str, edges: List[dict]) -> int:
+    """Rewrite the config's ``graph.edges:`` block in place (B5) — text-level so every
+    comment survives (no yaml.dump round-trip). Replaces an existing ``edges:`` child (its
+    port-level entries; hand-added ordering-only ``{from, to}`` entries are kept and
+    re-appended) or inserts one after the ``nodes:`` child. The rewritten file must still
+    parse as YAML or the original text is restored."""
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    p = Path(path)
+    original = p.read_text()
+    lines = original.splitlines()
+    g = next(
+        (i for i, ln in enumerate(lines) if re.match(r"graph:\s*(#.*)?$", ln)), None
+    )
+    if g is None:
+        raise SystemExit(f"{path}: no top-level graph: block")
+
+    def child_span(start_idx: int, indent: str):
+        """(end_idx, kept_ordering_lines) of the child block starting after start_idx."""
+        j, kept = start_idx + 1, []
+        while j < len(lines):
+            ln = lines[j]
+            stripped = ln.strip()
+            if not stripped:
+                break
+            ind = len(ln) - len(ln.lstrip())
+            in_block = ind > len(indent) or (
+                ind >= len(indent) and (stripped.startswith("- ") or stripped.startswith("#"))
+            )
+            if not in_block:
+                break
+            if stripped.startswith("- ") and "output:" not in stripped:
+                kept.append(ln)  # ordering-only edge — not derivable, keep it
+            j += 1
+        return j, kept
+
+    edges_at = nodes_at = None
+    for i in range(g + 1, len(lines)):
+        ln = lines[i]
+        if ln.strip() and not ln.startswith(" "):
+            break  # left the graph block
+        if re.match(r"(\s+)edges:\s*(#.*)?$", ln):
+            edges_at = i
+        elif re.match(r"(\s+)nodes:\s*(#.*)?$", ln):
+            nodes_at = i
+    if edges_at is not None:
+        indent = lines[edges_at][: len(lines[edges_at]) - len(lines[edges_at].lstrip())]
+        end, kept = child_span(edges_at, indent)
+        block = [f"{indent}edges:"] + [f"{indent}{_edge_line(e)}" for e in edges] + kept
+        lines[edges_at:end] = block
+    elif nodes_at is not None:
+        indent = lines[nodes_at][: len(lines[nodes_at]) - len(lines[nodes_at].lstrip())]
+        end, _ = child_span(nodes_at, indent)
+        block = [f"{indent}edges:"] + [f"{indent}{_edge_line(e)}" for e in edges]
+        lines[end:end] = block
+    else:
+        raise SystemExit(f"{path}: graph: block has no nodes: child")
+
+    p.write_text("\n".join(lines) + "\n")
+    try:
+        yaml.safe_load(p.read_text())
+    except yaml.YAMLError as exc:
+        p.write_text(original)
+        raise SystemExit(f"{path}: rewrite produced invalid YAML ({exc}); restored")
+    return len(edges)
+
+
 def _cmd_graph(rest: List[str]) -> int:
     import argparse
 
@@ -75,17 +151,92 @@ def _cmd_graph(rest: List[str]) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--config", help="config YAML path")
     group.add_argument("--preset", help="preset name (configs/<name>.yaml)")
+    parser.add_argument(
+        "--emit-edges", action="store_true",
+        help="print the explicit port-level `edges:` block for the config's graph "
+             "(paste it under graph: — the authoring assistant for explicit wiring)",
+    )
+    parser.add_argument(
+        "--write", action="store_true",
+        help="with --emit-edges --config: rewrite the file's graph.edges block in place "
+             "(comment-preserving; keeps ordering-only edges; inserts after graph.nodes "
+             "when absent)",
+    )
+    parser.add_argument(
+        "--emit-metrics", action="store_true",
+        help="print every metric the config's graph can satisfy as a ready-to-paste "
+             "top-level `metrics:` allowlist block (opt-in metrics commented) — the "
+             "authoring assistant for metric preregistration",
+    )
+    parser.add_argument(
+        "--format", choices=["text", "dot"], default="text",
+        help="dot: emit the DAG as Graphviz DOT (render with `dot -Tpdf`/-Tsvg for a "
+             "publication figure); default: the textual level/port listing",
+    )
+    parser.add_argument(
+        "-o", "--output", default=None,
+        help="with --format dot: write to this file instead of stdout",
+    )
     args = parser.parse_args(rest)
+    if args.write and not (args.emit_edges and args.config):
+        parser.error("--write requires --emit-edges and --config")
 
     from evaluator.cli.commands import _print_graph
     from evaluator.config.evaluation import EvaluationConfig
 
     if args.config:
-        config = EvaluationConfig.from_yaml(args.config)
+        config = EvaluationConfig.from_yaml(args.config, validate=not args.emit_edges)
     else:
         from evaluator.config.model_presets import get_preset
 
         config = EvaluationConfig.from_dict(get_preset(args.preset, auto_devices=False))
+    if args.emit_edges:
+        from evaluator.pipeline.graph.wiring import emit_edges
+
+        nodes = (config.graph_override or {}).get("nodes") or []
+        if not nodes:
+            print("config has no graph.nodes — nothing to wire")
+            return 1
+        edges = emit_edges(nodes)
+        if args.write:
+            n = write_edges_block(args.config, edges)
+            print(f"wrote {n} port-level edges to {args.config}")
+            return 0
+        print("  edges:")
+        for e in edges:
+            print(f"  {_edge_line(e)}")
+        return 0
+    if args.emit_metrics:
+        from evaluator.evaluation.metric_registry import applicable_metrics
+        from evaluator.pipeline.graph.modes import build_graph_for_config
+        from evaluator.pipeline.introspection import effective_outputs
+
+        graph = build_graph_for_config(config)
+        produced: set = set()
+        for n in graph.nodes:
+            produced.update(effective_outputs(n.stage, n.params))
+        print("metrics:")
+        for spec in applicable_metrics(sorted(produced), include_opt_in=True):
+            if spec.opt_in:
+                print(f"# - {spec.name}   # opt-in: list it here or set "
+                      f"query_correction.corrected_metrics")
+            else:
+                print(f"- {spec.name}")
+        return 0
+    if args.format == "dot":
+        from evaluator.pipeline.graph.export import graph_to_dot
+        from evaluator.pipeline.graph.modes import build_graph_for_config
+
+        dot = graph_to_dot(
+            build_graph_for_config(config), title=config.experiment_name
+        )
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as fh:
+                fh.write(dot)
+            print(f"wrote {args.output} (render: dot -Tpdf {args.output} -o fig.pdf)")
+        else:
+            print(dot, end="")
+        return 0
     _print_graph(config)
     return 0
 

@@ -73,7 +73,6 @@ class QdrantVectorStore(VectorStore):
         self._payloads: List[Any] = []
         self._dim: Optional[int] = None
 
-        # Initialize client
         self._init_client()
 
     def _init_client(self) -> None:
@@ -111,7 +110,6 @@ class QdrantVectorStore(VectorStore):
             # Delete existing collection to rebuild
             self.client.delete_collection(self.collection_name)
 
-        # Create collection
         self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config=VectorParams(
@@ -122,15 +120,11 @@ class QdrantVectorStore(VectorStore):
         self._dim = dim
 
     def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
-        """Build the vector store from vectors and payloads.
-
-        Args:
-            vectors: Array of vectors with shape (n_samples, dim).
-            payloads: List of payload objects corresponding to each vector.
-        """
+        """Build the vector store from vectors and payloads."""
         if len(vectors) != len(payloads):
             raise ValueError(
-                f"Number of vectors ({len(vectors)}) must match number of payloads ({len(payloads)})"
+                f"Number of vectors ({len(vectors)}) must match "
+                f"number of payloads ({len(payloads)})"
             )
 
         # Store payloads locally for retrieval
@@ -138,11 +132,9 @@ class QdrantVectorStore(VectorStore):
 
         normalized_vectors = l2_normalize(vectors, axis=1).astype(np.float32)  # cosine
 
-        # Ensure collection exists
         dim = vectors.shape[1]
         self._ensure_collection(dim)
 
-        # Prepare points for upsert
         points = []
         for i, (vector, payload) in enumerate(zip(normalized_vectors, payloads)):
             # Convert payload to Qdrant-compatible format
@@ -161,7 +153,6 @@ class QdrantVectorStore(VectorStore):
                 payload=qdrant_payload,
             ))
 
-        # Upsert in batches
         batch_size = 1000
         for i in range(0, len(points), batch_size):
             batch = points[i:i + batch_size]
@@ -176,29 +167,19 @@ class QdrantVectorStore(VectorStore):
         k: int = 5,
         filter_conditions: Optional[Dict] = None,
     ) -> List[Tuple[Any, float]]:
-        """Search for similar vectors.
-
-        Args:
-            query: Query vector.
-            k: Number of results to return.
-            filter_conditions: Optional dict for filtering. Keys are field names,
-                values are the values to match.
-
-        Returns:
-            List of (payload, score) tuples, sorted by relevance.
-        """
-        # Check if collection exists and has points
+        """Search for similar vectors; ``filter_conditions`` maps field names to values
+        that must match. Returns (payload, score) tuples sorted by relevance."""
         try:
             collection_info = self.client.get_collection(self.collection_name)
             if collection_info.points_count == 0:
                 return []
         except Exception as exc:
-            logger.warning("Cannot query %s (collection unavailable): %s", self.collection_name, exc)
+            logger.warning("Cannot query %s (collection unavailable): %s",
+                           self.collection_name, exc)
             return []
 
         query = l2_normalize(query)
 
-        # Build filter if provided
         query_filter = None
         if filter_conditions:
             conditions = [
@@ -207,7 +188,6 @@ class QdrantVectorStore(VectorStore):
             ]
             query_filter = Filter(must=conditions)
 
-        # Search using query_points API
         results = self.client.query_points(
             collection_name=self.collection_name,
             query=query.astype(np.float32).tolist(),
@@ -216,7 +196,6 @@ class QdrantVectorStore(VectorStore):
             with_payload=True,
         )
 
-        # Extract results
         output = []
         for hit in results.points:
             payload_idx = hit.payload.get("_payload_idx", 0)
@@ -239,19 +218,10 @@ class QdrantVectorStore(VectorStore):
         k: int = 5,
         filter_conditions: Optional[Dict] = None,
     ) -> List[List[Tuple[Any, float]]]:
-        """Search for similar vectors in batch.
-
-        Args:
-            queries: Array of query vectors with shape (n_queries, dim).
-            k: Number of results to return per query.
-            filter_conditions: Optional dict for filtering.
-
-        Returns:
-            List of result lists, one per query.
-        """
+        """Search for similar vectors in batch; ``filter_conditions`` maps field names
+        to values that must match. Returns one result list per query."""
         normalized_queries = l2_normalize(queries, axis=1).astype(np.float32)
 
-        # Build filter if provided
         query_filter = None
         if filter_conditions:
             conditions = [
@@ -260,7 +230,6 @@ class QdrantVectorStore(VectorStore):
             ]
             query_filter = Filter(must=conditions)
 
-        # Batch search using query_batch_points
         requests = [
             QueryRequest(
                 query=q.tolist(),
@@ -276,7 +245,6 @@ class QdrantVectorStore(VectorStore):
             requests=requests,
         )
 
-        # Extract results
         all_outputs = []
         for response in batch_results:
             output = []
@@ -295,22 +263,14 @@ class QdrantVectorStore(VectorStore):
         return all_outputs
 
     def save(self, path: Union[str, Path]) -> None:
-        """Save vector store to disk.
-
-        For remote/persistent mode, this saves payloads and metadata.
-        For in-memory mode, also exports vectors.
-
-        Args:
-            path: Directory path to save to.
-        """
+        """Save vector store to disk: payloads + metadata; in-memory mode also
+        exports the vectors (remote/persistent data stays in Qdrant)."""
         save_path = Path(path)
         save_path.mkdir(parents=True, exist_ok=True)
 
-        # Save payloads
         with open(save_path / "payloads.json", "w") as f:
             json.dump(self._payloads, f, indent=2)
 
-        # Get collection info
         try:
             collection_info = self.client.get_collection(self.collection_name)
             count = collection_info.points_count
@@ -318,7 +278,6 @@ class QdrantVectorStore(VectorStore):
             logger.debug("get_collection %s failed, reporting 0: %s", self.collection_name, exc)
             count = 0
 
-        # Save metadata
         metadata = {
             "collection_name": self.collection_name,
             "url": self.url,
@@ -332,7 +291,6 @@ class QdrantVectorStore(VectorStore):
 
         # If using in-memory storage, export vectors
         if not self.url and not self.path:
-            # Scroll through all points
             all_points = []
             offset = None
 
@@ -361,18 +319,12 @@ class QdrantVectorStore(VectorStore):
                 json.dump(all_points, f)
 
     def load(self, path: Union[str, Path]) -> None:
-        """Load vector store from disk.
-
-        Args:
-            path: Directory path to load from.
-        """
+        """Load vector store from disk."""
         load_path = Path(path)
 
-        # Load payloads
         with open(load_path / "payloads.json", "r") as f:
             self._payloads = json.load(f)
 
-        # Load metadata
         with open(load_path / "metadata.json", "r") as f:
             metadata = json.load(f)
 
@@ -392,10 +344,8 @@ class QdrantVectorStore(VectorStore):
                 all_points = json.load(f)
 
             if all_points and self._dim:
-                # Recreate collection
                 self._ensure_collection(self._dim)
 
-                # Restore points
                 points = [
                     PointStruct(
                         id=p["id"],
@@ -405,7 +355,6 @@ class QdrantVectorStore(VectorStore):
                     for p in all_points
                 ]
 
-                # Upsert in batches
                 batch_size = 1000
                 for i in range(0, len(points), batch_size):
                     batch = points[i:i + batch_size]

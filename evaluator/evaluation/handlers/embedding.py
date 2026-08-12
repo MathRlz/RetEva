@@ -19,6 +19,7 @@ from ..executor.state import RunState
 from ..executor.node_pipeline import _node_pipeline
 from ...models.retrieval.embedding_fusion import fuse_embeddings, validate_fusion_config
 from .source import _node_dataset
+from ._common import publish_keyed_or_plain
 
 logger = get_logger(__name__)
 
@@ -81,16 +82,8 @@ def _publish_query_vectors(
     """Publish the query embeddings under ``name`` as a keyed ``ItemSet`` when ``query_ids``
     align 1:1 (W2); otherwise the plain array. Retrieval reads the chosen stream via
     ``s.input('query_vectors')`` (one_of the per-stream names), so the per-stream name here
-    is what makes fusion-bail-to-audio fall out of the wiring. Keyed consumers read it via
-    ``get_items``."""
-    vals = list(embeddings)
-    ids = [str(i) for i in (query_ids or [])]
-    if len(ids) == len(vals) and len(set(ids)) == len(ids):
-        from ..item_set import ItemSet
-
-        s.put_items(name, ItemSet(ids, vals))
-    else:
-        s.put_artifact(name, embeddings)
+    is what makes fusion-bail-to-audio fall out of the wiring."""
+    publish_keyed_or_plain(s, name, embeddings, query_ids)
 
 
 @register_stage_handler("embed", time_key="embedding_s")
@@ -222,14 +215,8 @@ def _stage_fusion(s: RunState) -> None:
     audio_arr = np.asarray(s.get_artifact("audio_query_vectors"))
     text_arr = np.asarray(text_arr)
     # The embedding-fusion config is carried on the fusion node (was config.embedding_fusion).
-    fcfg = s.node_overlay(
-        s.embedding_fusion_config,
-        ("enabled", "audio_weight", "text_weight", "fusion_method", "normalize_before_fusion",
-         "require_same_dimensions", "dimension_reduction", "target_dim"),
-        casts={"enabled": bool, "audio_weight": float, "text_weight": float,
-               "normalize_before_fusion": bool, "require_same_dimensions": bool},
-        force={"enabled": True},
-    )
+    # resolved before execution (global ⊕ node params, presence ⇒ enabled).
+    fcfg = s.resolved_config(default=s.embedding_fusion_config)
     if fcfg is not None and not fcfg.enabled:
         return  # a per-branch {enabled: false} fusion node — retrieval falls back to audio-only
     # (audio↔text alignment is its own embedding_alignment_metrics node now.)

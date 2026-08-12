@@ -12,31 +12,20 @@ from dataclasses import dataclass, field
 from ..run_context import RunContext
 from ..item_isolation import DropSink
 from ..result_schema import RunResults
-from ...pipeline import (
-    ASRPipelineProtocol,
-    TextEmbeddingPipelineProtocol,
-    AudioEmbeddingPipelineProtocol,
-    RetrievalPipelineProtocol,
-)
 from ...storage.cache import CacheManager
 
 
 @dataclass
 class EvaluationContext:
-    """Bundles the pipeline + execution parameters of ``run_graph``.
+    """Bundles the pipeline + execution parameters of ``run_graph`` — its required
+    ``context`` argument. ``features`` carries the optional, default-off feature
+    configs (see ``RunFeatures``)."""
 
-    Pass an instance as ``run_graph(dataset, context=ctx)`` (or
-    ``run_graph(dataset, context=ctx, ...)``) instead of threading the dozen
-    individual keyword arguments. When a context is given it supersedes the
-    individual kwargs; omit it to keep using the explicit kwargs. ``features``
-    carries the optional, default-off feature configs (see ``RunFeatures``).
-    """
-
-    # Pipelines
-    retrieval_pipeline: Optional[RetrievalPipelineProtocol] = None
-    asr_pipeline: Optional[ASRPipelineProtocol] = None
-    text_embedding_pipeline: Optional[TextEmbeddingPipelineProtocol] = None
-    audio_embedding_pipeline: Optional[AudioEmbeddingPipelineProtocol] = None
+    # Pipelines (duck-typed: ASR / text-embedding / audio-embedding / retrieval pipelines)
+    retrieval_pipeline: Optional[Any] = None
+    asr_pipeline: Optional[Any] = None
+    text_embedding_pipeline: Optional[Any] = None
+    audio_embedding_pipeline: Optional[Any] = None
 
     # Execution parameters
     k: int = 10
@@ -70,6 +59,10 @@ class RunFeatures:
     embedding_fusion_config: Any = None
     term_weights: Optional[Dict[str, float]] = None
     compute_confidence_intervals: bool = False
+    # B1: the config's `metrics:` allowlist — compute exactly these (None = collect-all).
+    metric_allowlist: Any = None
+    # A1: lineage-variant rollup reducer ("mean" | "min" | "max").
+    variant_rollup: str = "mean"
 
 
 # Field-scope markers (M1b): every RunState field declares whether a parallel branch
@@ -148,17 +141,14 @@ class RunState:
     # still run). The report records the join warning.
     disable_ir_metrics: bool = field(default=False, metadata=_SHARED)
     join_warning: str = field(default="", metadata=_SHARED)
+    # Per-item query-optimization failures that fell back to the original query (surfaced in
+    # provenance so a dead LLM endpoint can't masquerade as "optimization did nothing").
+    optimization_fallbacks: int = field(default=0, metadata=_SHARED)
+    correction_fallbacks: int = field(default=0, metadata=_SHARED)
     stage_times: Dict[str, float] = field(default_factory=dict, metadata=_SHARED)
     results: "RunResults" = field(
-        default_factory=lambda: RunResults(), metadata=_SHARED
+        default_factory=dict, metadata=_SHARED
     )
-    # Intermediates the metrics stage hands to the answer-gen / finalize stages
-    # (terminal, serial nodes — shared by construction).
-    metrics_all_relevant: list = field(default_factory=list, metadata=_SHARED)
-    wer_scores: list = field(default_factory=list, metadata=_SHARED)
-    cer_scores: list = field(default_factory=list, metadata=_SHARED)
-    per_query_recall5: list = field(default_factory=list, metadata=_SHARED)
-    ans_detail_by_qid: dict = field(default_factory=dict, metadata=_SHARED)
     # RunContext: per-node artifact blackboard (Phase R). The executor sets current_node
     # before each handler; handlers exchange inter-node artifacts via put/get_artifact,
     # which key the context by the producing node's id (see run_context.RunContext).
@@ -182,6 +172,19 @@ class RunState:
     drop_sink: "DropSink" = field(
         default_factory=lambda: DropSink(), metadata=_SHARED
     )
+    # Resolved data flow (A3): consumer node id → {input key → the (artifact, producer)
+    # actually read, plus "fallback": True when it was not the newest producer of the
+    # highest-priority bound candidate}. The OneOf-priority + newest-published walk is
+    # otherwise invisible in a saved run; surfaced as report.provenance.data_flow.
+    # Shared: branch-namespaced node ids never collide across parallel branches.
+    data_flow: Dict[str, Dict[str, Any]] = field(default_factory=dict, metadata=_SHARED)
+    # B1: the config's `metrics:` allowlist (None = collect-all); read by _branch_scores.
+    metric_allowlist: Any = field(default=None, metadata=_SHARED)
+    # A1: lineage-variant rollup reducer ("mean" | "min" | "max"); read by _branch_scores.
+    variant_rollup: str = field(default="mean", metadata=_SHARED)
+    # {node_id → its resolved feature config} (global ⊕ node params, computed once
+    # in _setup_execution_context). Read via `resolved_config()`; replaces node_overlay.
+    node_configs: Dict[str, Any] = field(default_factory=dict, metadata=_SHARED)
 
     def put_artifact(self, name: str, value: Any) -> None:
         """Publish ``name`` as an output of the currently-running node."""
@@ -192,7 +195,7 @@ class RunState:
 
         Legacy consumers reading via :meth:`get_artifact` transparently get the plain
         ``values`` list; keyed consumers (metric nodes) read the ``ItemSet`` via
-        :meth:`get_items`."""
+        :meth:`keyed_items`."""
         self.ctx.put(self.current_node.id, name, items)
 
     @property
@@ -201,30 +204,34 @@ class RunState:
         every handler overlays on its global config."""
         return getattr(self.current_node, "params", None) or {}
 
-    def node_overlay(self, base: Any, keys: tuple, casts: Optional[Dict] = None,
-                     force: Optional[Dict] = None) -> Any:
-        """The effective config for the current node: the global ``base`` with this node's real
-        params overlaid (``dataclasses.replace``). Only genuine feature keys override — never the
-        operator-alias discriminator fields (op/level/family/…), which would mask the global with
-        defaults — and an empty node returns ``base`` unchanged, so the pre-explicit (mode+features)
-        path stays a no-op (parity). ``force`` pins fields the node's mere presence implies (a tts
-        node ⇒ ``enabled=True``). This is how a feature becomes an explicit node carrying its params
-        instead of a top-level ``features:`` block."""
-        from dataclasses import replace as _replace
+    def resolved_config(self, default: Any = None) -> Any:
+        """This node's effective feature config, resolved before execution.
 
-        overlay = {k: v for k, v in self.node_params.items()
-                   if k in keys and v not in (None, "")}
-        for k, cast in (casts or {}).items():
-            if k in overlay:
-                overlay[k] = cast(overlay[k])
-        if base is None or (not overlay and not force):
-            return base
-        return _replace(base, **{**(force or {}), **overlay})
+        The global sub-config with the node's params overlaid — allowlist ≡ the dataclass's
+        fields, casts from the field types (``evaluation/node_config.py``). ``default`` is
+        returned for a node with no feature config (or a direct-call path that skipped
+        resolution)."""
+        node_id = getattr(self.current_node, "id", None)
+        if node_id is None or node_id not in self.node_configs:
+            return default
+        return self.node_configs[node_id]
 
     def _producers(self, name: str) -> list:
         """Producer node ids bound to input ``name`` for the current node (in order)."""
         bindings = getattr(self.current_node, "bindings", ())
         return [pid for art, pid in bindings if art == name]
+
+    def _record_flow(self, key: str, artifact: str, producer: str, expected) -> None:
+        """A3: remember which (artifact, producer) actually served input ``key`` for the
+        current node; a winner other than ``expected`` (the newest producer of the
+        highest-priority bound candidate) is flagged as a fired fallback."""
+        node_id = getattr(self.current_node, "id", None)
+        if node_id is None:
+            return
+        entry: Dict[str, Any] = {"artifact": artifact, "producer": producer}
+        if (artifact, producer) != expected:
+            entry["fallback"] = True
+        self.data_flow.setdefault(node_id, {})[key] = entry
 
     def _input_candidates(self, key: str) -> tuple:
         """The ordered candidate artifact names for a handler's canonical input key.
@@ -243,12 +250,18 @@ class RunState:
         Reads the highest-priority candidate that a bound producer actually published at
         run time (so a bailing producer — e.g. fusion with no text vectors — falls back to
         the next alternative). Use this for chained streams (query text / query vectors);
-        use ``get_artifact`` directly for single-name artifacts."""
+        use ``get_artifact`` directly for single-name artifacts. The resolved winner is
+        recorded in ``data_flow`` (A3)."""
         from ..item_set import ItemSet
 
+        expected = None
         for name in self._input_candidates(key):
-            for producer in reversed(self._producers(name)):
+            producers = self._producers(name)
+            if expected is None and producers:
+                expected = (name, producers[-1])
+            for producer in reversed(producers):
                 if self.ctx.has(producer, name):
+                    self._record_flow(key, name, producer, expected)
                     value = self.ctx.get(producer, name)
                     return value.values if isinstance(value, ItemSet) else value
         return default
@@ -257,11 +270,16 @@ class RunState:
         """Keyed (:class:`ItemSet`) sibling of :meth:`input` for per-item consumers."""
         from ..item_set import ItemSet
 
+        expected = None
         for name in self._input_candidates(key):
-            for producer in reversed(self._producers(name)):
+            producers = self._producers(name)
+            if expected is None and producers:
+                expected = (name, producers[-1])
+            for producer in reversed(producers):
                 if self.ctx.has(producer, name):
                     value = self.ctx.get(producer, name)
                     if isinstance(value, ItemSet):
+                        self._record_flow(key, name, producer, expected)
                         return value
         return default
 
@@ -273,36 +291,26 @@ class RunState:
         Resolves newest→oldest so a skipped producer (e.g. fusion bailing to audio-only)
         falls back to an earlier producer of the same artifact. An ``ItemSet`` is unwrapped
         to its ``values`` list so legacy (positional) consumers are unchanged (W2 shim).
+        The resolved producer is recorded in ``data_flow`` (A3).
         """
         from ..item_set import ItemSet
 
-        for producer in reversed(self._producers(name)):
+        producers = self._producers(name)
+        expected = (name, producers[-1]) if producers else None
+        for producer in reversed(producers):
             if self.ctx.has(producer, name):
+                self._record_flow(name, name, producer, expected)
                 value = self.ctx.get(producer, name)
                 return value.values if isinstance(value, ItemSet) else value
         if default is RunState._MISSING:
             raise KeyError(f"no published producer for input '{name}'")
         return default
 
-    def get_items(self, name: str, default: Any = _MISSING) -> Any:
-        """Read input ``name`` as a keyed ``ItemSet``. A producer that published a plain
-        list is wrapped with positional index ids (best-effort) so keyed consumers work."""
-        from ..item_set import ItemSet
-
-        for producer in reversed(self._producers(name)):
-            if self.ctx.has(producer, name):
-                value = self.ctx.get(producer, name)
-                if isinstance(value, ItemSet):
-                    return value
-                return ItemSet([str(i) for i in range(len(value))], list(value))
-        if default is RunState._MISSING:
-            raise KeyError(f"no published producer for input '{name}'")
-        return default
-
     def keyed_items(self, name: str, default: Any = None) -> Any:
         """Read input ``name`` only if a bound producer published a true keyed ``ItemSet``
-        (M1d-2): the per-item identity source. Returns ``default`` (no positional wrap)
-        when only a plain list — or nothing — was published."""
+        (M1d-2): the per-item identity source. Never wraps a plain publish positionally —
+        index ids join nothing, so a keyed consumer would silently get an empty join;
+        ``default`` is returned instead."""
         from ..item_set import ItemSet
 
         for producer in reversed(self._producers(name)):

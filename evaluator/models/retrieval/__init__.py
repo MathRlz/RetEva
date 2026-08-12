@@ -1,7 +1,7 @@
 """Retrieval components for dense, sparse, and hybrid search."""
 
 from .rag.hybrid import reciprocal_rank_fusion
-from .rag.reranker import BaseReranker, CrossEncoderReranker
+from .rag.reranker import CrossEncoderReranker
 from .strategy import (
     CoreRetrievalConfig,
     RerankingConfig,
@@ -29,7 +29,6 @@ from .fusion_registry import (
 
 __all__ = [
     "reciprocal_rank_fusion",
-    "BaseReranker",
     "CrossEncoderReranker",
     "CoreRetrievalConfig",
     "RerankingConfig",

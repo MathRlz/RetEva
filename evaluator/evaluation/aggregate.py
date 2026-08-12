@@ -13,13 +13,50 @@ from __future__ import annotations
 from typing import Any, Dict, Mapping, Optional
 
 from ..logging_config import get_logger
-from .item_set import ItemSet
+from .item_set import LINEAGE_SEPARATOR, ItemSet, lineage_parent
 
 logger = get_logger(__name__)
 
 MIN_SAMPLES_FOR_CI = 20
 _BOOTSTRAP_ALPHA = 0.05
 _BOOTSTRAP_ITERS = 1000
+#: Fraction of the paired sample above which one-sided exclusions mark a delta drop-biased:
+#: items land outside the intersection because a branch dropped them, and hard items fail
+#: more (not-missing-at-random) — the honest denominators alone don't say when that starts
+#: to matter (A4).
+DROP_BIAS_THRESHOLD = 0.05
+
+_ROLLUP_REDUCERS = {
+    "mean": lambda xs: sum(xs) / len(xs),
+    "min": min,
+    "max": max,
+}
+
+
+def rollup_variants(item_scores: ItemSet, how: str = "mean") -> ItemSet:
+    """Reduce lineage variants (``q42·aug0/1``) to one parent-level score (``q42``).
+
+    Variants of one parent are correlated, so treating them as independent items would
+    (a) break the paired cross-branch join against a branch keyed by parent ids and
+    (b) make the bootstrap/Wilcoxon resample clusters as if iid → too-narrow CIs. Rolling
+    up first makes every downstream reduction parent-level (the cluster-safe unit).
+    Identity when no variant ids are present. ``how``: mean (default) | min | max —
+    worst-case is min or max depending on the metric's direction; a config knob lands
+    when an experiment needs it.
+    """
+    ids = item_scores.ids
+    if not any(LINEAGE_SEPARATOR in i for i in ids):
+        return item_scores
+    reduce_fn = _ROLLUP_REDUCERS[how]
+    groups: Dict[str, list] = {}
+    order = []
+    for item_id, value in item_scores:
+        parent = lineage_parent(item_id)
+        if parent not in groups:
+            groups[parent] = []
+            order.append(parent)
+        groups[parent].append(float(value))
+    return ItemSet(order, [reduce_fn(groups[p]) for p in order])
 
 
 def reduce_scores(item_scores: ItemSet, *, with_ci: bool = False) -> Dict[str, Any]:
@@ -27,13 +64,15 @@ def reduce_scores(item_scores: ItemSet, *, with_ci: bool = False) -> Dict[str, A
     and enough samples)."""
     values = [float(v) for _, v in item_scores]
     n = len(values)
-    out: Dict[str, Any] = {"mean": (sum(values) / n) if n else 0.0, "n": n}
+    # n == 0 → mean None, not 0.0: no data must not read as a real (perfect/zero) score
+    out: Dict[str, Any] = {"mean": (sum(values) / n) if n else None, "n": n}
     if with_ci and n >= MIN_SAMPLES_FOR_CI:
         try:
             from ..analysis.significance import bootstrap_confidence_interval
 
             out["ci"] = bootstrap_confidence_interval(
-                values, alpha=_BOOTSTRAP_ALPHA, n_bootstrap=_BOOTSTRAP_ITERS
+                values, alpha=_BOOTSTRAP_ALPHA, n_bootstrap=_BOOTSTRAP_ITERS,
+                random_state=0,  # deterministic, like the delta CI below
             )
         except Exception as exc:
             logger.warning("bootstrap CI failed (n=%d): %s", n, exc)
@@ -53,7 +92,7 @@ def paired_delta(branch: ItemSet, baseline: ItemSet) -> Dict[str, Any]:
     ids, b_vals, base_vals = branch.align(baseline)
     diffs = [float(b) - float(a) for b, a in zip(b_vals, base_vals)]
     n = len(diffs)
-    return {
+    out = {
         "mean_delta": (sum(diffs) / n) if n else 0.0,
         "n_paired": n,
         "n_branch": len(branch),
@@ -63,6 +102,13 @@ def paired_delta(branch: ItemSet, baseline: ItemSet) -> Dict[str, Any]:
         "denominator_policy": "intersection",
         "_diffs": diffs,  # consumed by S3 (CI + paired test); stripped before serialize
     }
+    # A4: one-sided exclusions beyond the threshold mark the delta drop-biased — the
+    # intersection then measures the easy survivors, not the branch (key absent otherwise,
+    # so a clean run's report is unchanged).
+    excluded = out["n_only_branch"] + out["n_only_baseline"]
+    if excluded > DROP_BIAS_THRESHOLD * max(n, 1):
+        out["drop_biased"] = True
+    return out
 
 
 def flatten_report(report: Mapping[str, Any]) -> Dict[str, float]:
@@ -125,10 +171,32 @@ def _enrich_deltas(deltas: Dict[str, Dict[str, Any]]) -> None:
             except Exception as exc:
                 logger.warning("paired test failed for %s/%s: %s", pair, name, exc)
                 d["p_value_error"] = str(exc)
+    n_failed = sum(
+        1 for dmetrics in deltas.values() for d in dmetrics.values() if "p_value_error" in d
+    )
+    if n_failed:
+        # failed tests silently shrink the BH family (FDR denominators) — make it auditable
+        logger.warning(
+            "BH family: %d delta test(s) excluded (test failure), %d in family",
+            n_failed, len(pvals),
+        )
     if pvals:
         for (pair, name), q in zip(pkeys, benjamini_hochberg(pvals)):
             deltas[pair][name]["p_value_fdr"] = q
             deltas[pair][name]["significant"] = bool(q < 0.05)
+    flagged = [
+        f"{pair}/{name}"
+        for pair, dmetrics in deltas.items()
+        for name, d in dmetrics.items()
+        if d.get("drop_biased")
+    ]
+    if flagged:
+        logger.warning(
+            "drop-biased paired deltas (one-sided exclusions > %.0f%% of n_paired — the "
+            "intersection measures survivors, not the branch): %s",
+            DROP_BIAS_THRESHOLD * 100,
+            "; ".join(flagged),
+        )
 
 
 def build_report(
@@ -137,12 +205,22 @@ def build_report(
     baseline: Optional[str] = None,
     with_ci: bool = False,
     provenance: Optional[Mapping[str, Any]] = None,
+    variant_rollup: str = "mean",
 ) -> Dict[str, Any]:
     """Build the run ``report`` from ``{branch -> {metric -> item_scores}}``.
 
     Produces per-branch reduced metrics and, when a ``baseline`` branch is given, paired
     deltas of every other branch's metrics against it (only for metrics both branches share).
+    Lineage variants are rolled up to parent level first (``rollup_variants`` — identity
+    without fan-out), so pairing and every CI/test below operates on the cluster-safe unit.
     """
+    per_branch_metrics = {
+        branch_id: {
+            name: rollup_variants(scores, variant_rollup)
+            for name, scores in metrics.items()
+        }
+        for branch_id, metrics in per_branch_metrics.items()
+    }
     branches: Dict[str, Dict[str, Any]] = {}
     for branch_id, metrics in per_branch_metrics.items():
         branches[branch_id] = {

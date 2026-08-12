@@ -34,8 +34,17 @@ def register_stage_handler(
     """Register a stage handler under ``stage`` (decorator)."""
 
     def decorator(fn: StageFn) -> StageFn:
-        if stage in _STAGE_REGISTRY:
-            raise ValueError(f"Stage handler already registered: {stage}")
+        existing = _STAGE_REGISTRY.get(stage)
+        if existing is not None:
+            # Idempotent for the SAME handler re-registered (a module imported under a
+            # second name re-executes its decorators); a genuinely different function
+            # under an existing stage name is still a hard error.
+            same = (
+                getattr(existing.fn, "__module__", None) == getattr(fn, "__module__", None)
+                and getattr(existing.fn, "__qualname__", None) == getattr(fn, "__qualname__", None)
+            )
+            if not same:
+                raise ValueError(f"Stage handler already registered: {stage}")
         _STAGE_REGISTRY[stage] = StageSpec(stage, fn, self_timed, time_key)
         return fn
 
@@ -51,11 +60,6 @@ def get_stage_spec(stage: str) -> StageSpec:
         raise KeyError(
             f"No stage handler registered: {stage}. Registered: {registered}"
         ) from None
-
-
-def stage_registry() -> Dict[str, StageSpec]:
-    """Return a copy of the full stage registry."""
-    return dict(_STAGE_REGISTRY)
 
 
 def validate_graph_handlers(graph: Any) -> None:

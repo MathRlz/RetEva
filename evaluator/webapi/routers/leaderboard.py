@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException
 
 from evaluator.analysis.leaderboard_views import leaderboard_rows, pareto_rows
 from evaluator.storage import ExperimentStore
-from evaluator.webapi.schemas import ErrorResponse
 
 
 def delete_run_and_cache(
@@ -16,8 +15,8 @@ def delete_run_and_cache(
     """Delete a leaderboard run and, optionally, its cached vector-DB index.
 
     The vector-DB cache key is read from the run metadata
-    (``metadata.cache.load.vector_cache_key``, persisted at ingest time). Shared by
-    the JSON DELETE endpoint and the HTML UI. Raises 404 if the run is missing.
+    (``metadata.cache.load.vector_cache_key``, persisted at ingest time). Used by
+    the HTML UI (``/ui/runs/{id}/delete``). Raises 404 if the run is missing.
     """
     store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
     run = store.get_run(run_id)
@@ -69,34 +68,5 @@ def build_leaderboard_router() -> APIRouter:
             return pareto_rows(experiment_group, objectives=objectives, output_dir=output_dir)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-
-    @router.get(
-        "/api/leaderboard/runs/{run_id}",
-        summary="Get run details",
-        responses={404: {"model": ErrorResponse}},
-    )
-    def leaderboard_run(
-        run_id: int,
-        output_dir: str = "evaluation_results",
-    ) -> Dict[str, Any]:
-        store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
-        run = store.get_run(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        return run
-
-    @router.delete(
-        "/api/leaderboard/runs/{run_id}",
-        summary="Delete a run (optionally its vector-DB cache)",
-        responses={404: {"model": ErrorResponse}},
-    )
-    def delete_run(
-        run_id: int,
-        delete_cache: bool = False,
-        output_dir: str = "evaluation_results",
-    ) -> Dict[str, Any]:
-        return delete_run_and_cache(
-            run_id, delete_cache=delete_cache, output_dir=output_dir
-        )
 
     return router

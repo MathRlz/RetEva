@@ -72,7 +72,7 @@ _MODEL_NODE_FIELDS = {
 # A feature node's non-structural params fold into its capability sub-config (the same
 # top-level key the old ``features:`` block populated), so the built StageNode stays structural
 # (== the mode+features build) while the run reads the full config off the sub-config object.
-# The overlay (RunState.node_overlay) still lets a per-node param win when one is present.
+# Per-node resolution (evaluation/node_config.py) still lets a node param win at run time.
 _FEATURE_NODE_CONFIG = {
     "tts": "audio_synthesis",
     "answer_judge": "judge",
@@ -249,14 +249,8 @@ def _translate_datasets_map(new: Dict[str, Any], legacy: Dict[str, Any]):
     return role_by_dataset_id
 
 
-def _translate_graph(
-    new: Dict[str, Any],
-    legacy: Dict[str, Any],
-    model: Dict[str, Any],
-    role_by_dataset_id: Dict[str, str],
-) -> None:
-    """graph → explicit node/edge/branch override (a config is an explicit graph; C2)."""
-    graph = new.pop("graph", None) or {}
+def _validate_graph_block(graph: Dict[str, Any]) -> None:
+    """Reject graph.mode (hard cut-over) and unknown graph keys."""
     if "mode" in graph:
         # Hard cut-over: a config is an explicit graph. Pipeline templates live only in the
         # builder (as a node-KIND skeleton the user fills in) — never in a config file.
@@ -274,150 +268,218 @@ def _translate_graph(
             f"Unknown key(s) under graph: {sorted(_unknown_graph)}. "
             f"Allowed: {sorted(_GRAPH_KEYS)}."
         )
+
+
+def _resolve_dataset_refs(
+    node_ids: list, legacy: Dict[str, Any], role_by_dataset_id: Dict[str, str]
+) -> None:
+    """dataset_source nodes: inherit the datasets-map role / synthesize a picker entry.
+
+    A dataset_source node referencing a `datasets:` entry inherits that entry's
+    role into its params (single source of truth = the datasets map), so graph
+    wiring (_effective_outputs) routes downstream nodes to the right source. A
+    role set explicitly on the node wins; an unknown dataset id is an error.
+    """
+    from ..pipeline.graph.operators import node_kind
+
+    for item in node_ids:
+        if not (isinstance(item, dict)
+                and node_kind(item.get("type"), item.get("params") or {})
+                == "dataset_source"):
+            continue
+        params = item.get("params") or {}
+        ds_id = params.get("dataset")
+        if ds_id is None:
+            continue
+        map_entries = legacy.get("data", {}).get("datasets") or {}
+        in_map = str(ds_id) in role_by_dataset_id or str(ds_id) in map_entries
+        if not in_map:
+            # Not a datasets-map id → must be a REGISTERED dataset id (the
+            # builder's picker). Synthesize a per-node datasets entry from the
+            # node's data-setting params and rewrite the reference, so the
+            # existing multi-source loader (B1/B4) runs it unchanged.
+            _synthesize_dataset_entry(item, params, str(ds_id), legacy)
+            continue
+        if "role" not in params and str(ds_id) in role_by_dataset_id:
+            params["role"] = role_by_dataset_id[str(ds_id)]
+            item["params"] = params
+
+
+def _fold_node_params(
+    node_ids: list, legacy: Dict[str, Any], model: Dict[str, Any]
+) -> None:
+    """Fold config-bearing node params into model / vector_db / feature sub-configs.
+
+    Self-contained list form: a config-bearing node (asr / *_embedding / vector_db /
+    retrieval) may carry its config inline in params (mirroring the nodes: map). Fold
+    those into model / vector_db and strip them so the graph node stays structural (the
+    runtime per-node override is for branches, not the base model). Transform/sink nodes
+    (augmenter, augment_audio, dataset_sink, dataset_source) keep their params — read at
+    runtime via graph_override. No-op for the plain-string list form (back-compat).
+    """
+    from ..pipeline.graph.operators import node_kind, operator_discriminators
+
+    graph_vdb: Dict[str, Any] = {}
+    folded_model_roles: set = set()
+    for item in node_ids:
+        if isinstance(item, dict):
+            ntype, nparams = item.get("type"), item.get("params") or {}
+        else:
+            ntype, nparams = item, {}
+        kind = node_kind(ntype, nparams)
+        # A feature NODE present ⇒ its capability is enabled (the graph is the spec) — even a
+        # bare node with no params. The param fold below (dict nodes) adds the rest.
+        _cap = _FEATURE_NODE_CONFIG.get(kind)
+        if _cap:
+            legacy[_cap] = {"enabled": True, **(legacy.get(_cap) or {})}
+        if not isinstance(item, dict) or not nparams:
+            continue
+        # The discriminator selectors (op/axis/modality/method/…) identify the kind, not
+        # the model/vector_db config — split them out so the config fold doesn't choke on
+        # them, and keep them on the node so node_kind still resolves it at build time. For
+        # kind-typed nodes (no discriminators) this is a no-op (params fully fold, as before).
+        disc = operator_discriminators(ntype)
+        selectors = {k: v for k, v in nparams.items() if k in disc}
+        fields = {k: v for k, v in nparams.items() if k not in disc}
+        if kind in _MODEL_NODE_FIELDS:
+            if fields and kind not in folded_model_roles:
+                # Node-centric config, first node of a role: its model becomes the flat
+                # ``model.*`` DEFAULT (the shared global pipeline + back-compat). Strip it off
+                # the node, which then reads that global (and the corpus embedder shares it).
+                folded_model_roles.add(kind)
+                model.update(_map_keys(
+                    fields, _MODEL_NODE_FIELDS[kind], f"graph.nodes.{ntype}.params"
+                ))
+                item["params"] = selectors
+            elif fields:
+                # A SECOND+ node of the same role keeps its model ON the node — a per-node
+                # override the executor builds via ``_node_pipeline`` — instead of clobbering
+                # the single flat field. So one graph can run two distinct text embedders
+                # (asymmetric query-enc ≠ doc-enc, or an ablation). The flat ``model.*`` holds
+                # one default per role; nodes without their own model fall back to it.
+                item["params"] = {**selectors, **fields}
+            else:
+                item["params"] = selectors
+        elif kind == "vector_db":
+            if fields:
+                graph_vdb.update(_vector_db_node_to_config(fields))
+            item["params"] = selectors
+        elif kind == "retrieval":
+            # `mode`/`vectors` are per-arm FUNCTIONAL params the search handler reads off the
+            # node (retrieval.py: a hybrid vs sparse arm, an audio-vector arm) — keep them on
+            # the node so two retrieval nodes can differ; fold only the tuning keys
+            # (k/distance/gpu_id/fusion/reranker/mmr) into the shared vector_db config.
+            keep = {k: v for k, v in fields.items() if k in ("mode", "vectors")}
+            fold = {k: v for k, v in fields.items() if k not in ("mode", "vectors")}
+            if fold:
+                graph_vdb.update(_retrieval_to_vector_db(fold))
+            item["params"] = {**selectors, **keep}
+        elif kind in _FEATURE_NODE_CONFIG:
+            # A feature node carries its capability config as params; fold them into the
+            # sub-config block so the built node stays structural (parity with mode+features).
+            # Node params WIN over the presence-derived enabled:True and any top-level block
+            # (the graph is the spec) — so an explicit `enabled: false` on the node holds.
+            on_node = _FEATURE_NODE_KEEP.get(kind, set())
+            keep = {k: v for k, v in fields.items() if k in on_node}
+            fold = {k: v for k, v in fields.items() if k not in on_node}
+            cap = _FEATURE_NODE_CONFIG[kind]
+            legacy[cap] = {**(legacy.get(cap) or {}), **fold}
+            item["params"] = {**selectors, **keep}
+    if graph_vdb:
+        legacy["vector_db"] = {**legacy.get("vector_db", {}), **graph_vdb}
+
+
+def _validate_edges(graph: Dict[str, Any], node_ids: list) -> list:
+    """Schema-validate graph.edges; return the edge list.
+
+    Edges pass through as the LIST: port-level {from, output, to, input} entries define
+    bindings (explicit wiring, E2) — `output` may be omitted when it equals `input`;
+    portless {from, to} entries add ordering only. build_graph_from_spec dispatches on the
+    shape. Validate the schema here so a typo'd edge fails at load with the config's
+    vocabulary, not deep in the wiring.
+    """
+    from ..pipeline.graph.wiring import is_port_edge, normalize_port_edge
+
+    edge_list = []
+    for edge in graph.get("edges", []) or []:
+        if not (isinstance(edge, dict) and "from" in edge and "to" in edge):
+            raise GraphConfigError("each graph.edges item needs 'from' and 'to'.")
+        unknown = set(edge) - {"from", "to", "output", "input"}
+        if unknown:
+            raise GraphConfigError(
+                f"Unknown key(s) {sorted(unknown)} on a graph.edges item. "
+                "Allowed: from, to, output, input."
+            )
+        # `{from, to, input: X}` is the same-name shorthand — normalize it here so everything
+        # downstream sees one shape. `{from, to}` alone stays ordering-only.
+        if is_port_edge(edge):
+            try:
+                edge = normalize_port_edge(dict(edge))
+            except ValueError as exc:
+                raise GraphConfigError(str(exc)) from exc
+        edge_list.append(dict(edge))
+    # HARD CUT (E6): a config graph is explicit — nodes AND port-level edges. The
+    # auto-wirer survives only as the authoring assistant (builder / --emit-edges).
+    if node_ids and not any(is_port_edge(e) for e in edge_list):
+        raise GraphConfigError(
+            "graph.nodes requires explicit port-level graph.edges "
+            "({from, to, input} entries, plus 'output' when it differs). Generate them with: "
+            "evaluator graph --config <yaml> --emit-edges, or connect the ports in "
+            "the builder."
+        )
+    return edge_list
+
+
+def _validate_branches(graph: Dict[str, Any], legacy: Dict[str, Any]) -> None:
+    """graph.branches: a variant set expanded + CSE-collapsed into one branched DAG (W6/A8).
+
+    Each entry is {id, <node_type>: <model-str | params>}. Stored on graph_override so the
+    build path (build_graph_for_config / _build_run_graph) calls build_branched_graph.
+    """
+    if "branches" not in graph:
+        return
+    if "nodes" not in graph:
+        raise GraphConfigError("graph.branches requires graph.nodes (the base to branch over).")
+    branches = graph["branches"]
+    if not isinstance(branches, list) or not all(
+        isinstance(b, dict) and "id" in b for b in branches
+    ):
+        raise GraphConfigError(
+            "graph.branches must be a list of {id, <node>: <override>} dicts."
+        )
+    legacy.setdefault("graph_override", {"nodes": [], "edges": []})[
+        "branches"
+    ] = branches
+
+
+def _translate_graph(
+    new: Dict[str, Any],
+    legacy: Dict[str, Any],
+    model: Dict[str, Any],
+    role_by_dataset_id: Dict[str, str],
+) -> None:
+    """graph → explicit node/edge/branch override (a config is an explicit graph; C2)."""
+    graph = new.pop("graph", None) or {}
+    _validate_graph_block(graph)
     if "nodes" in graph:
         node_ids = graph["nodes"]
         # Items are a node-type string OR a dict {id, type, params} for a distinct
-        # instance (e.g. two rerankers with different models).
+        # instance (e.g. two rerankers with different models). Node `type` may be the
+        # operator *stage* the builder canvas emits (`source`, `embed`, …) or the concrete
+        # *kind* a YAML uses (`dataset_source`, `text_embedding`); node_kind() collapses
+        # both so the fold works for either typing.
         if not isinstance(node_ids, list) or not all(
             isinstance(n, (str, dict)) for n in node_ids
         ):
             raise GraphConfigError(
                 "graph.nodes must be a list of node-type strings or {id, type, params} dicts."
             )
-        # Node `type` may be the operator *stage* the builder canvas emits (e.g. `source`,
-        # `convert`, `embed`) or the concrete *kind* a YAML uses (`dataset_source`, `asr`,
-        # `text_embedding`); node_kind() collapses both to the kind so the fold below works
-        # for either typing. (node_kind is idempotent on kinds, so kind-typed nodes are
-        # unchanged.)
-        from ..pipeline.graph.operators import node_kind
-
-        # A dataset_source node referencing a `datasets:` entry inherits that entry's
-        # role into its params (single source of truth = the datasets map), so graph
-        # wiring (_effective_outputs) routes downstream nodes to the right source. A
-        # role set explicitly on the node wins; an unknown dataset id is an error.
-        for item in node_ids:
-            if not (isinstance(item, dict)
-                    and node_kind(item.get("type"), item.get("params") or {})
-                    == "dataset_source"):
-                continue
-            params = item.get("params") or {}
-            ds_id = params.get("dataset")
-            if ds_id is None:
-                continue
-            map_entries = legacy.get("data", {}).get("datasets") or {}
-            in_map = str(ds_id) in role_by_dataset_id or str(ds_id) in map_entries
-            if not in_map:
-                # Not a datasets-map id → must be a REGISTERED dataset id (the
-                # builder's picker). Synthesize a per-node datasets entry from the
-                # node's data-setting params and rewrite the reference, so the
-                # existing multi-source loader (B1/B4) runs it unchanged.
-                _synthesize_dataset_entry(item, params, str(ds_id), legacy)
-                continue
-            if "role" not in params and str(ds_id) in role_by_dataset_id:
-                params["role"] = role_by_dataset_id[str(ds_id)]
-                item["params"] = params
-        # Self-contained list form: a config-bearing node (asr / *_embedding / vector_db /
-        # retrieval) may carry its config inline in params (mirroring the nodes: map). Fold
-        # those into model / vector_db and strip them so the graph node stays structural (the
-        # runtime per-node override is for branches, not the base model). Transform/sink nodes
-        # (augmenter, augment_audio, dataset_sink, dataset_source) keep their params — read at
-        # runtime via graph_override. No-op for the plain-string list form (back-compat).
-        from ..pipeline.graph.operators import operator_discriminators
-
-        graph_vdb: Dict[str, Any] = {}
-        folded_model_roles: set = set()
-        for item in node_ids:
-            if isinstance(item, dict):
-                ntype, nparams = item.get("type"), item.get("params") or {}
-            else:
-                ntype, nparams = item, {}
-            kind = node_kind(ntype, nparams)
-            # A feature NODE present ⇒ its capability is enabled (the graph is the spec) — even a
-            # bare node with no params. The param fold below (dict nodes) adds the rest.
-            _cap = _FEATURE_NODE_CONFIG.get(kind)
-            if _cap:
-                legacy[_cap] = {"enabled": True, **(legacy.get(_cap) or {})}
-            if not isinstance(item, dict) or not nparams:
-                continue
-            # The discriminator selectors (op/axis/modality/method/…) identify the kind, not
-            # the model/vector_db config — split them out so the config fold doesn't choke on
-            # them, and keep them on the node so node_kind still resolves it at build time. For
-            # kind-typed nodes (no discriminators) this is a no-op (params fully fold, as before).
-            disc = operator_discriminators(ntype)
-            selectors = {k: v for k, v in nparams.items() if k in disc}
-            fields = {k: v for k, v in nparams.items() if k not in disc}
-            if kind in _MODEL_NODE_FIELDS:
-                if fields and kind not in folded_model_roles:
-                    # Node-centric config, first node of a role: its model becomes the flat
-                    # ``model.*`` DEFAULT (the shared global pipeline + back-compat). Strip it off
-                    # the node, which then reads that global (and the corpus embedder shares it).
-                    folded_model_roles.add(kind)
-                    model.update(_map_keys(
-                        fields, _MODEL_NODE_FIELDS[kind], f"graph.nodes.{ntype}.params"
-                    ))
-                    item["params"] = selectors
-                elif fields:
-                    # A SECOND+ node of the same role keeps its model ON the node — a per-node
-                    # override the executor builds via ``_node_pipeline`` — instead of clobbering
-                    # the single flat field. So one graph can run two distinct text embedders
-                    # (asymmetric query-enc ≠ doc-enc, or an ablation). The flat ``model.*`` holds
-                    # one default per role; nodes without their own model fall back to it.
-                    item["params"] = {**selectors, **fields}
-                else:
-                    item["params"] = selectors
-            elif kind == "vector_db":
-                if fields:
-                    graph_vdb.update(_vector_db_node_to_config(fields))
-                item["params"] = selectors
-            elif kind == "retrieval":
-                # `mode`/`vectors` are per-arm FUNCTIONAL params the search handler reads off the
-                # node (retrieval.py: a hybrid vs sparse arm, an audio-vector arm) — keep them on
-                # the node so two retrieval nodes can differ; fold only the tuning keys
-                # (k/distance/gpu_id/fusion/reranker/mmr) into the shared vector_db config.
-                keep = {k: v for k, v in fields.items() if k in ("mode", "vectors")}
-                fold = {k: v for k, v in fields.items() if k not in ("mode", "vectors")}
-                if fold:
-                    graph_vdb.update(_retrieval_to_vector_db(fold))
-                item["params"] = {**selectors, **keep}
-            elif kind in _FEATURE_NODE_CONFIG:
-                # A feature node carries its capability config as params; fold them into the
-                # sub-config block so the built node stays structural (parity with mode+features).
-                # Node params WIN over the presence-derived enabled:True and any top-level block
-                # (the graph is the spec) — so an explicit `enabled: false` on the node holds.
-                on_node = _FEATURE_NODE_KEEP.get(kind, set())
-                keep = {k: v for k, v in fields.items() if k in on_node}
-                fold = {k: v for k, v in fields.items() if k not in on_node}
-                cap = _FEATURE_NODE_CONFIG[kind]
-                legacy[cap] = {**(legacy.get(cap) or {}), **fold}
-                item["params"] = {**selectors, **keep}
-        if graph_vdb:
-            legacy["vector_db"] = {**legacy.get("vector_db", {}), **graph_vdb}
-        # edges: list of {from, to} → {to: [from, ...]} for build_graph_from_spec
-        edges: Dict[str, list] = {}
-        for edge in graph.get("edges", []) or []:
-            if not (isinstance(edge, dict) and "from" in edge and "to" in edge):
-                raise GraphConfigError("each graph.edges item needs 'from' and 'to'.")
-            edges.setdefault(edge["to"], []).append(edge["from"])
-        legacy["graph_override"] = {"nodes": node_ids, "edges": edges}
+        _resolve_dataset_refs(node_ids, legacy, role_by_dataset_id)
+        _fold_node_params(node_ids, legacy, model)
+        legacy["graph_override"] = {"nodes": node_ids, "edges": _validate_edges(graph, node_ids)}
     elif "edges" in graph:
         raise GraphConfigError("graph.edges requires graph.nodes.")
-
-    # graph.branches: a variant set expanded + CSE-collapsed into one branched DAG (W6/A8).
-    # Each entry is {id, <node_type>: <model-str | params>}. Stored on graph_override so the
-    # build path (build_graph_for_config / _build_run_graph) calls build_branched_graph.
-    if "branches" in graph:
-        if "nodes" not in graph:
-            raise GraphConfigError("graph.branches requires graph.nodes (the base to branch over).")
-        branches = graph["branches"]
-        if not isinstance(branches, list) or not all(
-            isinstance(b, dict) and "id" in b for b in branches
-        ):
-            raise GraphConfigError(
-                "graph.branches must be a list of {id, <node>: <override>} dicts."
-            )
-        legacy.setdefault("graph_override", {"nodes": [], "edges": {}})[
-            "branches"
-        ] = branches
+    _validate_branches(graph, legacy)
 
 
 # dataset_source node params that are NOT data settings (kept on the node).
@@ -619,25 +681,33 @@ def legacy_yaml_to_graph_yaml(old: Dict[str, Any]) -> Dict[str, Any]:
         model = dict(model)
         if "pipeline_mode" in model:
             # Retired: a config never carries graph.mode. Expand a legacy pipeline_mode into the
-            # explicit node skeleton (base features) so the migrated config is graph-first. An
-            # explicit graph_override below overrides this. (resolved_node_config overwrites the
-            # graph outright with the real DAG, so this only matters for bare legacy migration.)
+            # explicit node skeleton (base features) WITH its generated port-level edges, so the
+            # migrated config is graph-first and passes the explicitness cut. An explicit
+            # graph_override below overrides this.
             from ..pipeline.graph.assembly import FeatureSet, assemble_specs
+            from ..pipeline.graph.wiring import emit_edges
 
-            new["graph"] = {"nodes": assemble_specs(model.pop("pipeline_mode"), FeatureSet())}
+            _nodes = assemble_specs(model.pop("pipeline_mode"), FeatureSet())
+            new["graph"] = {"nodes": _nodes, "edges": emit_edges(_nodes)}
 
     # explicit graph override → graph.{nodes,edges}; drop when absent (no null noise)
     override = old.pop("graph_override", None)
     if isinstance(override, dict) and override.get("nodes"):
         gblock = new.setdefault("graph", {})
         gblock["nodes"] = list(override["nodes"])
-        edge_list = [
-            {"from": src, "to": dst}
-            for dst, srcs in (override.get("edges") or {}).items()
-            for src in srcs
-        ]
-        if edge_list:
-            gblock["edges"] = edge_list
+        raw_edges = override.get("edges") or []
+        edge_list = (
+            list(raw_edges) if isinstance(raw_edges, (list, tuple))
+            else [{"from": src, "to": dst} for dst, srcs in raw_edges.items() for src in srcs]
+        )
+        from ..pipeline.graph.wiring import is_port_edge
+
+        if not any(is_port_edge(e) for e in edge_list):
+            # legacy override without port edges: generate them (ordering extras kept)
+            from ..pipeline.graph.wiring import emit_edges
+
+            edge_list = emit_edges(gblock["nodes"]) + edge_list
+        gblock["edges"] = edge_list
 
     if isinstance(model, dict):
         field_to_node = {
@@ -744,11 +814,11 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
     # identical graph; the resolved model/vdb params live in the sections/per-kind blocks.
     override = getattr(config, "graph_override", None) or {}
     if override.get("branches"):
-        edge_list = [
-            {"from": src, "to": dst}
-            for dst, srcs in (override.get("edges") or {}).items()
-            for src in srcs
-        ]
+        raw_edges = override.get("edges") or []
+        edge_list = (
+            list(raw_edges) if isinstance(raw_edges, (list, tuple))
+            else [{"from": src, "to": dst} for dst, srcs in raw_edges.items() for src in srcs]
+        )
         ncfg["graph"] = {
             "nodes": list(override.get("nodes") or []),
             "branches": list(override["branches"]),
@@ -756,6 +826,8 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
         }
         ncfg["nodes"] = {k: v for k, v in per_kind.items() if v}  # per-kind resolved models
         return ncfg
+
+    from ..pipeline.graph.wiring import _has_port_edges
 
     graph = build_graph_for_config(config)
     nodes = []
@@ -782,5 +854,9 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
         nodes.append(entry)
         for dep in n.depends_on:
             edges.append({"from": dep, "to": n.id})
+    # A config wired with explicit port-level edges IS the edge spec — carry it through
+    # verbatim (the depends_on-derived node-level list is the legacy auto-wire echo).
+    if _has_port_edges(override.get("edges")):
+        edges = list(override["edges"])
     ncfg["graph"] = {"nodes": nodes, "edges": edges}
     return ncfg

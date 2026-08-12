@@ -4,13 +4,6 @@ from .audio_embedding_pipeline import AudioEmbeddingPipeline
 from .factory import (
     check_backend_dependencies,
     create_pipeline_from_config,
-    create_vector_store_from_config,
-)
-from .protocols import (
-    ASRPipelineProtocol,
-    AudioEmbeddingPipelineProtocol,
-    RetrievalPipelineProtocol,
-    TextEmbeddingPipelineProtocol,
 )
 from .retrieval_pipeline import RetrievalPipeline
 from .graph import (
@@ -61,16 +54,10 @@ __all__ = [
     "DATASET_ROLE_QUESTIONS",
     "AudioSynthesizer",
     "AudioAugmenter",
-    # Protocols
-    "TextEmbeddingPipelineProtocol",
-    "AudioEmbeddingPipelineProtocol",
-    "ASRPipelineProtocol",
-    "RetrievalPipelineProtocol",
     "ScoredRetrievalResult",
     # Factory functions
     "check_backend_dependencies",
     "create_pipeline_from_config",
-    "create_vector_store_from_config",
     # Data structures
     "PipelineBundle",
 ]

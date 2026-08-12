@@ -1,265 +1,45 @@
-# Example Configuration Files
+# Example Configurations
 
-This directory contains documented example configurations for common evaluation scenarios. Each configuration is heavily commented to explain the available options and their effects.
+Five ready-to-run configs demonstrating common evaluation shapes. Each uses the
+current node-centric schema: the pipeline is an explicit DAG under `graph.nodes` +
+`graph.edges` (there is no `pipeline_mode` switch and no `features:` block — every
+capability is a node), per-node model settings live under `nodes:`, and
+`experiment` / `dataset` / `runtime` carry the run-level settings.
 
-## Quick Start
-
-Copy an example config and modify it for your needs:
+## Running
 
 ```bash
-cp configs/examples/basic_asr_retrieval.yaml configs/my_evaluation.yaml
-python evaluate.py --config configs/my_evaluation.yaml
+evaluator graph --config configs/examples/basic_asr_retrieval.yaml   # print the DAG, load nothing
+evaluator run   --config configs/examples/basic_asr_retrieval.yaml   # run it
 ```
 
-## Available Configurations
+To adapt one: copy it, then regenerate the edge block after changing nodes with
+`evaluator graph --config <yaml> --emit-edges --write`.
 
-### 1. `basic_asr_retrieval.yaml` - Recommended Starting Point
+## The examples
 
-**Use case:** First-time users, standard evaluations
+| Config | Demonstrates |
+|---|---|
+| `basic_asr_retrieval.yaml` | The standard ASR path: `asr` (Whisper medium) → `text_embedding` (LaBSE) → dense `retrieval` (k=5, in-memory store) on `admed_voice`, with transcription (WER/CER) + retrieval metrics. The recommended starting point. |
+| `audio_embedding_only.yaml` | Direct audio retrieval, no ASR node: `audio_embedding` (`clap_style`, your checkpoint via `model_path`) feeds `retrieval` (k=10); corpus side embeds with `clap_text`. Retrieval metrics only — there is no transcript to score. |
+| `hybrid_retrieval.yaml` | Duplicate nodes of one type via the `{id, type, params}` node form: a dense `retrieval` + a sparse `retrieval_sparse` (BM25) fused by `result_fusion` (RRF, `rrf_k: 60`), then `rerank` (cross-encoder, top 30). Whisper large-v3 + jina_v4 across two GPUs, on `pubmed_qa`. |
+| `fast_development.yaml` | The basic graph shrunk for iteration: whisper-tiny + LaBSE on CPU, batch 4, DEBUG console logging, 5 GB cache cap, checkpoint every 10 items. Runs anywhere. |
+| `multi_gpu_production.yaml` | The hybrid graph at production scale on full `pubmed_qa` (`trace_limit: 0`): batch 64, 4 data workers, `faiss_gpu` vector store, reranker top 50 on a second GPU, checkpoint every 200. Includes a (disabled) `audio_synthesis` block for TTS-bridging a text dataset. |
 
-The traditional ASR → Text Embedding → Retrieval pipeline:
-- Speech is transcribed to text using Whisper
-- Text is embedded using LaBSE
-- Embeddings are used for retrieval
+## Config anatomy (common to all five)
 
-**Advantages:**
-- Interpretable intermediate results (transcribed text)
-- Easy to debug ASR and retrieval separately
-- Well-understood pipeline
+- `experiment:` — run name + `output_dir` (report JSON, resolved-config sidecar).
+- `dataset:` — dataset `id` (+ `questions`/`corpus` paths for file-backed sets), `batch_size`.
+- `graph.nodes` / `graph.edges` — the DAG. Nodes are bare names
+  (`dataset_source`, `asr`, `text_embedding`, `retrieval`, `metrics`, `finalize`, …)
+  or `{id, type, params}` mappings when one type appears twice.
+- `nodes:` — per-node model choice + params (`model`, `name`, `device`, retrieval
+  `k`/`mode`/`fusion`/`reranker`, vector `store`).
+- `runtime:` — cache toggles (`cache_transcriptions`, `cache_embeddings`, …) and logging levels.
+- `checkpoint_*` — periodic checkpointing + resume.
 
-**Key settings:**
-```yaml
-model:
-  pipeline_mode: asr_text_retrieval
-  asr_model_type: whisper
-  asr_model_name: openai/whisper-medium
-  text_emb_model_type: labse
-```
+## See also
 
----
-
-### 2. `audio_embedding_only.yaml` - Direct Audio Retrieval
-
-**Use case:** End-to-end audio models, bypassing ASR
-
-Directly embeds audio without intermediate text:
-- Audio is encoded to embeddings by a single model
-- No transcription step (no ASR errors)
-
-**Advantages:**
-- No ASR error propagation
-- Can capture prosodic and acoustic features
-- Potentially faster inference
-
-**Requirements:**
-- Pre-trained audio embedding model (CLAP-style or custom)
-- Compatible text embeddings for the corpus
-
-**Key settings:**
-```yaml
-model:
-  pipeline_mode: audio_text_retrieval
-  audio_emb_model_type: clap_style
-  audio_emb_model_path: path/to/your/model.pt
-  text_emb_model_type: clap_text
-```
-
----
-
-### 3. `hybrid_retrieval.yaml` - Maximum Accuracy
-
-**Use case:** Production benchmarks, research evaluations
-
-Combines multiple retrieval strategies:
-- Dense retrieval (semantic similarity)
-- Sparse retrieval (BM25 lexical matching)
-- RRF fusion (Reciprocal Rank Fusion)
-- Cross-encoder reranking
-
-**Advantages:**
-- Best retrieval accuracy
-- Handles both semantic and lexical queries
-- Reranking improves precision
-
-**Trade-offs:**
-- Slower than single-strategy retrieval
-- More complex setup
-
-**Key settings:**
-```yaml
-vector_db:
-  retrieval_mode: hybrid
-  hybrid_fusion_method: rrf
-  rrf_k: 60
-  reranker_mode: cross_encoder
-  reranker_enabled: true
-```
-
----
-
-### 4. `fast_development.yaml` - Quick Iteration
-
-**Use case:** Development, debugging, testing changes
-
-Minimal configuration for fast feedback:
-- Small models (whisper-tiny)
-- CPU-only (no GPU required)
-- Small batch sizes
-- Verbose logging
-
-**Advantages:**
-- Runs on any machine
-- Fast iteration cycles
-- Easy debugging
-
-**Trade-offs:**
-- Lower accuracy
-- Not representative of production
-
-**Key settings:**
-```yaml
-model:
-  asr_model_name: openai/whisper-tiny
-  asr_device: cpu
-  text_emb_device: cpu
-data:
-  batch_size: 4
-logging:
-  console_level: DEBUG
-```
-
----
-
-### 5. `multi_gpu_production.yaml` - Full-Scale Evaluation
-
-**Use case:** Production runs on GPU servers
-
-Optimized for multi-GPU throughput:
-- Models distributed across GPUs
-- Large batch sizes
-- GPU-accelerated FAISS
-- All caching enabled
-- Best-quality models
-
-**Requirements:**
-- 2+ NVIDIA GPUs
-- 16GB+ VRAM per GPU
-- Significant storage for caches
-
-**Key settings:**
-```yaml
-model:
-  asr_device: cuda:0
-  text_emb_device: cuda:1
-data:
-  batch_size: 64
-  num_workers: 4
-vector_db:
-  type: faiss_gpu
-  gpu_id: 0
-```
-
----
-
-## Configuration Reference
-
-### Pipeline Modes
-
-| Mode | Description | Metrics |
-|------|-------------|---------|
-| `asr_text_retrieval` | Speech → ASR → Text → Embeddings → Retrieval | WER, CER, MRR, MAP, NDCG, Recall |
-| `audio_text_retrieval` | Speech → Audio Embeddings → Retrieval | MRR, MAP, NDCG, Recall |
-| `asr_only` | Speech → ASR → Text (no retrieval) | WER, CER |
-
-### ASR Models
-
-| Type | Model Name | Size | Notes |
-|------|------------|------|-------|
-| `whisper` | `openai/whisper-tiny` | 39M | Fastest |
-| `whisper` | `openai/whisper-base` | 74M | Fast |
-| `whisper` | `openai/whisper-small` | 244M | Balanced |
-| `whisper` | `openai/whisper-medium` | 769M | Recommended |
-| `whisper` | `openai/whisper-large-v3` | 1.5B | Best accuracy |
-| `wav2vec2` | `facebook/wav2vec2-large-960h` | 315M | English |
-| `wav2vec2` | `jonatasgrosman/wav2vec2-large-xlsr-53-polish` | 315M | Polish |
-
-### Text Embedding Models
-
-| Type | Model Name | Dimensions | Notes |
-|------|------------|------------|-------|
-| `labse` | `sentence-transformers/LaBSE` | 768 | Multilingual |
-| `jina_v4` | `jinaai/jina-embeddings-v4` | 1024 | Best semantic |
-| `bge_m3` | `BAAI/bge-m3` | 1024 | Multilingual |
-| `nemotron` | NVIDIA Nemotron | 1024 | High quality |
-
-### Retrieval Modes
-
-| Mode | Description |
-|------|-------------|
-| `dense` | Neural embedding similarity only |
-| `sparse` | BM25 lexical matching only |
-| `hybrid` | Combination of dense + sparse |
-
-### Fusion Methods (for hybrid)
-
-| Method | Description |
-|--------|-------------|
-| `weighted` | Linear combination: `α * dense + (1-α) * sparse` |
-| `rrf` | Reciprocal Rank Fusion: combines rankings |
-
----
-
-## Tips
-
-### Device Configuration
-
-The framework auto-configures devices if you use `config.with_auto_devices()`. For manual control:
-
-```yaml
-# Single GPU
-asr_device: cuda:0
-text_emb_device: cuda:0
-
-# Multi-GPU
-asr_device: cuda:0
-text_emb_device: cuda:1
-
-# CPU only
-asr_device: cpu
-text_emb_device: cpu
-```
-
-### Memory Management
-
-If running out of GPU memory:
-1. Reduce `batch_size`
-2. Use smaller models
-3. Distribute models across GPUs
-4. Use CPU for some components
-
-### Caching Strategy
-
-For repeated experiments with the same models:
-```yaml
-cache:
-  enabled: true
-  cache_transcriptions: true  # Reuse ASR results
-  cache_embeddings: true      # Reuse embeddings
-```
-
-For testing different models:
-```yaml
-cache:
-  enabled: true
-  cache_transcriptions: false  # Different ASR models
-  cache_embeddings: false      # Different embedding models
-  cache_vector_db: false       # Different retrieval settings
-```
-
----
-
-## See Also
-
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) - Full system documentation
-- [README.md](../../README.md) - Project overview
-- [evaluate.py](../../evaluate.py) - Main entry point
+- [`../../README.md`](../../README.md) — project overview + quickstart
+- [`../../evaluator-architecture.md`](../../evaluator-architecture.md) — full architecture (graph, artifacts, metrics)
+- [`../campaign/RUNBOOK.md`](../campaign/RUNBOOK.md) — the campaign configs + how to run them

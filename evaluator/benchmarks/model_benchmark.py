@@ -12,14 +12,10 @@ from .timer import Timer, PerformanceStats
 
 
 def get_memory_usage() -> Dict[str, float]:
-    """Get current memory usage in MB.
-
-    Returns:
-        Dictionary with 'cpu_mb' and optionally 'gpu_mb' keys.
-    """
+    """Current memory usage in MB: 'cpu_mb', plus 'gpu_mb'/'gpu_max_mb' when CUDA
+    is available."""
     memory = {"cpu_mb": 0.0}
 
-    # CPU memory via torch
     try:
         import psutil
         process = psutil.Process()
@@ -27,7 +23,6 @@ def get_memory_usage() -> Dict[str, float]:
     except ImportError:
         pass
 
-    # GPU memory if available
     if torch.cuda.is_available():
         memory["gpu_mb"] = torch.cuda.memory_allocated() / (1024 * 1024)
         memory["gpu_max_mb"] = torch.cuda.max_memory_allocated() / (1024 * 1024)
@@ -104,7 +99,8 @@ class BenchmarkResult:
         lines.append(f"  Memory: {self.memory_before_mb:.1f} -> {self.memory_after_mb:.1f} MB")
 
         if self.gpu_memory_mb > 0:
-            lines.append(f"  GPU Memory: {self.gpu_memory_mb:.1f} MB (peak: {self.gpu_memory_peak_mb:.1f} MB)")
+            lines.append(f"  GPU Memory: {self.gpu_memory_mb:.1f} MB "
+                         f"(peak: {self.gpu_memory_peak_mb:.1f} MB)")
 
         return "\n".join(lines)
 
@@ -125,11 +121,7 @@ class ModelBenchmark:
     """
 
     def __init__(self, verbose: bool = False):
-        """Initialize benchmark utility.
-
-        Args:
-            verbose: If True, print progress during benchmarking.
-        """
+        """If ``verbose``, print progress during benchmarking."""
         self.verbose = verbose
 
     def _log(self, message: str) -> None:
@@ -144,31 +136,20 @@ class ModelBenchmark:
         warmup: int = 3,
         language: Optional[str] = None,
     ) -> BenchmarkResult:
-        """Benchmark ASR model transcription performance.
-
-        Args:
-            model: ASR model with transcribe() method.
-            samples: List of audio samples. Each sample should have 'audio' (tensor)
-                     and 'sampling_rate' (int) keys.
-            warmup: Number of warmup iterations before timing.
-            language: Optional language code for transcription.
-
-        Returns:
-            BenchmarkResult with timing and throughput statistics.
-        """
+        """Benchmark ASR model transcribe() performance. Each sample needs 'audio'
+        (tensor) and 'sampling_rate' (int) keys; ``warmup`` untimed iterations run
+        first."""
         if not samples:
             raise ValueError("samples list cannot be empty")
 
         self._log(f"Starting ASR benchmark with {len(samples)} samples...")
 
-        # Prepare audio data
         audio_tensors = [s["audio"] for s in samples]
         sampling_rates = [s.get("sampling_rate", 16000) for s in samples]
 
         clear_memory()
         mem_before = get_memory_usage()
 
-        # Warmup
         self._log(f"Running {warmup} warmup iterations...")
         for _ in range(warmup):
             model.transcribe(audio_tensors[:1], sampling_rates[:1], language=language)
@@ -177,7 +158,6 @@ class ModelBenchmark:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-        # Benchmark
         timer = Timer("asr_transcribe")
         self._log("Running benchmark iterations...")
 
@@ -209,7 +189,8 @@ class ModelBenchmark:
             num_warmup=warmup,
             extra_metrics={
                 "total_audio_duration_sec": total_audio_duration,
-                "real_time_factor": timer.total_time / total_audio_duration if total_audio_duration > 0 else 0,
+                "real_time_factor": (timer.total_time / total_audio_duration
+                                     if total_audio_duration > 0 else 0),
             }
         )
 
@@ -220,17 +201,8 @@ class ModelBenchmark:
         warmup: int = 3,
         batch_size: int = 32,
     ) -> BenchmarkResult:
-        """Benchmark text embedding model performance.
-
-        Args:
-            model: Text embedding model with encode() method.
-            texts: List of texts to encode.
-            warmup: Number of warmup iterations before timing.
-            batch_size: Batch size for encoding.
-
-        Returns:
-            BenchmarkResult with timing and throughput statistics.
-        """
+        """Benchmark text embedding model encode() performance in batches of
+        ``batch_size``; ``warmup`` untimed iterations run first."""
         if not texts:
             raise ValueError("texts list cannot be empty")
 
@@ -239,7 +211,6 @@ class ModelBenchmark:
         clear_memory()
         mem_before = get_memory_usage()
 
-        # Warmup
         self._log(f"Running {warmup} warmup iterations...")
         warmup_texts = texts[:min(batch_size, len(texts))]
         for _ in range(warmup):
@@ -249,7 +220,6 @@ class ModelBenchmark:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-        # Benchmark - process in batches
         timer = Timer("embedding_encode")
         self._log("Running benchmark iterations...")
 
@@ -295,18 +265,8 @@ class ModelBenchmark:
         warmup: int = 3,
         k: int = 10,
     ) -> BenchmarkResult:
-        """Benchmark vector store retrieval performance.
-
-        Args:
-            store: Vector store with search() method.
-            queries: List of query vectors or 2D array of shape (N, D).
-            warmup: Number of warmup iterations before timing.
-            k: Number of results to retrieve per query.
-
-        Returns:
-            BenchmarkResult with timing and throughput statistics.
-        """
-        # Convert to list if numpy array
+        """Benchmark vector store search() performance; ``queries`` may be a list of
+        vectors or an (N, D) array."""
         if isinstance(queries, np.ndarray):
             if queries.ndim == 1:
                 queries = [queries]
@@ -321,14 +281,12 @@ class ModelBenchmark:
         clear_memory()
         mem_before = get_memory_usage()
 
-        # Warmup
         self._log(f"Running {warmup} warmup iterations...")
         for _ in range(warmup):
             store.search(queries[0], k=k)
 
         clear_memory()
 
-        # Benchmark
         timer = Timer("retrieval_search")
         self._log("Running benchmark iterations...")
 
@@ -367,16 +325,9 @@ class ModelBenchmark:
         samples: List[Dict[str, Any]],
         warmup: int = 3,
     ) -> BenchmarkResult:
-        """Benchmark audio embedding model performance.
-
-        Args:
-            model: Audio embedding model with encode_audio() method.
-            samples: List of audio samples with 'audio' and 'sampling_rate' keys.
-            warmup: Number of warmup iterations before timing.
-
-        Returns:
-            BenchmarkResult with timing and throughput statistics.
-        """
+        """Benchmark audio embedding model encode_audio() performance. Each sample
+        needs 'audio' and 'sampling_rate' keys; ``warmup`` untimed iterations run
+        first."""
         if not samples:
             raise ValueError("samples list cannot be empty")
 
@@ -388,7 +339,6 @@ class ModelBenchmark:
         clear_memory()
         mem_before = get_memory_usage()
 
-        # Warmup
         self._log(f"Running {warmup} warmup iterations...")
         for _ in range(warmup):
             model.encode_audio(audio_tensors[:1], sampling_rates[:1])
@@ -397,7 +347,6 @@ class ModelBenchmark:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-        # Benchmark
         timer = Timer("audio_embedding")
         self._log("Running benchmark iterations...")
 
@@ -429,6 +378,7 @@ class ModelBenchmark:
             num_warmup=warmup,
             extra_metrics={
                 "total_audio_duration_sec": total_audio_duration,
-                "real_time_factor": timer.total_time / total_audio_duration if total_audio_duration > 0 else 0,
+                "real_time_factor": (timer.total_time / total_audio_duration
+                                     if total_audio_duration > 0 else 0),
             }
         )

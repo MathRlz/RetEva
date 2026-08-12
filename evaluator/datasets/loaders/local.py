@@ -168,18 +168,7 @@ class LocalAudioDatasetLoader:
         Returns:
             Tuple of (audio_array, sampling_rate).
         """
-        try:
-            import torchaudio
-        except ImportError:
-            try:
-                import librosa
-                audio_array, sr = librosa.load(path, sr=self.sample_rate)
-                return audio_array.astype(np.float32), sr
-            except ImportError as e:
-                raise ImportError(
-                    "Either torchaudio or librosa is required for loading audio. "
-                    "Install with: pip install torchaudio or pip install librosa"
-                ) from e
+        import torchaudio
 
         from ..core import load_audio_file
         waveform, sr = load_audio_file(str(path))
@@ -208,7 +197,6 @@ class LocalAudioDatasetLoader:
         samples: List[AudioSample] = []
 
         for idx, item in enumerate(transcripts):
-            # Get audio filename
             filename = item.get(self.file_column)
             if filename is None:
                 # Try alternative column names
@@ -232,7 +220,6 @@ class LocalAudioDatasetLoader:
             if not audio_path.exists():
                 continue
 
-            # Get transcription
             text = item.get(self.text_column)
             if text is None:
                 for alt in ["transcription", "sentence", "transcript", "label"]:
@@ -243,15 +230,12 @@ class LocalAudioDatasetLoader:
             if text is None:
                 text = ""
 
-            # Get language
             language = self.default_language
             if self.language_column and self.language_column in item:
                 language = str(item[self.language_column])
 
-            # Get sample ID
             sample_id = item.get("id", item.get("sample_id", str(audio_path.stem)))
 
-            # Load audio
             try:
                 audio_array, sr = self._load_audio(audio_path)
             except (ImportError, OSError, RuntimeError, ValueError) as exc:
@@ -262,7 +246,8 @@ class LocalAudioDatasetLoader:
             # Collect metadata
             metadata = {
                 k: v for k, v in item.items()
-                if k not in [self.file_column, self.text_column, self.language_column, "id", "sample_id"]
+                if k not in [self.file_column, self.text_column, self.language_column,
+                             "id", "sample_id"]
             }
             metadata["source_file"] = str(audio_path)
 
@@ -298,7 +283,6 @@ class LocalAudioDatasetLoader:
             else:
                 text = ""
 
-            # Load audio
             try:
                 audio_array, sr = self._load_audio(audio_path)
             except (ImportError, OSError, RuntimeError, ValueError) as exc:

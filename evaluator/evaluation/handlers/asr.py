@@ -7,7 +7,7 @@ Registers the
 from __future__ import annotations
 
 from ..stage_registry import register_stage_handler
-from ._common import publish_keyed_or_plain as _publish_keyed_or_plain  # noqa: F401
+from ._common import publish_keyed_or_plain
 from ._common import retrieval_ran
 from ...logging_config import get_logger
 from ..helpers import _build_relevant_from_item
@@ -133,7 +133,7 @@ def _stage_asr(s: RunState) -> None:
     # (correction/optimization emit distinct names), so query_text stays the un-rewritten
     # ASR output WER/CER score against — no raw_query_text needed. Ground truth comes from
     # dataset_source.
-    _publish_keyed_or_plain(s, "query_text", hypotheses, query_ids)  # feeds embedding (R4d)
+    publish_keyed_or_plain(s, "query_text", hypotheses, query_ids)  # feeds embedding (R4d)
     s.cb(
         "phase_1_asr",
         s.total,

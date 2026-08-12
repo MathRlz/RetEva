@@ -21,9 +21,18 @@ class LLMConfig:
     timeout_s: int = 60
     use_local_server: bool = False
     local_server_url: Optional[str] = None
+    # Sampling seed sent with each request (Ollama / vLLM honor it; OpenAI treats it as a
+    # best-effort determinism hint). None = omit the field entirely, so a server that
+    # rejects unknown keys is unaffected. temperature 0 alone does NOT pin an LLM's
+    # sampling, so a seeded run is the closest thing to a reproducible LLM arm.
+    seed: Optional[int] = None
     # Optional run-level cap on cumulative LLM tokens (0 = no cap). Exceeding it aborts the
     # run with BudgetExceededError so an expensive judge/answer-gen sweep can't run away (T8).
     max_tokens_budget: int = 0
+    # Per-call retries for TRANSIENT failures only (timeouts, connection errors, HTTP
+    # 429/5xx — never auth/schema 4xx), with short backoff, so one hiccup doesn't drop the
+    # item and shrink the eval set (A4). 0 disables.
+    max_retries: int = 2
 
     def get_api_base(self) -> str:
         if self.use_local_server:
@@ -58,4 +67,6 @@ class LLMBackendMixin:
             timeout_s=self.timeout_s,
             use_local_server=self.use_local_server,
             local_server_url=self.local_server_url,
+            # optional on the component configs (a component may predate the field)
+            seed=getattr(self, "seed", None),
         )

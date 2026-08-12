@@ -17,26 +17,32 @@
 {% if error %}
 <p class="error">{{ error }}</p>
 {% elif rows %}
-<div id="pareto-chart" style="height:380px;"></div>
+<div id="pareto-chart" class="chart-host" style="--chart-h:380px"
+     role="img" aria-label="Scatter of {{ ykey }} against {{ xkey }}; starred points are the non-dominated frontier. The same runs are listed in the table below."></div>
 <script>
   (function () {
-    var frontier = {{ frontier_pts|safe }};
-    var dominated = {{ dominated_pts|safe }};
-    {
-      // plotInto (base.html): htmx-settle-safe Plotly mount.
-      plotInto('pareto-chart', [
-        { x: dominated.x, y: dominated.y, text: dominated.text, name: 'dominated',
-          mode: 'markers', type: 'scatter', marker: { color: '#64748b', size: 9 } },
-        { x: frontier.x, y: frontier.y, text: frontier.text, name: 'frontier',
-          mode: 'markers+lines', type: 'scatter',
-          marker: { color: '#1d4ed8', size: 12, symbol: 'star' } }
-      ], {
-        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#e2e8f0' }, margin: { l: 60, r: 16, t: 20, b: 50 },
-        xaxis: { title: '{{ xkey }}', gridcolor: '#1f2937' },
-        yaxis: { title: '{{ ykey }}', gridcolor: '#1f2937' }
-      }, { displaylogo: false, responsive: true });
-    }
+    var frontier = {{ frontier_pts|tojson }};
+    var dominated = {{ dominated_pts|tojson }};
+    var t = chartTheme();
+    // Emphasis, not two categories: the frontier is the subject, the dominated runs
+    // are context — so one accent hue plus the recessive gray, and a star symbol so
+    // the distinction survives without color (CVD / print).
+    var hover = '<b>%{y}</b> ' + {{ ykey|tojson }} + '<br>%{x} ' + {{ xkey|tojson }} +
+                '<br>%{text}<extra></extra>';
+    plotInto('pareto-chart', [
+      { x: dominated.x, y: dominated.y, text: dominated.text, name: 'dominated',
+        mode: 'markers', type: 'scatter', hovertemplate: hover,
+        marker: { color: t.dim, size: 10 } },
+      { x: frontier.x, y: frontier.y, text: frontier.text, name: 'frontier',
+        mode: 'markers+lines', type: 'scatter', hovertemplate: hover,
+        line: { color: t.cat[0], width: 2 },
+        marker: { color: t.cat[0], size: 13, symbol: 'star' } }
+    ], {
+      margin: { l: 64, r: 16, t: 16, b: 56 },
+      xaxis: { title: {{ xkey|tojson }} },
+      yaxis: { title: {{ ykey|tojson }} },
+      legend: { orientation: 'h', y: -0.2 }
+    });
   })();
 </script>
 <table>

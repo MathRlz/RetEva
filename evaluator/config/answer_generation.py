@@ -54,5 +54,9 @@ class AnswerGenerationConfig(LLMBackendMixin):
     timeout_s: int = 120
     use_local_server: bool = False
     local_server_url: Optional[str] = None
+    # Sampling seed forwarded to the LLM request (inherited from the top-level
+    # `llm:` block unless set here); None = omit. temperature 0 alone does not
+    # pin an LLM's sampling.
+    seed: Optional[int] = None
     compute_rouge: bool = True
     reference_metadata_field: str = "long_answer"

@@ -1,18 +1,32 @@
+{% from "_chart.html" import chart_panel %}
 {% if rows %}
-<div id="lb-chart" style="height:360px;"></div>
+<div id="lb-chart" class="chart-host" style="--chart-h:360px"
+     role="img" aria-label="Bar chart of {{ metric }} per run; the same values are in the table below."></div>
 <script>
   (function () {
-    var labels = {{ chart_labels|safe }};
-    var values = {{ chart_values|safe }};
-    {
-      // plotInto (base.html): htmx-settle-safe Plotly mount.
-      plotInto('lb-chart', [{ x: labels, y: values, type: 'bar', marker: { color: '#1d4ed8' } }], {
-        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#e2e8f0' }, margin: { l: 50, r: 16, t: 20, b: 90 },
-        yaxis: { title: '{{ metric }}', gridcolor: '#1f2937' },
-        xaxis: { gridcolor: '#1f2937', tickangle: -30 }
-      }, { displaylogo: false, responsive: true });
-    }
+    var labels = {{ chart_labels|tojson }};
+    var values = {{ chart_values|tojson }};
+    var t = chartTheme();
+    plotInto('lb-chart', [{
+      x: labels, y: values, type: 'bar',
+      // Width in category units. Plotly's default fills the slot, so a filter matching
+      // one run draws a single slab across the whole panel instead of a bar.
+      width: 0.6,
+      marker: { color: t.cat[0] },
+      hovertemplate: '<b>%{y}</b><br>%{x}<extra></extra>'
+    }], {
+      margin: { l: 56, r: 16, t: 16, b: labels.length > 6 ? 96 : 48 },
+      yaxis: { title: {{ metric|tojson }} },
+      // Rotate only when the names would otherwise collide. Below five runs, hold the
+      // category axis at five slots and centre what there is: a category axis sized to
+      // its contents turns one matching run into a slab across the whole panel.
+      xaxis: {
+        tickangle: labels.length > 6 ? -30 : 0,
+        range: labels.length < 5
+          ? [-0.5 - (5 - labels.length) / 2, labels.length - 0.5 + (5 - labels.length) / 2]
+          : undefined
+      }
+    });
   })();
 </script>
 <table>
@@ -48,4 +62,8 @@
 </div>
 {% else %}
 <p class="muted">No leaderboard rows for metric "{{ metric }}" yet. Run an experiment first.</p>
+{% endif %}
+{% if rows %}
+{{ chart_panel(duration_spec, height=280) }}
+{{ chart_panel(over_time_spec, height=260) }}
 {% endif %}

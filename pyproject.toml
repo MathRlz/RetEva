@@ -44,7 +44,7 @@ chromadb = ["chromadb>=0.4"]
 qdrant = ["qdrant-client>=1.6"]
 backends = ["chromadb>=0.4", "qdrant-client>=1.6"]
 sonar = ["sonar-space"]
-dev = ["pytest", "pytest-cov", "black", "flake8", "mypy"]
+dev = ["pytest", "pytest-cov", "black", "flake8", "mypy", "pytrec-eval-terrier"]
 all = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",

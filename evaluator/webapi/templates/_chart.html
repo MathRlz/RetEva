@@ -1,0 +1,50 @@
+{# One panel renderer for every chart: figure + caption + note + chart host + the
+   accessible data-table twin.
+
+   The spec is emitted ONCE as inert <script type="application/json"> and parsed by
+   plotFromSpec — so the numbers in the table and the numbers in the chart come from the
+   same object and cannot drift, and untrusted labels never get concatenated into
+   executable JS. htmx runs the <script> that follows but leaves the JSON block alone.
+
+   Usage:  {% from "_chart.html" import chart_panel %}
+           {{ chart_panel(spec, height=320) }}                                        #}
+{% macro chart_panel(spec, height=320) %}
+{% if spec %}
+<figure class="chart" aria-labelledby="{{ spec.id }}-t"
+        {% if spec.note %}aria-describedby="{{ spec.id }}-d"{% endif %}>
+  <figcaption id="{{ spec.id }}-t">{{ spec.title }}</figcaption>
+  {% if spec.note %}<p id="{{ spec.id }}-d" class="muted">{{ spec.note }}</p>{% endif %}
+  {% if spec.empty %}
+  <p class="muted">{{ spec.empty }}</p>
+  {% else %}
+  <div id="{{ spec.id }}" class="chart-host" style="--chart-h:{{ height }}px"
+       role="img"
+       aria-label="{{ spec.title }}{% if spec.table %} — the same values are in the data table below{% endif %}."></div>
+  <script type="application/json" id="{{ spec.id }}-spec">{{ spec|tojson }}</script>
+  <script>plotFromSpec({{ spec.id|tojson }});</script>
+  {% if spec.table %}
+  <details class="chart-table">
+    <summary>Data table</summary>
+    <table>
+      <caption class="sr-only">{{ spec.table.caption }}</caption>
+      <thead>
+        <tr>{% for col in spec.table.columns %}<th scope="col">{{ col }}</th>{% endfor %}</tr>
+      </thead>
+      <tbody>
+        {% for row in spec.table.rows %}
+        <tr>
+          {% for cell in row %}
+          {% if loop.first %}<th scope="row">{{ cell }}</th>
+          {% else %}<td>{% if cell is none %}—{% elif cell is number %}{{ '%.4g'|format(cell) }}{% else %}{{ cell }}{% endif %}</td>
+          {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+  {% endif %}
+</figure>
+{% endif %}
+{% endmacro %}

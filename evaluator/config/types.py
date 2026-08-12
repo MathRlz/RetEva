@@ -16,17 +16,6 @@ class VectorDBType(str, Enum):
         return self.value
 
 
-class AllocationStrategy(str, Enum):
-    """GPU allocation strategies for device pool."""
-    ROUND_ROBIN = "round_robin"
-    MEMORY_AWARE = "memory_aware"
-    PACKING = "packing"
-    MANUAL = "manual"
-
-    def __str__(self) -> str:
-        return self.value
-
-
 class DatasetType(str, Enum):
     """Type of evaluation dataset."""
     AUDIO_QUERY_RETRIEVAL = "audio_query_retrieval"

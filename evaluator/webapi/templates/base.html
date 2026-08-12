@@ -4,22 +4,23 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Evaluator</title>
-  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <!-- Theme stamp: inline and BEFORE the stylesheet, so the first paint is already in the
+       right theme. An external file would cost a round trip and flash the wrong colors.
+       'auto' (the default) leaves the attribute off and lets prefers-color-scheme decide. -->
   <script>
-    // htmx-safe Plotly mount: plot into a created child, never the swapped element.
-    // htmx's settle phase restores a swapped element's original attributes ~20ms
-    // after the swap, stripping the js-plotly-plot class Plotly set on it — its
-    // absolute-positioning CSS dies and the stacked SVG layers flow over the page,
-    // swallowing clicks (the "Results page unresponsive after delete" bug).
-    function plotInto(id, traces, layout, config) {
-      var host = document.getElementById(id);
-      if (!host || !window.Plotly) return;
-      host.replaceChildren();
-      var target = host.appendChild(document.createElement('div'));
-      target.style.height = '100%';
-      Plotly.newPlot(target, traces, layout, config);
-    }
+    (function () {
+      try {
+        var t = localStorage.getItem('evaluator-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) { /* privacy mode / storage disabled → fall back to the OS setting */ }
+    })();
   </script>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <!-- Plotly is vendored (not a CDN) so charts work offline and in the container;
+       loaded here rather than per-page so an htmx fragment opened standalone still
+       renders instead of showing an empty box. -->
+  <script src="/static/plotly-basic-2.35.2.min.js"></script>
+  <script src="/static/charts.js?v={{ asset_version('charts.js') }}"></script>
   {% block head %}{% endblock %}
   <link rel="stylesheet" href="/static/app.css?v={{ asset_version('app.css') }}">
 </head>
@@ -31,7 +32,29 @@
       <a href="/ui/builder" class="{{ 'active' if active == 'builder' else '' }}">Builder</a>
       <a href="/ui/jobs" class="{{ 'active' if active == 'jobs' else '' }}">Jobs</a>
       <a href="/ui/results" class="{{ 'active' if active == 'results' else '' }}">Results</a>
+      <button type="button" id="theme-toggle" class="secondary" aria-live="polite"
+              title="Switch between light and dark">Theme</button>
     </nav>
+    <script>
+      (function () {
+        var btn = document.getElementById('theme-toggle');
+        function current() {
+          return document.documentElement.dataset.theme ||
+            (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        }
+        function label() { btn.textContent = current() === 'dark' ? 'Light mode' : 'Dark mode'; }
+        btn.addEventListener('click', function () {
+          var next = current() === 'dark' ? 'light' : 'dark';
+          document.documentElement.dataset.theme = next;
+          try { localStorage.setItem('evaluator-theme', next); } catch (e) { /* ignore */ }
+          label();
+          // Charts read their colors from the CSS variables at plot time, so they must be
+          // told to re-read them; everything else restyles via the cascade for free.
+          window.dispatchEvent(new CustomEvent('evaluator:theme'));
+        });
+        label();
+      })();
+    </script>
     {% block body %}{% endblock %}
   </div>
 </body>

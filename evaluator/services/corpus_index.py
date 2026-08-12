@@ -17,6 +17,7 @@ import numpy as np
 from ..config import EvaluationConfig
 from ..config.types import enum_to_str
 from ..errors import ConfigurationError
+from ..evaluation.load_info import LoadInfo
 from ..logging_config import get_logger
 from ..storage.cache import CacheManager
 from ..storage.cache_keys import (
@@ -173,7 +174,7 @@ def embed_corpus(
     cache_manager: CacheManager | None = None,
     *,
     model_identity: Optional[Dict[str, Any]] = None,
-    load_info: Optional[Dict[str, Any]] = None,
+    load_info: Optional[LoadInfo] = None,
     corpus: Optional[List[Any]] = None,
 ) -> CorpusVectors:
     """Embed the text corpus → :class:`CorpusVectors` (the ``corpus_embedding`` node).
@@ -218,14 +219,14 @@ def embed_corpus(
             vectors, payloads = cached
             logger.info("Loaded cached corpus embeddings: vectors=%d", len(vectors))
             if load_info is not None:
-                load_info["vector_cache_hit"] = True
-                load_info["vector_cache_key"] = cache_key
-                load_info["corpus_size"] = len(corpus)
+                load_info.vector_cache_hit = True
+                load_info.vector_cache_key = cache_key
+                load_info.corpus_size = len(corpus)
             return CorpusVectors(vectors=np.asarray(vectors), payloads=list(payloads))
         if load_info is not None:
-            load_info["vector_cache_hit"] = False
-            load_info["vector_cache_key"] = cache_key
-            load_info["corpus_size"] = len(corpus)
+            load_info.vector_cache_hit = False
+            load_info.vector_cache_key = cache_key
+            load_info.corpus_size = len(corpus)
 
     corpus_texts = [doc.get("text", str(doc)) for doc in corpus]
     logger.info("corpus_embedding: embedding %d docs", len(corpus_texts))
@@ -242,10 +243,10 @@ def embed_corpus(
         cache_manager.set_vector_db(cache_key, vectors, corpus)
         logger.info("Cached corpus embeddings for reuse (store-agnostic key)")
         if load_info is not None:
-            load_info["vector_cache_written"] = True
+            load_info.vector_cache_written = True
     elif load_info is not None:
-        load_info["vector_cache_hit"] = False
-        load_info["corpus_size"] = len(corpus)
+        load_info.vector_cache_hit = False
+        load_info.corpus_size = len(corpus)
     return CorpusVectors(vectors=vectors, payloads=corpus)
 
 
@@ -297,7 +298,7 @@ def build_corpus_index(
     text_emb_pipeline=None,
     audio_emb_pipeline=None,
     cache_manager: CacheManager | None = None,
-    load_info: Dict[str, Any] | None = None,
+    load_info: Optional[LoadInfo] = None,
 ):
     """Embed the corpus and build the retrieval index when the mode retrieves.
 
@@ -336,14 +337,14 @@ def build_corpus_index(
                         embeddings=vectors, metadata=payloads
                     )
                     if load_info is not None:
-                        load_info["vector_cache_hit"] = True
-                        load_info["vector_cache_key"] = vector_cache_key
-                        load_info["corpus_size"] = len(corpus)
+                        load_info.vector_cache_hit = True
+                        load_info.vector_cache_key = vector_cache_key
+                        load_info.corpus_size = len(corpus)
                     return dataset
                 if load_info is not None:
-                    load_info["vector_cache_hit"] = False
-                    load_info["vector_cache_key"] = vector_cache_key
-                    load_info["corpus_size"] = len(corpus)
+                    load_info.vector_cache_hit = False
+                    load_info.vector_cache_key = vector_cache_key
+                    load_info.corpus_size = len(corpus)
 
             logger.info(
                 "STAGE load_dataset: corpus embedding START (%d docs)",
@@ -359,12 +360,12 @@ def build_corpus_index(
                 cache_manager.set_vector_db(vector_cache_key, vectors, corpus)
                 logger.info("Cached retrieval index artifacts for reuse")
                 if load_info is not None:
-                    load_info["vector_cache_written"] = True
-                    load_info["vector_cache_key"] = vector_cache_key
-                    load_info["corpus_size"] = len(corpus)
+                    load_info.vector_cache_written = True
+                    load_info.vector_cache_key = vector_cache_key
+                    load_info.corpus_size = len(corpus)
             elif load_info is not None:
-                load_info["vector_cache_hit"] = False
-                load_info["corpus_size"] = len(corpus)
+                load_info.vector_cache_hit = False
+                load_info.corpus_size = len(corpus)
         elif corpus and audio_emb_pipeline is not None:
             cv = embed_corpus_audio(config, dataset, audio_emb_pipeline)
             if cv is not None:

@@ -67,23 +67,14 @@ def _stage_augment_audio(s: RunState) -> None:
     ):
         logger.warning("augment_audio: no audio refs on the bus — no-op")
         return
-    params = s.node_params
     node_id = getattr(s.current_node, "id", "augment_audio")
-    base = getattr(s.config, "audio_augmentation", None) or AudioAugmentationConfig()
-    from dataclasses import replace as dc_replace
+    # Resolved before execution: global ⊕ node params; the node's presence ⇒ enabled.
+    from ..node_config import resolve_node_config
 
-    overlay = {
-        k: v
-        for k, v in params.items()
-        if k in ("add_noise", "snr_db", "speed_perturbation", "pitch_shift",
-                 "volume_change", "n_variants", "noise_type")
-        and v not in (None, "")
-    }
-    if "snr_db" in overlay:
-        overlay["snr_db"] = float(overlay["snr_db"])
-    if "n_variants" in overlay:
-        overlay["n_variants"] = int(overlay["n_variants"])
-    cfg = dc_replace(base, enabled=True, **overlay)
+    cfg = s.resolved_config() or resolve_node_config(
+        getattr(s.config, "audio_augmentation", None) or AudioAugmentationConfig(),
+        s.node_params, force_enabled=True,
+    )
     augmenter = AudioAugmenter(cfg)
     n_variants = max(1, int(getattr(cfg, "n_variants", 1) or 1))
 
@@ -131,14 +122,8 @@ def _stage_tts(s: RunState) -> None:
     from ...pipeline.audio.prepare import synthesize_missing_query_audio
 
     _t = time.perf_counter()
-    tts_cfg = s.node_overlay(
-        s.config.audio_synthesis,
-        ("enabled", "provider", "voice", "language", "sample_rate", "speed", "pitch", "volume",
-         "seed", "output_dir", "cache_dir", "skip_cache", "api_key"),
-        casts={"enabled": bool, "sample_rate": int, "speed": float, "pitch": float,
-               "volume": float, "seed": int, "skip_cache": bool},
-        force={"enabled": True},
-    )
+    # resolved before execution (global ⊕ node params, presence ⇒ enabled).
+    tts_cfg = s.resolved_config(default=s.config.audio_synthesis)
     if tts_cfg is not None and not tts_cfg.enabled:
         return  # a per-branch {enabled: false} tts node — no synthesis on this branch
     synthesize_missing_query_audio(

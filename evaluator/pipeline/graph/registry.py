@@ -38,6 +38,7 @@ from .artifacts import (  # noqa: F401  (re-exported vocabulary)
     ARTIFACT_QUERY_TEXT,
     ARTIFACT_QUERY_TRACES,
     ARTIFACT_QUERY_VECTORS,
+    ARTIFACT_REFERENCE_TEXT,
     ARTIFACT_REFERENCE_TRANSCRIPTION,
     ARTIFACT_REFINED_QUERY_TEXT,
     ARTIFACT_RELEVANT_DOCS,
@@ -399,11 +400,3 @@ def validate_graph_artifacts(graph: "StageGraph") -> None:
 # populating ``_NODE_REGISTRY``. It must come AFTER ``register_stage_node`` + the machinery
 # above are defined, since ``operators_catalog`` imports from this module at its top.
 from . import operators_catalog  # noqa: E402,F401  (triggers node registration)
-
-# Third-party node-type plugins (entry-point group ``evaluator.nodes``, §5) — best-effort.
-try:
-    from ...plugins import load_plugins as _load_node_plugins
-
-    _load_node_plugins("evaluator.nodes")
-except Exception:  # pragma: no cover - discovery never breaks core import
-    pass

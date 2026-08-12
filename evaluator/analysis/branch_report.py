@@ -125,6 +125,57 @@ def latex_branch_table(
     return "\n".join(lines)
 
 
+def latex_provenance_table(
+    results: Mapping[str, Any],
+    *,
+    caption: str = "Run provenance",
+    label: str = "tab:provenance",
+) -> str:
+    """Render ``report.provenance`` as a two-column LaTeX ``booktabs`` table — the
+    chapter's reproducibility exhibit: config hash, seed, git commit, library versions,
+    determinism flags actually applied, dataset content fingerprint, model identities."""
+    prov = (results.get("report") or {}).get("provenance") or {}
+    if not prov:
+        raise ValueError("results carry no report.provenance — nothing to tabulate")
+
+    rows: List[tuple] = []
+
+    def _row(key: str, value: Any) -> None:
+        if value not in (None, "", {}):
+            rows.append((key, str(value)))
+
+    _row("Config hash", prov.get("config_hash"))
+    _row("Seed", prov.get("seed"))
+    _row("Git commit", prov.get("git_commit"))
+    for family, ident in (prov.get("models") or {}).items():
+        if isinstance(ident, dict):
+            ident = " ".join(f"{k}={v}" for k, v in ident.items() if v not in (None, ""))
+        _row(f"Model: {family}", ident)
+    ds = prov.get("dataset") or {}
+    _row("Corpus docs / sha256", f"{ds.get('corpus_docs')} / {ds.get('corpus_sha256')}"
+         if ds else None)
+    _row("Questions", ds.get("questions"))
+    for lib, ver in (prov.get("versions") or {}).items():
+        _row(f"Version: {lib}", ver)
+    for flag, val in (prov.get("determinism") or {}).items():
+        _row(f"Determinism: {flag}", val)
+
+    lines = [
+        r"\begin{table}[ht]",
+        r"\centering",
+        rf"\caption{{{_escape_latex(caption)}}}",
+        rf"\label{{{label}}}",
+        r"\begin{tabular}{ll}",
+        r"\toprule",
+        r"Field & Value \\",
+        r"\midrule",
+    ]
+    for key, value in rows:
+        lines.append(rf"{_escape_latex(key)} & {_escape_latex(value)} \\")
+    lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
+    return "\n".join(lines) + "\n"
+
+
 def plot_branch_deltas(
     report: Mapping[str, Any],
     output_path: str,
@@ -257,7 +308,9 @@ def export_per_query_failures(results: Mapping[str, Any], output_path: str) -> s
     return output_path
 
 
-def export_all(results_path: str, out_dir: str = ".") -> Dict[str, str]:
+def export_all(
+    results_path: str, out_dir: str = ".", *, plot_format: str = "png"
+) -> Dict[str, str]:
     """Write every applicable artifact for one results JSON; returns {kind: path}.
 
     Skips (with a log line) artifacts whose inputs the run didn't produce —
@@ -277,7 +330,9 @@ def export_all(results_path: str, out_dir: str = ".") -> Dict[str, str]:
     else:
         logger.info("skip latex table: no report.branches in %s", results_path)
     if report.get("deltas"):
-        written["plot"] = plot_branch_deltas(report, str(out / f"{stem}_deltas.png"))
+        written["plot"] = plot_branch_deltas(
+            report, str(out / f"{stem}_deltas.{plot_format}")
+        )
     else:
         logger.info("skip delta plot: no report.deltas in %s", results_path)
     if _query_traces(results):
@@ -298,9 +353,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument("results", nargs="+", help="results_*.json file(s)")
     parser.add_argument("--out-dir", default=".", help="output directory")
+    parser.add_argument(
+        "--plot-format", default="png", choices=["png", "pdf", "svg"],
+        help="delta-plot format (pdf/svg = vector, for print)",
+    )
     args = parser.parse_args(argv)
     for results_path in args.results:
-        written = export_all(results_path, args.out_dir)
+        written = export_all(results_path, args.out_dir, plot_format=args.plot_format)
         for kind, path in written.items():
             print(f"{results_path}: {kind} -> {path}")
         if not written:

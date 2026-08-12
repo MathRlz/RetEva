@@ -33,11 +33,13 @@ def parse_export_args(args: Optional[List[str]] = None) -> argparse.Namespace:
         "-f",
         type=str,
         choices=["csv", "excel", "latex", "latex-compare", "samples",
-                 "metrics-table", "traces", "traces-parquet", "mlflow", "wandb"],
+                 "metrics-table", "traces", "traces-parquet", "mlflow", "wandb",
+                 "provenance"],
         default="csv",
         help="Output format (default: csv). 'metrics-table' = tidy branch×metric CSV; "
              "'traces' = per-query JSONL; 'traces-parquet' = per-query Parquet; "
-             "'mlflow'/'wandb' = log the report to that tracker ('--output' = run name)."
+             "'mlflow'/'wandb' = log the report to that tracker ('--output' = run name); "
+             "'provenance' = reproducibility LaTeX table from report.provenance."
     )
     parser.add_argument(
         "--output",
@@ -148,6 +150,14 @@ def run_export(args: argparse.Namespace) -> int:
 
                 n = write_traces_jsonl(results, args.output)
                 print(f"Per-query traces ({n} rows) exported to: {args.output}")
+
+            elif args.format == "provenance":
+                from evaluator.analysis.branch_report import latex_provenance_table
+
+                Path(args.output).write_text(
+                    latex_provenance_table(results, caption=args.caption)
+                )
+                print(f"Provenance table saved to: {args.output}")
 
             elif args.format == "traces-parquet":
                 from evaluator.analysis.report_export import write_traces_parquet

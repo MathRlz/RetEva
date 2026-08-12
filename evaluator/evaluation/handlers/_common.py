@@ -19,7 +19,7 @@ def publish_keyed_or_plain(
     """Publish ``name`` as a keyed ``ItemSet`` when ``query_ids`` align 1:1 (W2/W3);
     otherwise the plain list (legacy path, e.g. a dataset with no usable ids). Either way
     ``get_artifact(name)`` returns the list, so positional consumers are unchanged; keyed
-    consumers read it via ``get_items``. The single publish contract for every per-query
+    consumers read it via ``keyed_items``. The single publish contract for every per-query
     transform output (query_text / optimized / refined / retrieved / …)."""
     ids = [str(i) for i in (query_ids or [])]
     if len(ids) == len(values) and len(set(ids)) == len(ids):
@@ -55,9 +55,12 @@ def is_asr_text_retrieval(s: Any) -> bool:
 
 
 def _ctx_first(s: Any, name: str) -> Any:
-    """The first ``ItemSet`` published anywhere for artifact ``name`` (shared GT)."""
-    for pid, art in s.ctx.slots():
-        if art == name:
+    """The first bound-and-published value for input ``name`` — oldest producer first
+    (shared-GT reads). binding-scoped (the consumer must DECLARE the read), no
+    global bus scan — so graph isolation holds and streaming's lifetime analysis sees
+    every terminal read."""
+    for pid in s._producers(name):
+        if s.ctx.has(pid, name):
             return s.ctx.get(pid, name)
     return None
 
@@ -66,6 +69,15 @@ def _reference_transcriptions(s: Any) -> list:
     """The spoken-transcription GT from the bus (`reference_transcription`, published by
     the asr / audio_embedding node, M1c-3; bus-only since M1d-2)."""
     return list(s.get_artifact("reference_transcription", default=[]))
+
+
+def _relevant_from_bus(s: Any) -> list:
+    """Per-query relevance from the bus (`relevant_docs`, dataset order), with the
+    self-retrieval fallback (each spoken reference is its own relevant key). The single
+    source the retrieval-metrics / answer / trace / judge consumers share."""
+    return list(s.get_artifact("relevant_docs", default=[])) or [
+        {str(gt): 1} for gt in _reference_transcriptions(s)
+    ]
 
 
 # Retrieval-debug formatting constants.

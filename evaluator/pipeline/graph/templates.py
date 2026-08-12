@@ -39,9 +39,11 @@ def graph_template(name: str, **features: Any) -> StageGraph:
 
 def template_graph_spec(name: str, **features: Any) -> Dict[str, Any]:
     """A template as an explicit, embeddable ``{nodes, edges}`` block — node *kinds* (the
-    structural skeleton, no models attached) + the dependency edges. Drop it under a config's
-    ``graph:`` and the loader round-trips it; the user fills models via the node forms."""
+    structural skeleton, no models attached) + the PORT-LEVEL edges (E5: explicit wiring,
+    ``{from, output, to, input}``). Drop it under a config's ``graph:`` and the loader
+    round-trips it; the user fills models via the node forms."""
+    from .wiring import edges_for_graph
+
     g = graph_template(name, **features)
     nodes = [{"id": n.id, "type": node_kind(n.stage, n.params)} for n in g.nodes]
-    edges = [{"from": dep, "to": n.id} for n in g.nodes for dep in n.depends_on]
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges_for_graph(g.nodes)}

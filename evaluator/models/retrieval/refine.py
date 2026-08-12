@@ -16,7 +16,7 @@ from .scoring import min_max_norm, payload_key, payload_text, tokenize
 from .strategy import PostProcessingConfig, RerankingConfig
 
 if TYPE_CHECKING:
-    from .rag.reranker import BaseReranker
+    from .rag.reranker import CrossEncoderReranker
 
 logger = get_logger(__name__)
 
@@ -36,7 +36,7 @@ def rerank_results(
     k: int,
     *,
     reranking: RerankingConfig,
-    reranker: Optional["BaseReranker"] = None,
+    reranker: Optional["CrossEncoderReranker"] = None,
 ) -> List[Tuple[Any, float]]:
     """Apply reranking to initial retrieval results.
 

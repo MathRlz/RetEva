@@ -10,20 +10,6 @@ logger = get_logger(__name__)
 DEVICE_PATTERN = re.compile(r'^(cpu|cuda(:\d+)?|mps)$')
 
 
-def _warn_if_unusable(device_idx: int, device: str) -> None:
-    """Warn (don't fail) when an explicitly pinned CUDA index is not compute-usable."""
-    from ..devices.capability import usable_gpu_indices
-
-    usable = usable_gpu_indices()
-    if usable and device_idx not in usable:
-        logger.warning(
-            "Device '%s' is pinned but not in the compute-usable set %s "
-            "(likely an unsupported arch / integrated GPU). This may SIGSEGV. "
-            "Use one of cuda:%s, or set EVALUATOR_VISIBLE_GPUS / HIP_VISIBLE_DEVICES.",
-            device, usable, usable,
-        )
-
-
 def validate_device_string(device: str) -> None:
     """Validate device string format.
 
@@ -100,7 +86,6 @@ def detect_device(preferred: Optional[str] = None) -> str:
                 try:
                     device_idx = int(preferred.split(":")[1]) if ":" in preferred else 0
                     if device_idx < torch.cuda.device_count():
-                        _warn_if_unusable(device_idx, preferred)
                         return preferred
                 except (ValueError, IndexError):
                     pass
@@ -118,8 +103,12 @@ def get_available_gpu_count() -> int:
     Returns:
         Number of CUDA devices available, 0 if CUDA is not available.
     """
-    from ..devices.capability import usable_gpu_count
-    return usable_gpu_count()
+    try:
+        import torch
+
+        return torch.cuda.device_count() if torch.cuda.is_available() else 0
+    except ImportError:
+        return 0
 
 
 def get_gpu_memory_gb(device_idx: int = 0) -> Optional[float]:

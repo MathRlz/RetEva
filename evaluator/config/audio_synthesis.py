@@ -23,7 +23,8 @@ class AudioSynthesisConfig:
         language: Language code for TTS. Default: "en".
         seed: Random seed for reproducibility. Default: 42.
         output_dir: Directory for synthesized audio files. Default: "prepared_benchmarks/audio".
-        cache_dir: Directory for caching synthesized audio. Default: None (auto-derived from output_dir).
+        cache_dir: Directory for caching synthesized audio. Default: None (auto-derived
+            from output_dir).
         skip_cache: Skip all caches and force re-synthesis on every call. Default: False.
 
     Examples:

@@ -1,5 +1,9 @@
-"""Cross-encoder reranking for retrieval results."""
-from abc import ABC, abstractmethod
+"""Cross-encoder reranking for retrieval results.
+
+A reranker is duck-typed: implement ``rerank(query, documents, top_k=None) ->
+List[(payload, score)]`` + ``name()`` and register with ``@register_reranker_model``
+(§15.1) — no base class required.
+"""
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
@@ -8,34 +12,6 @@ from ....logging_config import get_logger
 from ...registry import register_reranker_model
 
 logger = get_logger(__name__)
-
-
-class BaseReranker(ABC):
-    """Abstract base class for rerankers."""
-
-    @abstractmethod
-    def rerank(
-        self,
-        query: str,
-        documents: List[Tuple[Any, float]],
-        top_k: Optional[int] = None,
-    ) -> List[Tuple[Any, float]]:
-        """Rerank documents based on query relevance.
-
-        Args:
-            query: The query text.
-            documents: List of (payload, initial_score) tuples from initial retrieval.
-            top_k: Number of top results to return. If None, returns all.
-
-        Returns:
-            List of (payload, reranker_score) tuples sorted by relevance.
-        """
-        pass
-
-    @abstractmethod
-    def name(self) -> str:
-        """Return the reranker model name."""
-        pass
 
 
 def _extract_text(payload: Any) -> str:
@@ -50,7 +26,7 @@ def _extract_text(payload: Any) -> str:
     default_name='cross-encoder/ms-marco-MiniLM-L-6-v2',
     description='Cross-encoder reranker using sentence-transformers',
 )
-class CrossEncoderReranker(BaseReranker):
+class CrossEncoderReranker:
     """Cross-encoder reranker using sentence-transformers.
 
     Supports models like:

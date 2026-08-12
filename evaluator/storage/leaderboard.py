@@ -196,7 +196,8 @@ class ExperimentStore:
         rows: List[LeaderboardRow] = []
         with closing(self._connect()) as conn, conn:
             result_rows = conn.execute(sql, params).fetchall()
-        for run_id, exp_name, ds_name, mode, metrics_json, duration, created_at, config_json in result_rows:
+        for (run_id, exp_name, ds_name, mode, metrics_json, duration, created_at,
+             config_json) in result_rows:
             if active_model_filters and not _model_matches(config_json, active_model_filters):
                 continue
             metrics = json.loads(metrics_json)
@@ -358,7 +359,8 @@ class ExperimentStore:
                 "output_dir": output_dir,
                 "created_at": created_at,
             }
-            for run_id, experiment_name, ds_name, mode, start_time, end_time, duration_seconds, output_dir, created_at in rows
+            for (run_id, experiment_name, ds_name, mode, start_time, end_time,
+                 duration_seconds, output_dir, created_at) in rows
         ]
 
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
@@ -366,7 +368,8 @@ class ExperimentStore:
             row = conn.execute(
                 """
                 SELECT id, experiment_name, dataset_name, pipeline_mode, start_time, end_time,
-                       duration_seconds, output_dir, metrics_json, config_json, metadata_json, created_at
+                       duration_seconds, output_dir, metrics_json, config_json,
+                       metadata_json, created_at
                 FROM runs WHERE id = ?
                 """,
                 (run_id,),

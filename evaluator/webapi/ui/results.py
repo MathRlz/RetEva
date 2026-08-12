@@ -6,19 +6,47 @@ and run delete. Mounted under ``/ui/results``, ``/ui/leaderboard``,
 from __future__ import annotations
 
 import difflib
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse
+
+from evaluator.webapi.ui._common import _graph_view_from_config
+from evaluator.webapi import chart_data
 from ...logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _traces_block(run: Dict[str, Any]) -> list:
+    """The per-query traces, from the report or the legacy top-level key."""
+    metrics = run.get("metrics") or {}
+    traces = (metrics.get("report") or {}).get("traces") or {}
+    return traces.get("query_traces") or metrics.get("query_traces") or []
+
+
+def _failure_block(run: Dict[str, Any]) -> Dict[str, Any]:
+    """The retrieval-failure analysis, from the report (source of truth) or the legacy
+    top-level key — the same fallback the template uses."""
+    metrics = run.get("metrics") or {}
+    traces = (metrics.get("report") or {}).get("traces") or {}
+    return traces.get("retrieval_failure_analysis") or \
+        metrics.get("retrieval_failure_analysis") or {}
+
 
 #: DB-access failures that legitimately yield an empty/None view (missing, locked, or
 #: corrupt leaderboard sqlite). Narrower than ``Exception`` so a real bug 500s instead of
 #: silently rendering an empty page (C1/F20).
 _STORE_ERRORS = (sqlite3.Error, OSError)
+
+
+def _open_store(output_dir: str):
+    """The leaderboard sqlite store for ``output_dir`` (may raise ``_STORE_ERRORS``)."""
+    from evaluator.storage import ExperimentStore
+
+    return ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
 
 
 def _numeric_metrics(metrics: Dict[str, Any]) -> Dict[str, float]:
@@ -58,23 +86,13 @@ def _config_diff(run_a: Dict[str, Any], run_b: Dict[str, Any]) -> List[str]:
     )
 
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
-
-from evaluator.webapi.ui._common import _graph_view_from_config
-
-
 def register_results_routes(router: APIRouter, page) -> None:
     @router.get("/ui/results", response_class=HTMLResponse, include_in_schema=False)
     def ui_results(
         request: Request, metric: str = "MRR", output_dir: str = "evaluation_results"
     ) -> HTMLResponse:
-        from evaluator.storage import ExperimentStore
-
         try:
-            store = ExperimentStore(
-                db_path=str(Path(output_dir) / "leaderboard.sqlite")
-            )
+            store = _open_store(output_dir)
             metrics = store.available_metrics()
             filters = store.filter_options()
         except _STORE_ERRORS as exc:
@@ -135,8 +153,13 @@ def register_results_routes(router: APIRouter, page) -> None:
             rows=rows,
             metric=metric,
             output_dir=output_dir,
-            chart_labels=json.dumps(labels),
-            chart_values=json.dumps(values),
+            # Passed as data, NOT a pre-dumped string: the template renders them with
+            # Jinja's |tojson, which escapes '<' (json.dumps does not) — an experiment
+            # name containing "</script>" would otherwise break out of the script tag.
+            chart_labels=labels,
+            chart_values=values,
+            duration_spec=chart_data.leaderboard_scatter(rows, metric, 'duration_seconds'),
+            over_time_spec=chart_data.leaderboard_scatter(rows, metric, 'created_at'),
         )
 
     @router.get("/ui/leaderboard", response_class=HTMLResponse, include_in_schema=False)
@@ -172,13 +195,10 @@ def register_results_routes(router: APIRouter, page) -> None:
     ) -> HTMLResponse:
         """Cross-run Pareto view for an experiment group (Roadmap 4a): a 2-objective scatter
         with the non-dominated frontier highlighted + a table tagging each comparable run."""
-        from evaluator.storage import ExperimentStore
         from evaluator.analysis.leaderboard_views import pareto_rows
 
         try:
-            groups = ExperimentStore(
-                db_path=str(Path(output_dir) / "leaderboard.sqlite")
-            ).experiment_groups()
+            groups = _open_store(output_dir).experiment_groups()
         except _STORE_ERRORS as exc:
             logger.warning("pareto page: group list unavailable (%s): %s", output_dir, exc)
             groups = []
@@ -202,6 +222,15 @@ def register_results_routes(router: APIRouter, page) -> None:
 
         def _trace(on_frontier: bool) -> Dict[str, list]:
             picks = [r for r in rows if r.get("on_frontier") is on_frontier]
+            # The frontier is drawn with a connecting line, so it must be walked in x
+            # order — rows arrive created_at DESC, which drew a zig-zag through the
+            # points instead of tracing the frontier.
+            if on_frontier:
+                picks = sorted(
+                    picks,
+                    key=lambda r: (r["metrics"].get(xkey) is None,
+                                   r["metrics"].get(xkey) or 0.0),
+                )
             return {
                 "x": [r["metrics"].get(xkey) for r in picks],
                 "y": [r["metrics"].get(ykey) for r in picks],
@@ -220,8 +249,9 @@ def register_results_routes(router: APIRouter, page) -> None:
             ykey=ykey,
             error=error,
             output_dir=output_dir,
-            frontier_pts=json.dumps(_trace(True)),
-            dominated_pts=json.dumps(_trace(False)),
+            # data, not pre-dumped strings — see the leaderboard note on |tojson escaping
+            frontier_pts=_trace(True),
+            dominated_pts=_trace(False),
         )
 
     @router.get(
@@ -277,14 +307,10 @@ def register_results_routes(router: APIRouter, page) -> None:
     def ui_compare(
         request: Request, a: int, b: int, output_dir: str = "evaluation_results"
     ) -> HTMLResponse:
-        from evaluator.storage import ExperimentStore
-
         run_a: Optional[Dict[str, Any]] = None
         run_b: Optional[Dict[str, Any]] = None
         try:
-            store = ExperimentStore(
-                db_path=str(Path(output_dir) / "leaderboard.sqlite")
-            )
+            store = _open_store(output_dir)
             run_a = store.get_run(a)
             run_b = store.get_run(b)
         except _STORE_ERRORS as exc:
@@ -307,6 +333,7 @@ def register_results_routes(router: APIRouter, page) -> None:
             }
             for name in sorted(set(metrics_a) | set(metrics_b))
         ]
+        compare_spec = chart_data.compare_relative_deltas(metric_rows)
         return page(
             request,
             "compare.html",
@@ -314,6 +341,7 @@ def register_results_routes(router: APIRouter, page) -> None:
             run_a=run_a,
             run_b=run_b,
             metric_rows=metric_rows,
+            compare_spec=compare_spec,
             diff_lines=_config_diff(run_a, run_b),
             output_dir=output_dir,
         )
@@ -324,12 +352,8 @@ def register_results_routes(router: APIRouter, page) -> None:
     def ui_run_detail(
         request: Request, run_id: int, output_dir: str = "evaluation_results"
     ) -> HTMLResponse:
-        from evaluator.storage import ExperimentStore
-
         try:
-            store = ExperimentStore(
-                db_path=str(Path(output_dir) / "leaderboard.sqlite")
-            )
+            store = _open_store(output_dir)
             run = store.get_run(run_id)
         except _STORE_ERRORS as exc:
             logger.warning("run detail %s: store read failed: %s", run_id, exc)
@@ -337,8 +361,35 @@ def register_results_routes(router: APIRouter, page) -> None:
         if run is None:
             return HTMLResponse('<p class="error">run not found</p>')
         levels, node_io = _graph_view_from_config(run.get("config") or {})
+        # Chart shaping lives in chart_data (pure + unit-tested); the template only
+        # renders the specs it is handed.
+        report = (run.get("metrics") or {}).get("report") or {}
+        prov = report.get('provenance') or {}
+        traces, metrics = _traces_block(run), run.get('metrics') or {}
+        # Ordered as the page reads: what the branches prove, then what the queries did,
+        # then what the run cost. Split by whether the panel has anything to draw — a
+        # single-branch run without traces has eight of these empty, and eight stacked
+        # apologies push the two charts that do have data below the fold.
+        panels = [
+            (chart_data.delta_forest(report), 300),
+            (chart_data.delta_volcano(report), 300),
+            (chart_data.denominator_bars(report), 260),
+            (chart_data.recall_loss_by_k(report), 260),
+            (chart_data.per_query_histogram(traces), 250),
+            (chart_data.wer_vs_recall_scatter(traces, metrics), 300),
+            (chart_data.score_margin_histogram(traces), 250),
+            (chart_data.stage_timing(prov, metrics.get('latency')), 240),
+            (chart_data.cache_hit_rates(prov), 220),
+            (chart_data.token_budget(prov), 220),
+        ]
+        failure = _failure_block(run)
         return page(
-            request, "_run_detail.html", run=run, levels=levels, node_io=node_io
+            request, "_run_detail.html", run=run, levels=levels, node_io=node_io,
+            panels=[{"spec": s, "height": h} for s, h in panels if not s.get("empty")],
+            panels_empty=[s for s, _ in panels if s.get("empty")],
+            rank_spec=chart_data.rank_distribution(failure),
+            failcat_spec=chart_data.failure_categories(failure),
+            metric_chips=chart_data.metric_chips(metrics, report.get('branches') or {}),
         )
 
     @router.get("/ui/runs/{run_id}/config.yaml", include_in_schema=False)
@@ -349,10 +400,8 @@ def register_results_routes(router: APIRouter, page) -> None:
         experiment (the config stored with the run, byte-for-byte what produced these results)."""
         import yaml
 
-        from evaluator.storage import ExperimentStore
-
         try:
-            store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
+            store = _open_store(output_dir)
             run = store.get_run(run_id)
         except _STORE_ERRORS as exc:
             logger.warning("run config %s: store read failed: %s", run_id, exc)

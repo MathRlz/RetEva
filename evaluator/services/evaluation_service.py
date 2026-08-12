@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..config import EvaluationConfig
+from ..errors import EvaluatorError
 from ..evaluation.results import EvaluationResults
 from ..logging_config import get_logger, setup_logging
 from ..pipeline import create_pipeline_from_config
@@ -13,9 +14,10 @@ from ..storage.leaderboard import ExperimentStore
 from ..tracking import MLflowTracker, NoOpTracker
 from ..datasets import (
     load_runtime_dataset,
-    resolve_dataset_profile,
     validate_dataset_runtime_config,
 )
+from ..datasets.profiles import profile_snapshot
+from ..evaluation.load_info import LoadInfo
 from .model_provider import ModelServiceProvider
 
 
@@ -32,22 +34,7 @@ def _create_tracker(config: EvaluationConfig):
 
 
 def _resolve_profile_snapshot(config: EvaluationConfig) -> Dict[str, Any]:
-    profile = resolve_dataset_profile(
-        dataset_name=config.data.dataset_name,
-        dataset_type=config.data.dataset_type,
-    )
-    return {
-        "name": profile.name,
-        "dataset_type": str(profile.dataset_type),
-        "requires_audio": profile.requires_audio,
-        "requires_text": profile.requires_text,
-        "supports_generation": profile.supports_generation,
-        "evaluation_mode": profile.evaluation_mode,
-        "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
-        "pipeline_mode_supported": profile.supports_pipeline_mode(
-            str(config.graph_template)
-        ),
-    }
+    return profile_snapshot(config)
 
 
 def _evaluate_metrics(
@@ -102,8 +89,8 @@ def _cache_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-def _apply_startup_policy(config: EvaluationConfig, bundle: Any, logger) -> None:
-    """Apply startup policy for model services."""
+def _warm_up_model_services(config: EvaluationConfig, bundle: Any, logger) -> None:
+    """Eager startup: touch each configured pipeline's model so lazy construction runs now."""
     mode = config.service_runtime.startup_mode
     logger.info("service.startup_policy mode=%s", mode)
     if mode != "eager":
@@ -153,7 +140,7 @@ def _run_core(
     cache_manager,
     service_provider=None,
     progress_callback=None,
-    load_info: Optional[Dict[str, Any]] = None,
+    load_info: Optional[LoadInfo] = None,
     query_ids: Optional[Any] = None,
 ):
     """Build pipelines, load the dataset (+corpus/synthesis), and evaluate.
@@ -163,7 +150,7 @@ def _run_core(
     logging, metadata, and leaderboard ingest.
     """
     if load_info is None:
-        load_info = {}
+        load_info = LoadInfo()
     logger = get_logger(__name__)
 
     # Pre-flight chain (evaluation/validation.py): determinism seed, LLM budget,
@@ -179,7 +166,7 @@ def _run_core(
         config, retrieval_required=_run_needs_retrieval(config)
     )
     if query_ids is not None:
-        load_info["replay_query_ids"] = query_ids
+        load_info.replay_query_ids = list(query_ids)
 
     # Run-start summary on the shared service path (the CLI logs the full config at debug; this
     # one INFO line makes a webapi/API run diagnosable: what ran, over how much data).
@@ -197,11 +184,11 @@ def _run_core(
     bundle = create_pipeline_from_config(
         config, cache_manager, service_provider=service_provider
     )
-    _apply_startup_policy(config, bundle, logger)
+    _warm_up_model_services(config, bundle, logger)
     if service_provider is not None:
         _configure_local_llm_runtime(config, service_provider, logger)
 
-    # Corpus embedding + index build is now the in-graph ``corpus_index`` node (runs
+    # Corpus embedding + index build are the in-graph corpus_embedding + vector_db nodes (run
     # inside run_from_bundle), so it is no longer done eagerly here.
     tracker = _create_tracker(config)
     metrics = _evaluate_metrics(
@@ -215,7 +202,7 @@ def _run_core(
     )
     # The in-graph load stashed the loaded dataset on the shared ``load_info`` dict, so the
     # caller's num_samples/metadata needs no pre-graph load.
-    dataset = load_info.get("dataset")
+    dataset = load_info.dataset
     return metrics, dataset
 
 
@@ -231,27 +218,23 @@ def run_evaluation(
     service_provider = ModelServiceProvider()
 
     try:
-        try:
-            setup_logging(
-                log_dir=config.logging.log_dir,
-                console_level=config.logging.get_console_level(),
-                file_level=config.logging.get_file_level(),
-                experiment_name=config.experiment_name,
-                verbosity=config.logging.verbosity,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to setup logging: {e}") from e
+        # Setup errors propagate with their real types (ConfigurationError / OSError / …)
+        # — the CLI + api boundaries already format them; a blanket RuntimeError wrap
+        # only erased the type.
+        setup_logging(
+            log_dir=config.logging.log_dir,
+            console_level=config.logging.get_console_level(),
+            file_level=config.logging.get_file_level(),
+            experiment_name=config.experiment_name,
+            verbosity=config.logging.verbosity,
+        )
+        cache_manager = CacheManager(
+            cache_dir=config.cache.cache_dir,
+            enabled=config.cache.enabled,
+            max_size_gb=config.cache.max_size_gb,
+        )
 
-        try:
-            cache_manager = CacheManager(
-                cache_dir=config.cache.cache_dir,
-                enabled=config.cache.enabled,
-                max_size_gb=config.cache.max_size_gb,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to create cache manager: {e}") from e
-
-        load_info: Dict[str, Any] = {}
+        load_info = LoadInfo()
         cache_stats_before = (
             cache_manager.get_cache_stats() if cache_manager.enabled else {}
         )
@@ -264,6 +247,8 @@ def run_evaluation(
                 progress_callback=progress_callback,
                 load_info=load_info,
             )
+        except EvaluatorError:
+            raise  # typed errors (ConfigurationError, …) keep their type for the caller
         except Exception as e:
             raise RuntimeError(f"Evaluation failed: {e}") from e
 
@@ -285,7 +270,7 @@ def run_evaluation(
                 "stats_before": cache_stats_before,
                 "stats_after": cache_stats_after,
                 "delta": _cache_delta(cache_stats_before, cache_stats_after),
-                "load": load_info,
+                "load": load_info.to_metadata(),
             }
         else:
             metadata["cache"] = {"enabled": False}
@@ -307,18 +292,13 @@ def run_evaluation(
         )
 
 
-def _mode_needs_retrieval(mode) -> bool:
-    """Every pipeline mode retrieves except ``asr_only``."""
-    return str(mode) != "asr_only"
-
-
 def _run_needs_retrieval(config) -> bool:
     """Whether this run retrieves (so the corpus is required). A named mode: every mode but
     ``asr_only``. A graph-only config (mode=None): derive it from the execution graph — a
     ``search`` node means retrieval (graph-first Phase 4)."""
     mode = config.graph_template
     if mode is not None:
-        return _mode_needs_retrieval(mode)
+        return str(mode) != "asr_only"
     from ..pipeline.graph.modes import build_graph_for_config
 
     return any(n.stage == "search" for n in build_graph_for_config(config).nodes)
@@ -342,15 +322,16 @@ def prepare_dataset(
     return load_runtime_dataset(config)
 
 
-def load_dataset(
+def load_dataset_and_build_index(
     config: EvaluationConfig,
     retrieval_pipeline=None,
     text_emb_pipeline=None,
     audio_emb_pipeline=None,
     cache_manager: CacheManager | None = None,
-    load_info: Dict[str, Any] | None = None,
+    load_info: Optional[LoadInfo] = None,
 ):
-    """Back-compat: prepare the dataset (load + synth) then build the corpus index."""
+    """Prepare the dataset (load + synth) THEN build the corpus index — both steps,
+    by design (the webapi live-preview path needs the built index)."""
     dataset = prepare_dataset(
         config, retrieval_required=(retrieval_pipeline is not None)
     )

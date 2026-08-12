@@ -6,6 +6,10 @@ from .labse import LabseModel
 from .nemotron import NemotronModel
 from .bgem3 import BgeM3Model
 from .sonar import SonarTextModel
+# The CLAP-style wrapper is one class registered in BOTH families (shared contrastive
+# space); it lives under a2e/ but must import here too, or the text registry — which only
+# imports this package — never sees its `clap_text` registration.
+from ..a2e.clap_style import MultimodalClapStyleModel  # noqa: F401
 
 __all__ = [
     "JinaV4Model",
@@ -14,4 +18,5 @@ __all__ = [
     "NemotronModel",
     "BgeM3Model",
     "SonarTextModel",
+    "MultimodalClapStyleModel",
 ]

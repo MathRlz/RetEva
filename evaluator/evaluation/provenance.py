@@ -45,8 +45,10 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
         import numpy as np
 
         np.random.seed(s % (2**32))
-    except Exception as exc:
+    except ImportError as exc:
         logger.debug("numpy seeding skipped: %s", exc)
+    except Exception as exc:
+        logger.warning("numpy seeding failed: %s", exc)
     try:
         import torch
 
@@ -58,7 +60,7 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
             torch.backends.cudnn.benchmark = False
             flags["cudnn_deterministic"] = True
         except Exception as exc:
-            logger.debug("cuDNN determinism flags not applied: %s", exc)
+            logger.warning("cuDNN determinism flags not applied: %s", exc)
         opt_out = os.environ.get("EVALUATOR_NONDETERMINISM") == "1"
         if not opt_out:
             try:
@@ -70,8 +72,11 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
         else:
             flags["deterministic_algorithms"] = False
             flags["deterministic_note"] = "opt-out via EVALUATOR_NONDETERMINISM=1"
-    except Exception as exc:
+    except ImportError as exc:
         logger.debug("torch seeding skipped: %s", exc)
+        flags["torch"] = "unavailable"
+    except Exception as exc:
+        logger.warning("torch seeding failed: %s", exc)
         flags["torch"] = "unavailable"
     return flags
 
@@ -218,6 +223,8 @@ def build_provenance(
     cost: Optional[Dict[str, Any]] = None,
     offload: Optional[Dict[str, Any]] = None,
     models: Optional[Dict[str, Any]] = None,
+    optimization_fallbacks: Optional[int] = None,
+    correction_fallbacks: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Assemble the ``report.provenance`` block for a run.
 
@@ -265,4 +272,12 @@ def build_provenance(
         # Soft-CPU offload events (2c) — only present when a model was actually parked warm,
         # so the default (full-free) policy leaves the block absent. Deterministic per run.
         prov["offload"] = dict(offload)
+    if optimization_fallbacks:
+        # Items whose query optimization failed and fell back to the ORIGINAL query — an
+        # unreachable LLM endpoint otherwise yields a complete report in which the
+        # optimization arm silently did nothing. Absent when every item optimized.
+        prov["optimization_fallbacks"] = int(optimization_fallbacks)
+    if correction_fallbacks:
+        # Same guarantee for the llm corrector arm. Absent when every item corrected.
+        prov["correction_fallbacks"] = int(correction_fallbacks)
     return prov

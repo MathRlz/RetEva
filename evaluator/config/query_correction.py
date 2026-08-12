@@ -24,20 +24,33 @@ class QueryCorrectionConfig(LLMBackendMixin):
     Attributes:
         enabled: Whether query correction runs. Default: False.
         method: Correction strategy. Default: "rule".
-            Options: "rule" (deterministic word/phrase replacement). ``kb``/``llm`` are
-            planned (knowledge-graph disambiguation / fine-tuned med-LLM rewrite).
+            Options: "rule" (deterministic word/phrase replacement), "kb" (fuzzy-snap
+            to canonical medical terms), "phonetic" (sound-alike drug-name snap),
+            "clinical" (phonetic pass + dose/unit plausibility repair), "llm"
+            (LLM rewrite). Any ``@register_corrector`` method is also valid.
         replacements: Extra ``wrong → right`` whole-word replacements (case-insensitive),
             merged over the default medical rules.
         use_default_rules: Include the built-in starter medical replacement rules.
     """
 
     enabled: bool = False
-    method: str = "rule"  # rule | kb | llm
+    method: str = "rule"  # rule | kb | phonetic | clinical | llm (registry is the authority)
     replacements: Dict[str, str] = field(default_factory=dict)
     use_default_rules: bool = True
     # kb method: fuzzy-snap words to canonical medical terms (extends the built-in glossary).
     kb_terms: list = field(default_factory=list)
     kb_max_distance: int = 1
+    # phonetic method (C7.1): snap sound-alike drug names to the canonical vocabulary.
+    drug_terms_path: Optional[str] = None  # None → bundled resources/drug_terms.json
+    phonetic_max_edits: int = 2  # residual edit budget after a phonetic-code match
+    # clinical method (C7.2): dose/unit plausibility repair over the phonetic pass.
+    drug_doses_path: Optional[str] = None  # None → bundled resources/drug_doses.json
+    # llm method (C7.5): snap out-of-vocab drug-shaped tokens in the LLM output back to
+    # the drug vocabulary (post-hoc constrained decode — the model can't invent drugs).
+    constrain_to_vocab: bool = False
+    # C7 opt-in: publish corrected-text WER/CER/CEER + the drug-aware ceer_rx metrics.
+    # Default off — reports (and the m1c parity gate) are byte-identical unless set.
+    corrected_metrics: bool = False
     # llm method: shared LLM backend (inherits EvaluationConfig.llm defaults via _merge_llm).
     model: str = "gpt-4o-mini"
     api_base: str = "https://api.openai.com/v1/chat/completions"
@@ -46,6 +59,10 @@ class QueryCorrectionConfig(LLMBackendMixin):
     timeout_s: int = 60
     use_local_server: bool = False
     local_server_url: Optional[str] = None
+    # Sampling seed forwarded to the LLM request (inherited from the top-level
+    # `llm:` block unless set here); None = omit. temperature 0 alone does not
+    # pin an LLM's sampling.
+    seed: Optional[int] = None
 
     def __post_init__(self) -> None:
         # The corrector registry is the authority (P3): a custom

@@ -14,7 +14,6 @@ from evaluator import EvaluationConfig
 from evaluator.config.model_fields import (
     MODEL_FIELD_FAMILY as _MODEL_FIELD_FAMILY,
 )
-from evaluator.datasets import resolve_dataset_profile
 from evaluator.pipeline import build_graph_for_config
 # Public introspection surface (the supported boundary — not registry/stage_graph privates).
 from evaluator.pipeline.introspection import (
@@ -22,8 +21,6 @@ from evaluator.pipeline.introspection import (
     display_artifact_names,
     display_label,
     get_stage_node_def,
-    node_category,
-    node_domain,
     node_model_field,
     resolve_field as _resolve,
     effective_inputs as _effective_inputs,
@@ -74,7 +71,9 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
         info["k"] = config.vector_db.k
         info["mode"] = config.vector_db.retrieval_mode
         if getattr(config.vector_db, "reranker_enabled", False):
-            info["reranker"] = config.vector_db.reranker_mode or True
+            # loader-compatible nested form (a bare string round-trips as an unknown key)
+            info["reranker"] = {"enabled": True,
+                                "mode": config.vector_db.reranker_mode or "token_overlap"}
     elif kind in _FEATURE_NODE_CONFIG:
         # Rehydrate the capability config the loader folded OFF this node (audit 2026-07 #2):
         # the canvas must show the CONFIGURED values, not the form defaults, or a
@@ -112,19 +111,16 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
 
 
 def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
-    """The rich preview node card (label/category/domain/ports/bindings/inspect) the read-only
-    DAG view + the builder seed render from."""
+    """The rich preview node card the read-only DAG view + the builder seed render from:
+    the graph-instance extras (stage/bindings/deps/structural/columns/inspect) plus the SAME
+    field-aware form contract ``render_node`` and ``/api/graph/node-form`` use
+    (``resolve_node_form`` — one serializer, so the three surfaces cannot drift; a hand-rolled
+    copy here once dropped ``input_ports`` and broke the preview's ports)."""
     from ..pipeline.introspection import is_structural
 
     return {
         "id": node.id,
         "stage": node.stage,
-        # friendly operator label for the node card (display.py)
-        "label": display_label(node.stage, node.params),
-        # declared class — the DAG colors nodes by `category`, groups by `domain`
-        # (resolve callable operator category/domain for this instance's fields)
-        "category": node_category(node.stage, node.params),
-        "domain": node_domain(node.stage, node.params),
         # structural plumbing (metric comparisons / report / finalize / sinks) → hidden in the
         # simplified view, revealed via "View full DAG"; the builder seed strips it.
         "structural": is_structural(node.stage, dict(node.params or {})),
@@ -132,48 +128,22 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
         # resolved data bindings (artifact → producer) — the preview draws
         # these as edges, same shape as /api/graph/template (B2)
         "bindings": [list(b) for b in node.bindings],
-        "inputs": list(_effective_inputs(node.stage, node.params)),
-        # per-instance outputs: dataset_source honors role + column schema
-        "outputs": list(_effective_outputs(node.stage, node.params)),
-        "optional_inputs": list(
-            display_artifact_names(
-                _resolve(get_stage_node_def(node.stage).optional_inputs, node.params)
-            )
-        ),
-        # field-aware form contract (model family + the op-specific param switches)
-        # so the builder seed renders THIS instance, not the operator's default tile
-        # (corpus_embedding ≠ text_embedding on the canvas).
-        "model_field": node_model_field(node.stage, node.params),
-        "family": _node_family(
-            node_model_field(node.stage, node.params), node.stage, node.params
-        ),
-        "input_ports": _input_ports(node.stage, node.params),
-        "node_params": _node_param_specs(get_stage_node_def(node.stage), node.params),
         # declared column schema [{name, artifact, type}] — what the diagram
         # shows on dataset nodes so an experiment reads from its DAG
         "columns": dataset_columns(node.params),
         "inspect": _node_inspect(config, node),
+        # label / category / domain / inputs / outputs / optional_inputs / input_ports /
+        # model_field / family / node_params / default_model — field-resolved per instance.
+        **resolve_node_form(node.stage, dict(node.params or {})),
     }
 
 
 def graph_preview(config: EvaluationConfig) -> Dict[str, Any]:
-    profile = resolve_dataset_profile(
-        config.data.dataset_name, config.data.dataset_type
-    )
+    from ..datasets.profiles import profile_snapshot
+
     graph = build_graph_for_config(config)
     payload = graph_render_payload(graph, lambda node: _preview_node(config, node))
-    payload["dataset_profile"] = {
-        "name": profile.name,
-        "dataset_type": str(profile.dataset_type),
-        "requires_audio": profile.requires_audio,
-        "requires_text": profile.requires_text,
-        "supports_generation": profile.supports_generation,
-        "evaluation_mode": profile.evaluation_mode,
-        "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
-        "pipeline_mode_supported": profile.supports_pipeline_mode(
-            str(config.graph_template)
-        ),
-    }
+    payload["dataset_profile"] = profile_snapshot(config)
     return payload
 
 
@@ -265,25 +235,6 @@ def lift_single_source_dataset(nodes: list) -> Dict[str, Any]:
     return block
 
 
-def minimal_edges(nodes: list, edges: list) -> list:
-    """Drop edges the artifact auto-wiring would recreate anyway, keeping only genuinely-extra
-    ordering deps. ``build_graph_from_spec`` auto-wires from artifacts and treats ``edges`` as
-    *additional* deps, so exporting every rendered binding as an explicit edge makes them
-    accumulate across round-trips. Returning only the non-auto-wired edges makes the export
-    stable (and minimal). ``edges`` is the ``[{from,to}]`` form."""
-    from evaluator.pipeline import build_graph_from_spec
-
-    try:
-        auto = build_graph_from_spec(nodes, mode="custom")
-    except Exception:  # noqa: BLE001 — if it can't auto-wire, keep edges as-is (caller validates)
-        return list(edges)
-    auto_deps = {(dep, n.id) for n in auto.nodes for dep in n.depends_on}
-    return [
-        e for e in edges
-        if isinstance(e, dict) and (e.get("from"), e.get("to")) not in auto_deps
-    ]
-
-
 def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
     """Serialize a config's DAG into the builder canvas seed (the ``/api/graph/template``
     shape: ``{mode, levels, nodes:[{id, type, params, bindings, …form}]}``) — but with each
@@ -353,12 +304,18 @@ def build_canvas_graph(payload: Dict[str, Any]) -> Any:
     Shared by ``graph_advice`` callers and ``/ui/validate-builder`` (rendered fragment)."""
     from evaluator.pipeline import build_graph_from_spec
 
+    from evaluator.pipeline.graph.wiring import _has_port_edges
+
     nodes = payload.get("nodes") or []
     mode = payload.get("mode") or "asr_text_retrieval"
-    edges: Dict[str, list] = {}
-    for e in payload.get("edges") or []:
-        if e.get("from") and e.get("to"):
-            edges.setdefault(e["to"], []).append(e["from"])
+    raw = payload.get("edges") or []
+    if _has_port_edges(raw):
+        edges = [e for e in raw if e.get("from") and e.get("to")]  # explicit port wiring (E5)
+    else:
+        edges = {}
+        for e in raw:
+            if e.get("from") and e.get("to"):
+                edges.setdefault(e["to"], []).append(e["from"])
     branches = payload.get("branches") or []
     if branches:
         from evaluator.pipeline.graph.branches import build_branched_graph
@@ -380,7 +337,10 @@ def graph_advice(graph: Any, config: Any) -> "tuple[list, list]":
     produced: set = set()
     for n in graph.nodes:
         produced.update(_effective_outputs(n.stage, n.params))
-    metrics = [m.name for m in applicable_metrics(produced)]
+    corrected_on = bool(
+        getattr(getattr(config, "query_correction", None), "corrected_metrics", False)
+    )
+    metrics = [m.name for m in applicable_metrics(produced, include_opt_in=corrected_on)]
     # GT-missing: gated to GT the source CAN declare (relevant_docs); the transcription GT is loaded
     # at run-time, not a declared node output, so its absence here is not reliable. Grouped by GT.
     source_gt = _effective_outputs("source", {})
@@ -420,11 +380,17 @@ def spec_to_render_payload(spec: Dict[str, Any]) -> Dict[str, Any]:
     each node keeps the *saved* params (models/dataset the user set)."""
     from evaluator.pipeline import build_graph_from_spec
 
+    from evaluator.pipeline.graph.wiring import _has_port_edges
+
     spec_nodes = [n for n in (spec.get("nodes") or []) if isinstance(n, dict)]
-    edges: Dict[str, list] = {}
-    for edge in spec.get("edges") or []:
-        if isinstance(edge, dict) and edge.get("from") and edge.get("to"):
-            edges.setdefault(edge["to"], []).append(edge["from"])
+    raw = spec.get("edges") or []
+    if _has_port_edges(raw):
+        edges = [e for e in raw if isinstance(e, dict) and e.get("from") and e.get("to")]
+    else:
+        edges = {}
+        for edge in raw:
+            if isinstance(edge, dict) and edge.get("from") and edge.get("to"):
+                edges.setdefault(edge["to"], []).append(edge["from"])
     graph = build_graph_from_spec(
         spec_nodes, mode=spec.get("mode") or "custom", edges=edges or None
     )
@@ -474,12 +440,15 @@ def _input_ports(stage: str, params=None) -> List[Dict[str, Any]]:
     port, not five, and ``search`` shows ``query_vectors`` + ``vector_index``, not eleven ports.
 
     Required ports first, then optional (``optional: true``). Each port carries ``names`` (the
-    artifacts it accepts — used for edge matching) and a ``label`` (the chain's base name)."""
+    artifacts it accepts — used for edge matching), a ``label`` (the chain's base name), and —
+    for a OneOf port — its ``modality`` (B2: a multi-name port also accepts any registered
+    same-modality artifact via an explicit edge, so the canvas may draw such a connection)."""
     from evaluator.pipeline.graph.registry import (
         ARTIFACT_CORPUS,
         OneOf,
         _DOCS_AXIS_CAPABLE,
     )
+    from evaluator.pipeline.graph.wiring import _port_modality
 
     d = get_stage_node_def(stage)
     p = params or {}
@@ -493,7 +462,12 @@ def _input_ports(stage: str, params=None) -> List[Dict[str, Any]]:
 
     def add(art, optional):
         names = list(art) if isinstance(art, OneOf) else [art]
-        ports.append({"label": names[-1], "names": names, "optional": optional})
+        port: Dict[str, Any] = {"label": names[-1], "names": names, "optional": optional}
+        if len(names) > 1:  # type-open OneOf port (B2) — plain ports stay closed
+            mod = _port_modality(tuple(names))
+            if mod is not None:
+                port["modality"] = mod.value
+        ports.append(port)
 
     for art in required:
         add(art, False)

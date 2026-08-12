@@ -25,7 +25,12 @@ from .engine import _run_one_node, _STAGE_TIMES_LOCK  # noqa: F401
 from .stage_meta import DEVICE_ATTR as _STAGE_DEVICE_ATTR
 
 
-def _assert_model_nodes_are_device_managed() -> None:
+def assert_model_nodes_are_device_managed() -> None:
+    """Registry sanity: every category='model' node kind must have a device mapping.
+
+    Called from ``run_graph``'s pre-flight (next to ``validate_graph_handlers``) — a
+    registry mismatch should fail a *run* with context, not break ``import evaluator``.
+    """
     from ...pipeline.graph.registry import model_node_kinds
 
     # model_node_kinds() resolves operators to their model sub-kinds (legacy names), so the
@@ -37,9 +42,6 @@ def _assert_model_nodes_are_device_managed() -> None:
             f"{sorted(missing)} — add their config.model.*_device field (else they run "
             f"unplaced and can SIGSEGV on heterogeneous multi-GPU)."
         )
-
-
-_assert_model_nodes_are_device_managed()
 
 
 def _node_device(node: Any, state: "RunState") -> str:

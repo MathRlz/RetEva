@@ -74,17 +74,17 @@ class ModelConfig:
     def auto_configure_devices(self) -> None:
         """Auto-configure device assignments based on hardware availability.
 
-        Picks from the *compute-usable* CUDA indices (unsupported archs / iGPUs are
-        filtered out), so indices are not assumed contiguous. With 2+ usable GPUs,
-        text embedding goes on the second to spread load; otherwise everything shares
-        the first usable GPU, or CPU when none are usable.
+        Picks from the CUDA devices torch reports. With 2+ GPUs, text embedding goes on
+        the second to spread load; otherwise everything shares the first, or CPU when
+        there are none. Hide a device you must not use (an unsupported iGPU on a ROCm
+        box) with ``CUDA_VISIBLE_DEVICES`` / ``HIP_VISIBLE_DEVICES``.
         """
-        from ..devices.capability import usable_gpu_indices
+        from .base import get_available_gpu_count
 
-        devs = usable_gpu_indices()
+        devs = list(range(get_available_gpu_count()))
 
         if not devs:
-            # No usable GPUs, use CPU for all
+            # No GPUs, use CPU for all
             self.asr_device = "cpu"
             self.text_emb_device = "cpu"
             self.audio_emb_device = "cpu"

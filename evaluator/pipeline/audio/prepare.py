@@ -197,5 +197,5 @@ def _release_torch_memory() -> None:
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - cache clear is best-effort
+        logger.debug("cuda cache clear skipped: %s", exc)

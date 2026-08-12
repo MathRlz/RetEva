@@ -24,14 +24,15 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def create_reranker_from_config(vector_db_config, service_provider: Optional["ModelServiceProvider"] = None):
+def create_reranker_from_config(vector_db_config,
+                                service_provider: Optional["ModelServiceProvider"] = None):
     """Create a reranker model from configuration.
 
     Args:
         vector_db_config: VectorDBConfig with reranker settings
 
     Returns:
-        BaseReranker instance or None if reranking is disabled
+        Reranker instance or None if reranking is disabled
     """
     if not vector_db_config.reranker_enabled:
         return None
@@ -114,14 +115,6 @@ def check_backend_dependencies(vector_db_config) -> None:
     check_store_dependency(vector_db_config)
 
 
-def create_vector_store_from_config(vector_db_config, embedding_dim: Optional[int] = None):
-    """Build the configured vector store. Dispatch lives in the storage registry (OCP) —
-    a backend registers a ``(config, dim) -> VectorStore`` factory under its type name."""
-    from ..storage.registry import create_vector_store
-
-    return create_vector_store(vector_db_config, embedding_dim)
-
-
 def create_gpu_pool_from_config(config) -> Optional["GPUPool"]:
     """Create a GPUPool from configuration if device_pool is configured.
 
@@ -134,23 +127,9 @@ def create_gpu_pool_from_config(config) -> Optional["GPUPool"]:
     if config.device_pool is None:
         return None
 
-    from ..devices import GPUPool
-    from ..devices.strategy import create_strategy
+    from ..devices.pool import pool_from_config
 
-    pool = GPUPool(
-        devices=list(config.device_pool.available_devices),
-        memory_buffer_percent=config.device_pool.memory_buffer_percent,
-        allow_cpu_fallback=config.device_pool.allow_cpu_fallback,
-    )
-
-    # Set allocation strategy
-    if config.device_pool.model_device_overrides:
-        strategy = create_strategy("manual", overrides=config.device_pool.model_device_overrides)
-    else:
-        strategy = create_strategy(config.device_pool.allocation_strategy)
-    pool.set_strategy(strategy)
-
-    return pool
+    return pool_from_config(config.device_pool)
 
 
 @dataclass(frozen=True)
@@ -222,9 +201,11 @@ def _create_retrieval_pipeline(config, cache_manager, reranker, embedding_dim=No
     Extracts duplicate RetrievalPipeline creation logic to reduce repetition. ``embedding_dim``
     is graph-derived by the caller (the query embedder's dim).
     """
+    from ..storage.registry import create_vector_store
+
     strategy_config = RetrievalStrategyConfig.from_vector_db_config(config.vector_db)
     return RetrievalPipeline(
-        create_vector_store_from_config(config.vector_db, embedding_dim=embedding_dim),
+        create_vector_store(config.vector_db, embedding_dim=embedding_dim),
         cache_manager,
         strategy_config=strategy_config,
         reranker=reranker,

@@ -12,7 +12,7 @@ from typing import Callable, List, Dict, Any, Optional, Tuple
 
 from ....logging_config import get_logger
 from ....config import QueryOptimizationConfig
-from ....llm.client import LLMClient, _cache_key
+from ....llm_client.client import LLMClient, _cache_key
 from .prompts import (
     get_rewrite_prompt,
     get_hyde_prompt,

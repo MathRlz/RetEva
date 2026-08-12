@@ -23,7 +23,7 @@ from ..models.retrieval.refine import apply_mmr, apply_threshold, rerank_results
 from ..models.retrieval.sparse import SparseBM25Index
 
 if TYPE_CHECKING:
-    from ..models.retrieval.rag.reranker import BaseReranker
+    from ..models.retrieval.rag.reranker import CrossEncoderReranker
 
 logger = get_logger(__name__)
 
@@ -52,7 +52,7 @@ class RetrievalPipeline:
         vector_store: Any,
         cache_manager: Optional[CacheManager] = None,
         strategy_config: Optional[RetrievalStrategyConfig] = None,
-        reranker: Optional["BaseReranker"] = None,
+        reranker: Optional["CrossEncoderReranker"] = None,
     ) -> None:
         """Build the pipeline from a :class:`RetrievalStrategyConfig`.
 
@@ -99,7 +99,8 @@ class RetrievalPipeline:
             else ""
         )
         logger.info(
-            f"Retrieval pipeline initialized with vector store: {type(vector_store).__name__}{reranker_info}{mmr_info}{threshold_info}"
+            f"Retrieval pipeline initialized with vector store: "
+            f"{type(vector_store).__name__}{reranker_info}{mmr_info}{threshold_info}"
         )
 
     @staticmethod
@@ -167,7 +168,8 @@ class RetrievalPipeline:
         """
         if self.strategy_config.core.mode != "dense":
             raise ValueError(
-                "search() supports only dense mode. Use search_batch(..., query_texts=...) for sparse/hybrid"
+                "search() supports only dense mode. "
+                "Use search_batch(..., query_texts=...) for sparse/hybrid"
             )
         if self.strategy_config.reranking.mode != "none":
             raise ValueError(

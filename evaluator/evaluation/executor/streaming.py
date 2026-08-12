@@ -133,16 +133,6 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
     }
     accumulate = {s for s in finalize_inputs if s[0] in windowed}
 
-    full_dataset = state.dataset
-    n = len(full_dataset) if hasattr(full_dataset, "__len__") else 0
-    bounds = window_bounds(n, window_size)
-    logger.info(
-        "streaming: %d item(s) in %d window(s) of %d; prelude=%d windowed=%d finalize=%d "
-        "(accumulating %d slot(s))",
-        n, len(bounds), window_size, len(prelude), len(windowed), len(finalize),
-        len(accumulate),
-    )
-
     # Window-granular checkpoint/resume: a crashed corpus-scale run resumes at the first
     # incomplete window instead of redoing them all (the prelude re-runs — cache-fast — to
     # rebuild the shared index; only the light accumulator is persisted, not the index).
@@ -152,6 +142,19 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
     for node in flat:
         if node.id in prelude:
             _run_one_node(state, node)
+
+    # Window bounds must be taken AFTER the prelude: dataset loading is in-graph, so on the
+    # service path ``state.dataset`` is None until the prelude has run — sizing earlier
+    # yields ZERO windows and a crashed finalize.
+    full_dataset = state.dataset
+    n = len(full_dataset) if hasattr(full_dataset, "__len__") else 0
+    bounds = window_bounds(n, window_size)
+    logger.info(
+        "streaming: %d item(s) in %d window(s) of %d; prelude=%d windowed=%d finalize=%d "
+        "(accumulating %d slot(s))",
+        n, len(bounds), window_size, len(prelude), len(windowed), len(finalize),
+        len(accumulate),
+    )
 
     # 2. Windowed query compute — accumulate only the finalize-bound per-item slots.
     for w, (start, stop) in enumerate(bounds):
@@ -188,24 +191,22 @@ def _setup_window_journal(state: Any, flat: List[Any]):
     from ..run_journal import RunJournal, run_key
 
     logger = get_logger(__name__)
-    cm = getattr(state, "cache_manager", None)
+    cm = state.cache_manager
     if not (
         cm is not None
-        and getattr(state, "experiment_id", None)
-        and getattr(state, "checkpoint_interval", 0) > 0
+        and state.experiment_id
+        and state.checkpoint_interval > 0
     ):
         return None, 0, {}
     # Distinct key from the level journal (different execution shape) via a sentinel node id.
     key = run_key(state.config, tuple(n.id for n in flat) + ("__windowed__",))
     journal = RunJournal(cm.checkpoints_dir, key)
-    if getattr(state, "resume_from_checkpoint", False):
+    if state.resume_from_checkpoint:
         loaded = journal.load()
         if loaded is not None:
+            # journal.load() already guards unpickling; a loaded blob is a plain dict.
             completed, blob = loaded
-            try:
-                accum = dict(blob.get("accum", {}))
-                logger.info("resuming windowed run from window %d", int(completed))
-                return journal, int(completed), accum
-            except Exception as exc:  # noqa: BLE001 - a bad journal must never block a run
-                logger.warning("windowed journal restore failed (%s); running fresh", exc)
+            accum = dict(blob.get("accum", {}))
+            logger.info("resuming windowed run from window %d", int(completed))
+            return journal, int(completed), accum
     return journal, 0, {}

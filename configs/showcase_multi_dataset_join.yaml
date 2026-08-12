@@ -55,6 +55,28 @@ graph:
   - retrieval
   - metrics
   - finalize
+  edges:
+  - {from: corpus_src, to: corpus_embedding, input: corpus}
+  - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
+  - {from: qa_src, to: tts, input: query_text}
+  - {from: qa_src, to: asr, input: query_audio}
+  - {from: tts, to: asr, input: query_audio}
+  - {from: qa_src, to: asr, input: reference_transcription}
+  - {from: qa_src, to: text_embedding, input: query_text}
+  - {from: asr, to: text_embedding, input: query_text}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
+  - {from: vector_db, to: retrieval, input: vector_index}
+  - {from: qa_src, to: retrieval, input: query_text}
+  - {from: asr, to: retrieval, input: query_text}
+  - {from: qa_src, to: retrieval, input: reference_transcription}
+  - {from: qa_src, to: retrieval, input: relevant_docs}
+  - {from: retrieval, to: metrics, input: retrieved}
+  - {from: qa_src, to: metrics, input: query_text}
+  - {from: asr, to: metrics, input: query_text}
+  - {from: qa_src, to: metrics, input: reference_transcription}
+  - {from: qa_src, to: metrics, input: relevant_docs}
+  - {from: metrics, to: finalize, input: metrics}
+  - {from: retrieval, to: finalize, input: retrieved}
 nodes:
   asr:
     model: whisper
@@ -64,7 +86,7 @@ nodes:
     model: labse
     device: cuda:0
   retrieval:
-    k: 5
+    k: 10
 runtime:
   cache:
     enabled: true

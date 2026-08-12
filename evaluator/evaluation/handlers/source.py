@@ -33,16 +33,17 @@ def _ensure_dataset_loaded(s: RunState) -> None:
     + multi-source map + the join gate + the replay slice and sets the progress total; later
     source nodes (and back-compat callers that pre-seeded ``s.dataset``) find it loaded and no-op.
 
-    ``s.load_info`` is the run's carrier dict (shared by reference with the service wrapper): it
-    passes ``replay_query_ids`` in and the loaded ``dataset`` out (so the wrapper's num_samples
-    needs no pre-graph load)."""
+    ``s.load_info`` is the run's :class:`LoadInfo` carrier (shared by reference with the
+    service wrapper): it passes ``replay_query_ids`` in and the loaded ``dataset`` out (so
+    the wrapper's num_samples needs no pre-graph load)."""
     if s.dataset is not None:
         return
     from ...datasets.runtime import load_runtime_dataset, load_dataset_sources
+    from ..load_info import LoadInfo
 
-    info = s.load_info if isinstance(s.load_info, dict) else {}
+    info = s.load_info if s.load_info is not None else LoadInfo()
     dataset = load_runtime_dataset(s.config)
-    qids = info.get("replay_query_ids")
+    qids = info.replay_query_ids
     if qids:
         from ...datasets.runtime import slice_by_query_ids
         from ...errors import ConfigurationError
@@ -62,7 +63,7 @@ def _ensure_dataset_loaded(s: RunState) -> None:
         s.disable_ir_metrics = disable_ir
         s.join_warning = join_warning
     s.total = len(dataset)
-    info["dataset"] = dataset
+    info.dataset = dataset
     logger.info("Dataset size: %d", s.total)
 
 
