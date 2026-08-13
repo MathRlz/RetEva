@@ -498,6 +498,13 @@ def _stage_metrics(s: RunState) -> None:
             retrieved_keys,
         )
 
+    # Answer-quality aggregates from the answer_metrics node (mean_rougeL & co). They ride an
+    # artifact because this assembler REBUILDS `results` — anything a pre-metrics node wrote
+    # into s.results is discarded, which is how these were computed, logged, then lost.
+    answer_scores = s.get_artifact("answer_scores", default=None)
+    if isinstance(answer_scores, dict):
+        results.update({k: v for k, v in answer_scores.items() if v is not None})
+
     s.stage_times["metrics_s"] = time.perf_counter() - _t_phase
     s.results = results
 

@@ -47,7 +47,6 @@ nodes:
     model: attention_pool_m4t
     size: v2-large
     dim: 2048
-    dropout: 0.1
     embedding_space: jina_v4_space
     params:
       pooling: attention

@@ -53,7 +53,6 @@ nodes:
     model_path: path/to/your/model.pt
     device: cuda:0
     dim: 512
-    dropout: 0.1
   vector_db:
     store: inmemory
   retrieval:

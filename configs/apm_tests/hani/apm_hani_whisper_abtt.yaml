@@ -45,7 +45,6 @@ nodes:
     model: attention_pool
     size: large-v3
     dim: 2048
-    dropout: 0.1
     embedding_space: jina_v4_space
     params:
       pooling: mean_abtt

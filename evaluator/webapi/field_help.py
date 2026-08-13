@@ -42,6 +42,5 @@ FIELD_HELP = {
     "tgt_lang": "Target language code the model decodes into (e.g. eng).",
     "source_lang": "Source language code of the input text (e.g. eng_Latn).",
     "emb_dim": "Output embedding dimensionality.",
-    "dropout": "Dropout probability used by the pooling head.",
     "model_path": "Filesystem path to a local checkpoint / weights directory.",
 }

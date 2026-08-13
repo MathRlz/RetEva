@@ -122,7 +122,7 @@ class ModelServiceProvider:
     _KEY_FIELDS: Dict[str, Tuple[str, ...]] = {
         "asr": ("model_type", "model_name", "adapter_path", "device"),
         "text": ("model_type", "model_name", "device"),
-        "audio": ("model_type", "model_name", "model_path", "emb_dim", "dropout", "device"),
+        "audio": ("model_type", "model_name", "model_path", "emb_dim", "device"),
         "reranker": ("model_type", "model_name", "device", "batch_size", "max_length"),
     }
 
@@ -191,13 +191,12 @@ class ModelServiceProvider:
         model_name: Optional[str],
         model_path: Optional[str],
         emb_dim: int,
-        dropout: float,
         device: str,
         **kwargs: Any,
     ):
         key = self._key_for(
             "audio", model_type=model_type, model_name=model_name, model_path=model_path,
-            emb_dim=emb_dim, dropout=dropout, device=device,
+            emb_dim=emb_dim, device=device,
         ) + _kw_key(kwargs)
         return self._get_or_create(
             self._audio_services,
@@ -207,7 +206,6 @@ class ModelServiceProvider:
                 model_name=model_name,
                 model_path=model_path,
                 emb_dim=emb_dim,
-                dropout=dropout,
                 device=device,
                 **kwargs,
             ),

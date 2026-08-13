@@ -130,7 +130,6 @@ def _build_attention_pool_audio(
     size: Optional[str],
     model_path: Optional[str],
     emb_dim: int,
-    dropout: float,
     device: str,
     **extra,
 ):
@@ -140,7 +139,6 @@ def _build_attention_pool_audio(
         audio_encoder_name=name,
         emb_dim=emb_dim,
         model_path=model_path,
-        dropout=dropout,
         pooling=extra.get("pooling", "attention"),
     ).to(torch.device(device))
 
@@ -153,7 +151,6 @@ def _build_clap_style_audio(
     size: Optional[str],
     model_path: Optional[str],
     emb_dim: int,
-    dropout: float,
     device: str,
     **extra,
 ):
@@ -177,7 +174,7 @@ register_audio_embedding_builder("clap_style", _build_clap_style_audio)
 def create_audio_embedding_model(model_type: str, model_name: Optional[str] = None,
                                  size: Optional[str] = None,
                                  model_path: Optional[str] = None,
-                                 emb_dim: int = 2048, dropout: float = 0.1,
+                                 emb_dim: int = 2048,
                                  device: str = "cuda:0",
                                  quantization: Optional[str] = None, **extra_params):
     """
@@ -189,7 +186,6 @@ def create_audio_embedding_model(model_type: str, model_name: Optional[str] = No
         size: Optional size shorthand resolved via Params.SIZES
         model_path: Path to pre-trained model weights
         emb_dim: Embedding dimension
-        dropout: Dropout rate
         device: Device to load model on
         **extra_params: Forwarded to builder
 
@@ -211,7 +207,6 @@ def create_audio_embedding_model(model_type: str, model_name: Optional[str] = No
         size=size,
         model_path=model_path,
         emb_dim=emb_dim,
-        dropout=dropout,
         device=device,
         **extra_params,
     )

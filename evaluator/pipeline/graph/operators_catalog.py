@@ -569,7 +569,10 @@ _MEASURE = {
     "alignment": {"inputs": (ARTIFACT_AUDIO_QUERY_VECTORS, ARTIFACT_TEXT_QUERY_VECTORS),
                   "outputs": (ARTIFACT_EMBEDDING_ALIGNMENT,), "optional": ()},
     "answer": {"inputs": (ARTIFACT_GENERATED_ANSWERS,), "outputs": (ARTIFACT_ANSWER_SCORES,),
-               "optional": (ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS)},
+               # short_answers = the dataset's yes/no/maybe label, exact-matched against the
+               # reply's `Short Answer:` line (decision accuracy)
+               "optional": (ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS,
+                            ARTIFACT_SHORT_ANSWERS)},
     "judge": {"inputs": (ARTIFACT_METRICS,),
               # every aspect artifact is advertised (publish is config-conditional) so the
               # finalize sink can BIND them — an unpublished optional is a no-op read
@@ -584,6 +587,9 @@ _MEASURE = {
                            "per_query_wer", "per_query_cer", "per_query_recall5")},
     "report": {"inputs": (), "outputs": (ARTIFACT_METRICS,),
                "optional": (ARTIFACT_TRANSCRIPTION_SCORES, ARTIFACT_RETRIEVAL_SCORES,
+                            # answer-quality aggregates (ROUGE / hallucination / dose safety /
+                            # context recall) — bound so the report can carry them
+                            ARTIFACT_ANSWER_SCORES,
                             ARTIFACT_RETRIEVED, ARTIFACT_QUERY_TEXT,
                             ARTIFACT_REFERENCE_TRANSCRIPTION, ARTIFACT_RELEVANT_DOCS,
                             ARTIFACT_EMBEDDING_ALIGNMENT,

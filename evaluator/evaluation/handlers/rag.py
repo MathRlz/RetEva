@@ -69,6 +69,9 @@ def _generate_answer_details(
         all_query_texts=query_texts,
         corpus_lookup=_answer_corpus_lookup(s, results_with_scores),
         config=cfg,
+        # `context_source: full_text` ranks article chunks against the question with the run's
+        # own text embedder (same model + cache as retrieval); unused otherwise.
+        embedder=s.text_embedding_pipeline,
     )
     results["answer_generation"] = answer_results
     logger.info("Answer generation complete — %d cases", answer_results["cases"])
@@ -227,6 +230,20 @@ def _stage_generate(s: RunState) -> None:
     )
 
 
+def _decision_labels(s: RunState) -> dict:
+    """query_id → the dataset's yes/no/maybe label, from the keyed ``short_answers`` ItemSet
+    (id-joined, so a dropped item can't shift labels onto the wrong queries). Empty when the
+    graph does not wire the artifact into this node."""
+    items = s.keyed_items("short_answers")
+    if items is None:
+        return {}
+    return {str(qid): str(val) for qid, val in zip(items.ids, items.values)}
+
+
+def _fmt(value) -> str:
+    return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
 def _stage_answer_metrics(s: RunState) -> None:
     """Answer-quality comparison node: score the generated answers vs their reference
     answers + retrieved context (ROUGE / hallucination / dose-safety / context-recall),
@@ -243,10 +260,19 @@ def _stage_answer_metrics(s: RunState) -> None:
         traces_data=(query_ids, _relevant_from_bus(s), results_with_scores),
         corpus_lookup=_answer_corpus_lookup(s, results_with_scores),
         config=s.answer_gen_config,
+        decision_gt=_decision_labels(s),
     )
-    s.put_artifact("answer_scores", {"mean_rougeL": answer_results.get("mean_rougeL")})
+    # Publish every aggregate score_answers computed — the report node binds this artifact and
+    # merges it in. Publishing only mean_rougeL silently dropped the rest, and the report never
+    # read even that (the metrics node rebuilds `results`, discarding what ran before it).
+    s.put_artifact("answer_scores", {
+        k: v for k, v in answer_results.items()
+        if k.startswith("mean_") or k == "decision_unknown_rate"
+    })
     logger.info(
-        "Answer metrics — mean ROUGE-L: %s",
+        "Answer metrics — decision accuracy: %s (unknown %s) | mean ROUGE-L: %s",
+        _fmt(answer_results.get("mean_decision_accuracy")),
+        _fmt(answer_results.get("decision_unknown_rate")),
         (
             f"{answer_results['mean_rougeL']:.4f}"
             if answer_results.get("mean_rougeL") is not None

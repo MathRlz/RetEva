@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 from ..stage_registry import get_stage_spec
 from ...logging_config import get_logger, node_logger
+from ...pipeline.graph.operators import node_kind
 from .state import RunState
 
 logger = get_logger(__name__)
@@ -114,9 +115,15 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
     pos = 0
     for i, level in enumerate(levels):
         if i < start_level:
-            pos += len(
-                level
-            )  # already completed in a prior run; keep offload index aligned
+            # Already computed in a prior run — EXCEPT the source nodes. The journal snapshots
+            # artifacts, not ``state.dataset`` (see run_journal._SNAPSHOT_FIELDS), so skipping
+            # the load leaves every dataset reader (audio/asr stages, diagnostics) with None —
+            # surfacing later as an unrelated `len(None)` / "no query vectors". The load is
+            # idempotent and cheap next to the model stages the journal exists to skip.
+            for node in level:
+                if node_kind(node.stage, dict(node.params or {})) == "dataset_source":
+                    _run_one_node(_ctx_for(node), node, sink, i)
+            pos += len(level)  # keep the offload index aligned
             continue
         if parallel and len(level) > 1:
             _run_level_parallel(state, level, _ctx_for, sink, i)

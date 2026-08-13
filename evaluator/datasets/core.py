@@ -108,6 +108,14 @@ def load_questions_file(path: Path) -> List[BenchmarkQuestion]:
         relevance = row.get("relevance_grades") or {}
         if not relevance and gt_ids:
             relevance = {str(doc_id): 1 for doc_id in gt_ids}
+        # The answer label rides metadata (where `_question_short_answer` looks for it) —
+        # BenchmarkQuestion has no field for it, and without this the dataset's
+        # `short_answer` (PubMedQA final_decision) was dropped at load, so `short_answers`
+        # was never published and decision accuracy had nothing to score against.
+        metadata = dict(row.get("metadata") or {})
+        answer = row.get("short_answer") or row.get("answer")
+        if answer and not metadata.get("short_answer"):
+            metadata["short_answer"] = answer
         questions.append(
             BenchmarkQuestion(
                 question_id=question_id,
@@ -116,7 +124,7 @@ def load_questions_file(path: Path) -> List[BenchmarkQuestion]:
                 relevance_grades={str(k): int(v) for k, v in relevance.items()},
                 audio_path=row.get("audio_path"),
                 language=row.get("language", "en"),
-                metadata=row.get("metadata", {}),
+                metadata=metadata,
             )
         )
     return questions

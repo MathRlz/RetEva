@@ -119,7 +119,7 @@ def _record_model_info(results: "Any", s: "Any") -> None:
 
 def _build_provenance(s: "Any") -> Dict[str, Any]:
     """Machine-readable model identity for the report (F30/C6): the structured per-pipeline
-    fields that define the experiment — type/size/name/dim/dropout/model_path/adapter/
+    fields that define the experiment — type/size/name/dim/model_path/adapter/
     embedding_space/params (pooling) + retrieval knobs — so a saved result is reproducible and
     the leaderboard can group/filter by them. Driven by the pipelines that ran. The model's
     ``.name()`` rides along under ``resolved`` for display."""
@@ -151,7 +151,7 @@ def _build_provenance(s: "Any") -> Dict[str, Any]:
         prov["audio_emb"] = _clean({
             "type": m.audio_emb_model_type, "size": m.audio_emb_size,
             "name": m.audio_emb_model_name,
-            "dim": m.audio_emb_dim, "dropout": m.audio_emb_dropout,
+            "dim": m.audio_emb_dim,
             "model_path": m.audio_emb_model_path, "adapter": m.audio_emb_adapter_path,
             "embedding_space": m.audio_emb_embedding_space,
             "params": dict(m.audio_emb_params or {}),

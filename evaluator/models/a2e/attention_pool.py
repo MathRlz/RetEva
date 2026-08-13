@@ -20,11 +20,20 @@ from ...logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# Rate of the (inference-inert) Dropout modules the trained checkpoints were saved with.
+_HEAD_DROPOUT = 0.1
+
 
 class AttentionPooling(nn.Module):
-    """Attention-based pooling for sequence embeddings."""
+    """Attention-based pooling for sequence embeddings.
 
-    def __init__(self, input_dim, output_dim, dropout=0.1):
+    The ``nn.Dropout`` stays although inference always runs in ``eval()`` (where it is an
+    identity): it OCCUPIES AN INDEX in the Sequential, so removing it would rename every
+    later state-dict key and break loading of the trained ``.pt`` checkpoints. Its rate is
+    therefore not a config knob — inference cannot observe it.
+    """
+
+    def __init__(self, input_dim, output_dim):
         super(AttentionPooling, self).__init__()
         # These are defined in original APM but not used - kept for checkpoint compatibility
         self.w1 = nn.Linear(input_dim, output_dim)
@@ -32,7 +41,7 @@ class AttentionPooling(nn.Module):
         self.attention = nn.Sequential(
             nn.Linear(input_dim, output_dim),
             nn.Tanh(),
-            nn.Dropout(dropout),
+            nn.Dropout(_HEAD_DROPOUT),
             nn.Linear(output_dim, 1),
         )
 
@@ -92,11 +101,11 @@ class MeanPoolingWithAbtt(nn.Module):
 POOLING_CHOICES = ["attention", "mean", "mean_whiten", "mean_abtt"]
 
 
-def _make_pooling(pooling: str, hidden_dim: int, dropout: float) -> nn.Module:
+def _make_pooling(pooling: str, hidden_dim: int) -> nn.Module:
     """Build the selected pooling module. The whiten/ABTT stats are placeholder buffers of the
     right shape so a checkpoint's ``attn_pool.*`` buffers overwrite them via ``load_state_dict``."""
     if pooling == "attention":
-        return AttentionPooling(input_dim=hidden_dim, output_dim=hidden_dim, dropout=dropout)
+        return AttentionPooling(input_dim=hidden_dim, output_dim=hidden_dim)
     if pooling == "mean":
         return MeanPooling()
     if pooling == "mean_whiten":
@@ -113,12 +122,12 @@ def _make_pooling(pooling: str, hidden_dim: int, dropout: float) -> nn.Module:
 class ProjectionHead(nn.Module):
     """Projection head to map pooled features to embedding space."""
 
-    def __init__(self, input_dim, emb_dim, dropout=0.1):
+    def __init__(self, input_dim, emb_dim):
         super(ProjectionHead, self).__init__()
         self.proj = nn.Sequential(
             nn.Linear(input_dim, emb_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(_HEAD_DROPOUT),  # index placeholder, see AttentionPooling
             nn.Linear(emb_dim, emb_dim),
         )
 
@@ -174,13 +183,16 @@ class _EncoderBackend(ABC):
 
 
 class _WhisperBackend(_EncoderBackend):
-    """Whisper encoder backend (hidden_dim 1280, fixed 2x mask downsample)."""
+    """Whisper encoder backend (hidden dim from the checkpoint, fixed 2x mask downsample)."""
 
     def __init__(self, audio_encoder_name: str):
         from transformers import WhisperModel, WhisperFeatureExtractor
 
-        self.hidden_dim = 1280
         self.encoder = WhisperModel.from_pretrained(audio_encoder_name).get_encoder()
+        # Read the width off the loaded encoder: it is 1280 only for large/large-v2/large-v3
+        # (base 512, small 768, medium 1024). Hardcoding 1280 built the pooling + projection at
+        # the wrong width for every smaller size, so the first forward died on a shape mismatch.
+        self.hidden_dim = int(getattr(self.encoder.config, "d_model", 1280))
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.processor = WhisperFeatureExtractor.from_pretrained(audio_encoder_name)
@@ -258,7 +270,6 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
     class Params:
         size: str = "large"
         emb_dim: int = 2048
-        dropout: float = 0.1
         pooling: str = "attention"
         SIZES: ClassVar[Dict[str, str]] = {
             "base": "openai/whisper-base",
@@ -273,7 +284,6 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         # the pooling variants in particular need explaining).
         DESCRIPTIONS: ClassVar[Dict[str, str]] = {
             "emb_dim": "Projection-head output dim; should match the text embedder.",
-            "dropout": "Dropout in the attention-pooling + projection head.",
             "pooling": ("Sequence→vector pooling: attention (learned) · mean · "
                         "mean_whiten (whitened mean) · mean_abtt (all-but-the-top mean)."),
         }
@@ -282,7 +292,6 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
                  audio_encoder_name: str = "openai/whisper-large",
                  emb_dim: int = 2048,
                  model_path: Optional[str] = None,
-                 dropout: float = 0.1,
                  pooling: str = "attention"):
         """
         Initialize attention pool audio model.
@@ -291,7 +300,6 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
             audio_encoder_name: Name of the audio encoder (Whisper or SeamlessM4T).
             emb_dim: Embedding dimension (should match text embedder).
             model_path: Path to pre-trained APM model weights (.pt file).
-            dropout: Dropout rate for attention pooling and projection.
             pooling: Sequence-pooling strategy — one of ``POOLING_CHOICES`` (attention /
                 mean / mean_whiten / mean_abtt). The whiten/ABTT stats load from the checkpoint.
         """
@@ -309,13 +317,12 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         self.feature_extractor = self.backend.processor
 
         # Pooling (selected strategy) and projection operate at the encoder's hidden dim.
-        self.pooling = _make_pooling(pooling, self.hidden_dim, dropout)
+        self.pooling = _make_pooling(pooling, self.hidden_dim)
         # Back-compat alias: external code/tests reference ``attention_pool`` as the pooling slot.
         self.attention_pool = self.pooling
         self.projection_head = ProjectionHead(
             input_dim=self.hidden_dim,
             emb_dim=emb_dim,
-            dropout=dropout,
         )
 
         if model_path:
@@ -499,7 +506,6 @@ class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
     class Params:
         size: str = "v2-large"
         emb_dim: int = 2048
-        dropout: float = 0.1
         pooling: str = "attention"
         SIZES: ClassVar[Dict[str, str]] = {
             "v2-large": "facebook/seamless-m4t-v2-large",
@@ -509,7 +515,6 @@ class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
         # the pooling variants in particular need explaining).
         DESCRIPTIONS: ClassVar[Dict[str, str]] = {
             "emb_dim": "Projection-head output dim; should match the text embedder.",
-            "dropout": "Dropout in the attention-pooling + projection head.",
             "pooling": ("Sequence→vector pooling: attention (learned) · mean · "
                         "mean_whiten (whitened mean) · mean_abtt (all-but-the-top mean)."),
         }
@@ -518,6 +523,5 @@ class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
                  audio_encoder_name: str = "facebook/seamless-m4t-v2-large",
                  emb_dim: int = 2048,
                  model_path: Optional[str] = None,
-                 dropout: float = 0.1,
                  pooling: str = "attention"):
-        super().__init__(audio_encoder_name, emb_dim, model_path, dropout, pooling)
+        super().__init__(audio_encoder_name, emb_dim, model_path, pooling)

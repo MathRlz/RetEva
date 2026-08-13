@@ -51,7 +51,7 @@ MODEL_MEMORY_ESTIMATES_GB: Dict[str, Dict[str, float]] = {
 # Known embedding dimensions for model types
 MODEL_EMBEDDING_DIMS: Dict[str, int] = {
     "labse": 768,
-    "jina_v4": 1024,
+    "jina_v4": 2048,
     "bge_m3": 1024,
     "nemotron": 1024,
     "clip": 768,

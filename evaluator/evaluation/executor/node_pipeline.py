@@ -54,7 +54,7 @@ _BUILDER_METHOD = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding"
 def _build_node_pipeline(s: "RunState", stage: str, params: dict):
     """Build a per-node pipeline from the node's params overlaid on the global model config.
 
-    Honors the FULL model param set (``model_path`` / ``dim`` / ``dropout`` / ``pooling`` (via
+    Honors the FULL model param set (``model_path`` / ``dim`` / ``pooling`` (via
     ``params``) / ``embedding_space`` / ``quantization`` / ``size``) by overlaying the node's
     params onto a copy of ``config.model`` and building through the **factory branch** of
     ``_ModelBuilders`` (``service_provider=None``) — the provider's ``get_*`` signatures omit

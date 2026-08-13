@@ -291,8 +291,7 @@ class _ModelBuilders:
             "audio_embedding", mcfg.audio_emb_model_type, mcfg.audio_emb_device,
             lambda dev: self.service_provider.get_audio_embedding_model(
                 mcfg.audio_emb_model_type, mcfg.audio_emb_model_name,
-                mcfg.audio_emb_model_path, mcfg.audio_emb_dim,
-                mcfg.audio_emb_dropout, dev,
+                mcfg.audio_emb_model_path, mcfg.audio_emb_dim, dev,
                 size=mcfg.audio_emb_size, quantization=mcfg.quantization_for("audio_emb"),
                 **mcfg.audio_emb_params,
             ),
@@ -301,7 +300,6 @@ class _ModelBuilders:
                 model_name=mcfg.audio_emb_model_name,
                 model_path=mcfg.audio_emb_model_path,
                 emb_dim=mcfg.audio_emb_dim,
-                dropout=mcfg.audio_emb_dropout,
                 device=dev,
                 size=mcfg.audio_emb_size,
                 quantization=mcfg.quantization_for("audio_emb"),

@@ -1,0 +1,150 @@
+# Text RAG over PubMed: pubmed_qa questions -> retrieve from the PubMed corpus -> LLM answers.
+#
+# The generation arm WITHOUT the voice front-end: the question text goes straight to the
+# embedder (no tts/asr, so no WER — see configs/campaign/pubmed200_rag_answer.yaml for the
+# spoken-query version of the same pipeline). Graph shape is `custom` (no query head), which
+# is fine: the label only names the mode in reports/leaderboard.
+#
+#   dataset_source -> corpus_embedding -> vector_db          (the PubMed corpus IS the index)
+#   dataset_source -> text_embedding -> retrieval            (question text -> top-k docs)
+#   retrieval -> answer_gen -> answer_metrics                (LLM answer, ROUGE-L vs short_answer)
+#                            -> answer_judge                 (LLM-scored relevance/faithfulness)
+#
+# Requires a reachable LLM endpoint: `ollama serve` + `ollama pull mistral:7b-instruct`.
+# answer_gen and answer_judge FAIL LOUDLY without one (no silent per-item fallback).
+# trace_limit must stay > 0 — the judge reads the per-query traces.
+#
+# The query edges read `reference_text` (= the dataset's question_text) into the `query_text`
+# port. dataset_source DECLARES a `query_text` output but its handler never publishes one —
+# in the voiced graphs `query_text` is what asr produces, so with no asr node the question
+# text is only reachable as `reference_text` (handlers/source.py:192).
+#
+# The LLM must reply `Short Answer: yes|no|maybe` + `Long Answer: <prose>`. The decision line is
+# exact-matched against the dataset's `short_answer` (PubMedQA final_decision) →
+# `mean_decision_accuracy` + `decision_unknown_rate`; the prose is what ROUGE scores.
+#
+# ANSWER GT: ROUGE-L scores against the RELEVANT DOC's metadata field named by
+# `answer_generation.reference_metadata_field` (below) — NOT against the question's
+# `short_answer` (that artifact is wired into answer_gen but nothing reads it today). A
+# campaign set built before 2026-08-13 has no doc metadata, so ROUGE-L reports `n/a`;
+# rebuild with `python3 scripts/build_pubmed_campaign.py -n 200` to get `long_answer` into
+# the corpus docs. Until then answer_judge (LLM-scored faithfulness/relevance over the
+# retrieved context) is the only answer-quality signal — retrieval metrics are unaffected.
+# The pubmed_qa_small set has no answer GT at all: use the campaign set for answers.
+#
+# Data: build it first with `python3 scripts/build_pubmed_campaign.py -n 200`.
+experiment:
+  name: pubmed_qa_rag_text
+  output_dir: evaluation_results
+dataset:
+  id: pubmed_qa
+  questions: examples/data/pubmed_qa_campaign/questions.json
+  corpus: examples/data/pubmed_qa_campaign/corpus.json
+  trace_limit: 200      # the judge needs traces; 200 = the whole set
+  batch_size: 8         # no ASR in the graph, so batching is embed-bound only
+data:
+  num_workers: 0
+graph:
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - text_embedding
+  - retrieval
+  - id: answer_gen
+    type: answer_gen
+    params:
+      method: simple
+      context_docs: 3   # how many retrieved docs are pasted into the prompt
+      compute_rouge: true
+      reference_metadata_field: long_answer   # the doc metadata field holding the answer GT
+      # Generation context: `retrieved_text` = the indexed abstract passage (default);
+      # `full_text` = the PMC article from metadata.full_text, chunked and filtered to the
+      # chunks closest to the question. Run `scripts/fetch_pubmed_fulltext.py` on the corpus
+      # first; docs with no full text silently fall back to their abstract passage.
+      context_source: retrieved_text
+      context_chunk_chars: 1200
+      context_chunks: 4
+  - retrieval_metrics
+  - answer_metrics
+  - metrics
+  - build_query_traces
+  - answer_judge
+  - finalize
+  edges:
+  - {from: dataset_source, to: corpus_embedding, input: corpus}
+  - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
+  - {from: dataset_source, output: reference_text, to: text_embedding, input: query_text}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
+  - {from: vector_db, to: retrieval, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval, input: query_text}
+  - {from: dataset_source, to: retrieval, input: reference_transcription}
+  - {from: dataset_source, to: retrieval, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: answer_gen, input: query_text}
+  - {from: retrieval, to: answer_gen, input: retrieved}
+  - {from: dataset_source, to: answer_gen, input: short_answers}
+  - {from: dataset_source, to: answer_gen, input: relevant_docs}
+  - {from: retrieval, to: retrieval_metrics, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
+  - {from: answer_gen, to: answer_metrics, input: generated_answers}
+  - {from: retrieval, to: answer_metrics, input: retrieved}
+  - {from: dataset_source, to: answer_metrics, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics, input: short_answers}
+  - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
+  - {from: answer_metrics, to: metrics, input: answer_scores}
+  - {from: retrieval, to: metrics, input: retrieved}
+  # no `query_text` edge into metrics: its port is plain (not the OneOf chain), so it cannot
+  # take the reference_text route — and with no asr node it would only feed WER diagnostics.
+  - {from: dataset_source, to: metrics, input: reference_transcription}
+  - {from: dataset_source, to: metrics, input: relevant_docs}
+  - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
+  - {from: retrieval, to: build_query_traces, input: retrieved}
+  - {from: answer_gen, to: build_query_traces, input: generated_answers}
+  - {from: metrics, to: build_query_traces, input: metrics}
+  - {from: dataset_source, to: build_query_traces, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces, input: relevant_docs}
+  - {from: retrieval_metrics, to: build_query_traces, input: per_query_recall5}
+  - {from: metrics, to: answer_judge, input: metrics}
+  - {from: build_query_traces, to: answer_judge, input: query_traces}
+  - {from: answer_gen, to: answer_judge, input: generated_answers}
+  - {from: retrieval, to: answer_judge, input: retrieved}
+  - {from: dataset_source, to: answer_judge, input: relevant_docs}
+  - {from: retrieval_metrics, to: answer_judge, input: per_query_recall5}
+  - {from: metrics, to: finalize, input: metrics}
+  - {from: build_query_traces, to: finalize, input: query_traces}
+  - {from: answer_judge, to: finalize, input: judge_scores}
+  - {from: answer_judge, to: finalize, input: judge_pass}
+  - {from: answer_gen, to: finalize, input: generated_answers}
+  - {from: retrieval, to: finalize, input: retrieved}
+  - {from: answer_judge, to: finalize, input: judge_aspect_accuracy}
+  - {from: answer_judge, to: finalize, input: judge_aspect_clarity}
+  - {from: answer_judge, to: finalize, input: judge_aspect_completeness}
+  - {from: answer_judge, to: finalize, input: judge_aspect_correctness}
+  - {from: answer_judge, to: finalize, input: judge_aspect_factuality}
+  - {from: answer_judge, to: finalize, input: judge_aspect_faithfulness}
+  - {from: answer_judge, to: finalize, input: judge_aspect_relevance}
+nodes:
+  text_embedding:
+    model: labse
+    device: cuda:0
+  vector_db:
+    store: inmemory
+  retrieval:
+    k: 10
+llm:
+  model: mistral:7b-instruct
+  use_local_server: true
+  local_server_url: http://localhost:11434/v1/chat/completions
+  api_key_env: DUMMY_KEY
+  temperature: 0.0
+  seed: 42          # forwarded to the server; temperature 0 alone does not pin sampling
+  timeout_s: 120
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

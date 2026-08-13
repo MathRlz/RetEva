@@ -4,6 +4,9 @@ from typing import Optional
 
 from .llm_backend import LLMBackendMixin
 
+# Where a retrieved doc's context text comes from.
+CONTEXT_SOURCES = ("retrieved_text", "full_text")
+
 
 @dataclass
 class AnswerGenerationConfig(LLMBackendMixin):
@@ -29,6 +32,12 @@ class AnswerGenerationConfig(LLMBackendMixin):
         compute_rouge: Compute ROUGE-1/2/L vs reference answer. Default: True.
         reference_metadata_field: Corpus doc metadata field holding the reference answer.
             Default: "long_answer".
+        context_source: where each retrieved doc's context text comes from —
+            ``retrieved_text`` (the indexed passage, default) or ``full_text`` (the article in
+            the doc's ``metadata.full_text``, chunked and filtered to the chunks closest to the
+            question). Docs with no full text fall back to their retrieved text.
+        context_chunk_chars: chunk size when splitting a full article. Default: 1200.
+        context_chunks: how many query-closest chunks per doc reach the prompt. Default: 4.
 
     Examples:
         >>> cfg = AnswerGenerationConfig(
@@ -60,3 +69,15 @@ class AnswerGenerationConfig(LLMBackendMixin):
     seed: Optional[int] = None
     compute_rouge: bool = True
     reference_metadata_field: str = "long_answer"
+    context_source: str = "retrieved_text"  # retrieved_text | full_text
+    context_chunk_chars: int = 1200
+    context_chunks: int = 4
+
+    def __post_init__(self) -> None:
+        # Typo protection: a misspelled context_source would silently fall back to the indexed
+        # passage, i.e. the full-text run would quietly measure the abstract run.
+        if self.context_source not in CONTEXT_SOURCES:
+            raise ValueError(
+                f"answer_generation.context_source must be one of {list(CONTEXT_SOURCES)}, "
+                f"got {self.context_source!r}"
+            )

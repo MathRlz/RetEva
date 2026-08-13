@@ -362,6 +362,8 @@ def render_node(node: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     consumes, identical to ``/api/graph/template``."""
     from ..pipeline.introspection import is_structural
 
+    form = resolve_node_form(node.stage, dict(node.params or {}))
+    _overlay_routed_aliases(form, node)
     return {
         "id": node.id,
         "type": node.stage,
@@ -369,8 +371,26 @@ def render_node(node: Any, params: Dict[str, Any]) -> Dict[str, Any]:
         "bindings": [list(b) for b in node.bindings],
         # mark plumbing so the simplified view hides it by default (power-user "view full DAG").
         "structural": is_structural(node.stage, dict(node.params or {})),
-        **resolve_node_form(node.stage, dict(node.params or {})),
+        **form,
     }
+
+
+def _overlay_routed_aliases(form: Dict[str, Any], node: Any) -> None:
+    """Surface a B2 *routed* artifact on the port it was wired into.
+
+    An explicit edge may feed a type-open port an artifact the node def never lists (e.g.
+    ``dataset_source.reference_text`` → an embedder's ``query_text`` port, how a text-query
+    graph gets its query). That routing lives on the graph instance's ``input_aliases``, not in
+    the def ``_input_ports`` reads, so without this the canvas cannot match the edge back to its
+    port and a round-trip drops it. ``edges_for_graph`` does the same overlay when emitting."""
+    ports = form.get("input_ports") or []
+    for canonical, candidates in getattr(node, "input_aliases", ()) or ():
+        port = next((p for p in ports if p.get("label") == canonical), None)
+        if port is None:
+            continue
+        for art in candidates:
+            if art not in port["names"]:
+                port["names"].append(art)
 
 
 def spec_to_render_payload(spec: Dict[str, Any]) -> Dict[str, Any]:

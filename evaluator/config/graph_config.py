@@ -62,7 +62,6 @@ _MODEL_NODE_FIELDS = {
         "device": "audio_emb_device",
         "model_path": "audio_emb_model_path",
         "dim": "audio_emb_dim",
-        "dropout": "audio_emb_dropout",
         "embedding_space": "audio_emb_embedding_space",
         "params": "audio_emb_params",
         "quantization": "audio_emb_quantization",

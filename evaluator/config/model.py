@@ -49,7 +49,6 @@ class ModelConfig:
     audio_emb_adapter_path: Optional[str] = None
     audio_emb_model_path: Optional[str] = None
     audio_emb_dim: int = 2048
-    audio_emb_dropout: float = 0.1
     audio_emb_device: str = "cuda:0"
     # Override the embedding-space id — an APM trained to project audio into a text
     # embedder's space declares that text space here (not derived from the encoder name).

@@ -55,7 +55,6 @@ nodes:
     model_path: ${CLAP_CHECKPOINT_DIR}/best_model.pt
     device: cuda:1
     dim: 512
-    dropout: 0.1
   vector_db:
     store: inmemory
   retrieval:

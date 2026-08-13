@@ -422,7 +422,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001 — CLI surface: report and exit non-zero
-        print(f"Error: {e}", file=sys.stderr)
+        # The headline first (what most failures need), then the traceback — a bare `str(e)`
+        # makes a one-line TypeError ("object of type 'NoneType' has no len()") unlocatable.
+        # Also logged, so a run's log file keeps the frames when the console is piped away.
+        import traceback
+
+        from evaluator.logging_config import get_logger
+
+        print(f"Error: {type(e).__name__}: {e}", file=sys.stderr)
+        get_logger("evaluator").error("command %r failed", command, exc_info=True)
+        traceback.print_exc()
         return 1
 
 

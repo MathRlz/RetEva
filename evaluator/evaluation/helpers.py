@@ -52,10 +52,15 @@ def detect_graph_template(
         return "asr_only"
     if asr_pipeline is not None:
         return "asr_only"
+    if text_embedding_pipeline is not None and retrieval_pipeline is not None:
+        # Text queries straight into retrieval (no voice front-end) — a legal graph: behavior
+        # branches read the pipelines (``retrieval_ran`` / ``asr_ran``), not this string, which
+        # is only the run's LABEL. Used by text-RAG graphs (question text → retrieve → answer).
+        return "text_retrieval"
     raise ValueError(
-        "Must provide either audio_embedding_pipeline OR asr_pipeline. "
-        "Tip: provide (asr_pipeline + text_embedding_pipeline + retrieval_pipeline), "
-        "(audio_embedding_pipeline + retrieval_pipeline), or asr_pipeline only."
+        "Must provide a query head: (text_embedding_pipeline + retrieval_pipeline) for text "
+        "queries, (asr_pipeline + text_embedding_pipeline + retrieval_pipeline) for spoken "
+        "queries, (audio_embedding_pipeline + retrieval_pipeline), or asr_pipeline only."
     )
 
 

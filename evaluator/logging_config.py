@@ -202,7 +202,12 @@ class TimingContext:
         if exc_type is None:
             timing_logger.info("%s completed in %.2fs", self.name, elapsed)
         else:
-            timing_logger.error("%s failed after %.2fs", self.name, elapsed)
+            # exc_info: this is usually the FIRST report of a failure, and without the frames a
+            # phase name plus a one-line message is not enough to locate anything.
+            timing_logger.error(
+                "%s failed after %.2fs", self.name, elapsed,
+                exc_info=(exc_type, exc_val, exc_tb),
+            )
         return False
 
 

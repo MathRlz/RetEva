@@ -52,7 +52,6 @@ nodes:
     name: openai/whisper-large
     model_path: ${APM_CHECKPOINT_DIR}/apm_jina_admed_voice.pt
     dim: 2048
-    dropout: 0.1
     device: cuda:3
   vector_db:
     store: inmemory
