@@ -1,4 +1,4 @@
-# APM self-retrieval (audio_emb) — Whisper-large-v3 encoder, attention pooling, on admed (test split).
+# APM self-retrieval (audio_emb) — Whisper-large encoder, attention pooling, on admed (test split).
 # Audio query embedded by the APM into the text-embedder space and matched against the
 # transcription corpus (self-retrieval). Cross-modal alignment lives in the trained
 # attention-pool weights — set audio_embedding.model_path (.pt) for meaningful numbers.
@@ -45,7 +45,7 @@ graph:
 nodes:
   audio_embedding:
     model: attention_pool
-    size: large-v3
+    size: large
     dim: 2048
     embedding_space: jina_v4_space
     params:
