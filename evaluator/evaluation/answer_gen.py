@@ -432,8 +432,7 @@ def generate_answers(
         Each detail has: query_id, question, generated_answer, reference_answer,
         rouge1, rouge2, rougeL, context_doc_ids.
     """
-    from tqdm import tqdm
-    from ..utils.progress import progress_disabled
+    from ..llm_client.parallel import map_completions
 
     client = LLMClient(config.to_llm_config(), component="answer_gen")
 
@@ -442,10 +441,9 @@ def generate_answers(
     if config.max_cases > 0:
         n = min(n, config.max_cases)
 
-    details: List[Dict[str, Any]] = []
-    failed = 0
+    failures: List[str] = []
 
-    for i in tqdm(range(n), desc="Generating answers", disable=progress_disabled()):
+    def _one(i: int) -> Dict[str, Any]:
         query_id = all_query_ids[i] if i < len(all_query_ids) else str(i)
         question = all_query_texts[i] if i < len(all_query_texts) else ""
         retrieved_payloads = (
@@ -467,7 +465,7 @@ def generate_answers(
                 "context_doc_ids": [],
                 "closed_book": not retrieved_payloads,
             }
-            failed += 1
+            failures.append(str(query_id))
 
         # Generation only — the comparison metrics are the answer_metrics node's job.
         detail = {
@@ -480,7 +478,15 @@ def generate_answers(
         # Tag only closed-book details (additive); RAG details stay byte-identical (parity).
         if gen.get("closed_book"):
             detail["closed_book"] = True
-        details.append(detail)
+        return detail
+
+    # Ordered + error-isolated: concurrency buys wall clock, never a different report.
+    details = map_completions(
+        range(n), _one,
+        workers=getattr(config, "concurrency", 1),
+        desc="Generating answers", unit="query",
+    )
+    failed = len(failures)
 
     if failed > 0:
         logger.warning("Answer generation: %d/%d queries failed", failed, n)

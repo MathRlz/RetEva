@@ -146,6 +146,9 @@ class RunState:
     optimization_fallbacks: int = field(default=0, metadata=_SHARED)
     correction_fallbacks: int = field(default=0, metadata=_SHARED)
     stage_times: Dict[str, float] = field(default_factory=dict, metadata=_SHARED)
+    # Wall time per NODE id (every node, no exceptions — `self_timed` handlers used to
+    # record nothing, so answer generation and the judge were invisible in the report).
+    node_times: Dict[str, float] = field(default_factory=dict, metadata=_SHARED)
     results: "RunResults" = field(
         default_factory=dict, metadata=_SHARED
     )

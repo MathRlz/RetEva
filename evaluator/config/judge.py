@@ -67,12 +67,17 @@ class JudgeConfig(LLMBackendMixin):
     # `llm:` block unless set here); None = omit. temperature 0 alone does not
     # pin an LLM's sampling.
     seed: Optional[int] = None
+    # Requests kept in flight for this component's per-item loop (inherited from the
+    # `llm:` block unless set here); 1 = serial.
+    concurrency: int = 1
 
     # Prompt overrides
     system_prompt: Optional[str] = None  # None → built-in default
     user_prompt_template: Optional[str] = None  # None → built-in default
 
     def __post_init__(self):
+        if self.concurrency < 1:
+            raise ValueError(f"judge.concurrency must be >= 1, got {self.concurrency}")
         if not 0.0 <= self.temperature <= 2.0:
             raise ValueError(f"temperature must be in [0, 2], got {self.temperature}")
         if self.judge_mode not in JUDGE_TARGETS:

@@ -1,46 +1,31 @@
-# Text RAG over PubMed: pubmed_qa questions -> retrieve from the PubMed corpus -> LLM answers.
+# Large full-text set: 1209 PubMedQA questions whose article is in PMC open access.
 #
-# The generation arm WITHOUT the voice front-end: the question text goes straight to the
-# embedder (no tts/asr, so no WER — see configs/campaign/pubmed200_rag_answer.yaml for the
-# spoken-query version of the same pipeline). Graph shape is `custom` (no query head), which
-# is fine: the label only names the mode in reports/leaderboard.
+# Same pipeline as pubmed_qa_rag_fulltext.yaml, ~10x the questions. Built with:
+#   python3 scripts/scan_pubmed_fulltext.py --config pqa_artificial --pool 5000
+#   python3 scripts/build_pubmed_campaign.py --config pqa_artificial \
+#       --pmids pubmed_fulltext_pqa_artificial.json --full-text -n 1209 \
+#       --out examples/data/pubmed_qa_fulltext_big
 #
-#   dataset_source -> corpus_embedding -> vector_db          (the PubMed corpus IS the index)
-#   dataset_source -> text_embedding -> retrieval            (question text -> top-k docs)
-#   retrieval -> answer_gen -> answer_metrics                (LLM answer, ROUGE-L vs short_answer)
-#                            -> answer_judge                 (LLM-scored relevance/faithfulness)
+# NOTE ON LABELS: pqa_artificial's final_decision and long_answer are AUTO-DERIVED, not expert
+# annotations, and the label mix is essentially yes/no (little or no "maybe"). Check the mix
+# before reading mean_decision_accuracy — the majority-class baseline is what it must beat, and
+# on this split that baseline is usually higher than on pqa_labeled. The 115-question
+# pqa_labeled set stays the credible primary result; this one buys statistical power.
 #
-# Requires a reachable LLM endpoint: `ollama serve` + `ollama pull gemma4:latest`.
-# answer_gen and answer_judge FAIL LOUDLY without one (no silent per-item fallback).
-# Traces are on because the graph has a build_query_traces node; trace_limit only caps
-# how many are built (0 = all).
+# COST: this is a FULL SWEEP — every one of the 1209 questions is retrieved, answered, and
+# judged (trace_limit / max_cases all 0; an earlier revision capped trace_limit at 300, which
+# silently truncated the RUN itself, since the same knob slices the dataset). Budget most of a
+# working day at gemma4 speeds even with concurrency 4: judging dominates (~26 s/case serial).
+# Start the server as `OLLAMA_NUM_PARALLEL=4 ollama serve` or the concurrency is wasted, and use
+# `nohup`/`tmux` — the run is far longer than an ssh session's patience.
 #
-# The query edges read `reference_text` (= the dataset's question_text) into the `query_text`
-# port. dataset_source DECLARES a `query_text` output but its handler never publishes one —
-# in the voiced graphs `query_text` is what asr produces, so with no asr node the question
-# text is only reachable as `reference_text` (handlers/source.py:192).
-#
-# The LLM must reply `Short Answer: yes|no|maybe` + `Long Answer: <prose>`. The decision line is
-# exact-matched against the dataset's `short_answer` (PubMedQA final_decision) →
-# `mean_decision_accuracy` + `decision_unknown_rate`; the prose is what ROUGE scores.
-#
-# ANSWER GT: ROUGE-L scores against the RELEVANT DOC's metadata field named by
-# `answer_generation.reference_metadata_field` (below) — NOT against the question's
-# `short_answer` (that artifact is wired into answer_gen but nothing reads it today). A
-# campaign set built before 2026-08-13 has no doc metadata, so ROUGE-L reports `n/a`;
-# rebuild with `python3 scripts/build_pubmed_campaign.py -n 200` to get `long_answer` into
-# the corpus docs. Until then answer_judge (LLM-scored faithfulness/relevance over the
-# retrieved context) is the only answer-quality signal — retrieval metrics are unaffected.
-# The pubmed_qa_small set has no answer GT at all: use the campaign set for answers.
-#
-# Data: build it first with `python3 scripts/build_pubmed_campaign.py -n 200`.
 experiment:
-  name: pubmed_qa_rag_text
+  name: pubmed_qa_rag_fulltext_big
   output_dir: evaluation_results
 dataset:
   id: pubmed_qa
-  questions: examples/data/pubmed_qa_campaign/questions.json
-  corpus: examples/data/pubmed_qa_campaign/corpus.json
+  questions: examples/data/pubmed_qa_fulltext_big/questions.json
+  corpus: examples/data/pubmed_qa_fulltext_big/corpus.json
   trace_limit: 0        # 0 = no limit: every question runs and every one is traced
   batch_size: 8         # no ASR in the graph, so batching is embed-bound only
 data:
@@ -56,7 +41,6 @@ graph:
     type: answer_gen
     params:
       method: simple
-      max_cases: 0       # 0 = generate for every query
       # The prompt IS part of the experiment — spelled out here so a change to the code
       # defaults cannot silently alter an already-reported run. These are the built-ins.
       system_prompt: |-
@@ -71,6 +55,7 @@ graph:
         Question: {question}
 
         Short Answer:
+      max_cases: 0       # 0 = generate for every query
       context_docs: 3   # how many retrieved docs are pasted into the prompt
       compute_rouge: true
       reference_metadata_field: long_answer   # the doc metadata field holding the answer GT
@@ -78,7 +63,7 @@ graph:
       # `full_text` = the PMC article from metadata.full_text, chunked and filtered to the
       # chunks closest to the question. Run `scripts/fetch_pubmed_fulltext.py` on the corpus
       # first; docs with no full text silently fall back to their abstract passage.
-      context_source: retrieved_text
+      context_source: full_text
       context_chunk_chars: 1200
       context_chunks: 4
   - retrieval_metrics
@@ -88,10 +73,10 @@ graph:
   - id: answer_judge
     type: answer_judge
     params:
-      max_cases: 0     # 0 = judge EVERY trace (the default is 50 — the silent cap
-                       # that judged 50 of 1209 in an earlier run)
       system_prompt: |-
         You are an expert evaluator for a medical question-answering retrieval system. Score each requested aspect from 0.0 (worst) to 1.0 (best). Be strict and consistent. Respond with STRICT JSON only — no prose, no markdown.
+      max_cases: 0     # 0 = judge EVERY trace (the default is 50 — the silent cap
+                       # that judged 50 of 1209 in an earlier run)
   - finalize
   edges:
   - {from: dataset_source, to: corpus_embedding, input: corpus}

@@ -327,11 +327,23 @@ def _stage_query_refine(s: "RunState") -> None:
     retrieve."""
     from ...models.retrieval.query.optimization import refine_query
     from ...config.query_optimization import QueryOptimizationConfig
+    from ...llm_client.parallel import map_completions
 
     params = s.node_params
     method = params.get("method", "rewrite_with_context")
     top_k = int(params.get("context_top_k", 3))
-    cfg = s.query_opt_config or QueryOptimizationConfig(enabled=True)
+    cfg = s.query_opt_config
+    if cfg is None:
+        # The run only carries query_opt_config when `query_optimization.enabled` is true. The
+        # fallback below defaults to OpenAI with an empty key, so every refine call fails, is
+        # swallowed (optimization.py returns the original query) and the run LOOKS fine while
+        # refining nothing. Say so instead.
+        logger.warning(
+            "query_refine: no query_optimization config for this run — falling back to "
+            "library defaults (OpenAI endpoint). Set `query_optimization: {enabled: true}` "
+            "so the node uses this run's LLM backend."
+        )
+        cfg = QueryOptimizationConfig(enabled=True)
 
     items = s.input_items("query_text")
     queries = list(items.values) if items is not None else list(s.input("query_text"))
@@ -341,12 +353,30 @@ def _stage_query_refine(s: "RunState") -> None:
         else [str(i) for i in range(len(queries))]
     )
     retrieved = list(s.get_artifact("retrieved", default=[]))
-    refined = []
-    for idx, q in enumerate(queries):
+
+    def _one(idx: int) -> str:
         results = retrieved[idx] if idx < len(retrieved) else []
         doc_texts = _retrieved_doc_texts(results, top_k)
-        refined.append(
-            refine_query(q, doc_texts, cfg, method=method, context_top_k=top_k)
-        )
+        return refine_query(q_list[idx], doc_texts, cfg, method=method, context_top_k=top_k)
+
+    # One LLM call per query, so it gets the same concurrency treatment as generation and
+    # judging — measured at 78s for 8 queries serially, the most expensive node in the run.
+    q_list = queries
+    refined = map_completions(
+        range(len(queries)), _one,
+        workers=getattr(cfg, "concurrency", 1),
+        desc=f"Refining queries ({method})", unit="query",
+    )
     publish_keyed_or_plain(s, "refined_query_text", refined, ids)
-    logger.info("query_refine (%s): reformulated %d queries", method, len(refined))
+    # `changed` is the honest signal: a refine that silently no-ops (dead endpoint, unknown
+    # method, empty context) still "reformulates" every query — into itself.
+    changed = sum(1 for before, after in zip(queries, refined) if before != after)
+    logger.info(
+        "query_refine (%s): %d queries, %d rewritten, %d unchanged",
+        method, len(refined), changed, len(refined) - changed,
+    )
+    if refined and changed == 0:
+        logger.warning(
+            "query_refine (%s): NO query was rewritten — check the LLM endpoint and that "
+            "the retrieved context is non-empty (context_top_k=%d).", method, top_k,
+        )

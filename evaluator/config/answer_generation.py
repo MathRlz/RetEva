@@ -67,6 +67,9 @@ class AnswerGenerationConfig(LLMBackendMixin):
     # `llm:` block unless set here); None = omit. temperature 0 alone does not
     # pin an LLM's sampling.
     seed: Optional[int] = None
+    # Requests kept in flight for this component's per-item loop (inherited from the
+    # `llm:` block unless set here); 1 = serial.
+    concurrency: int = 1
     compute_rouge: bool = True
     reference_metadata_field: str = "long_answer"
     context_source: str = "retrieved_text"  # retrieved_text | full_text
@@ -74,6 +77,10 @@ class AnswerGenerationConfig(LLMBackendMixin):
     context_chunks: int = 4
 
     def __post_init__(self) -> None:
+        if self.concurrency < 1:
+            raise ValueError(
+                f"answer_generation.concurrency must be >= 1, got {self.concurrency}"
+            )
         # Typo protection: a misspelled context_source would silently fall back to the indexed
         # passage, i.e. the full-text run would quietly measure the abstract run.
         if self.context_source not in CONTEXT_SOURCES:

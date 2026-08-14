@@ -85,15 +85,24 @@ def _build_query_traces(
     results_with_scores,
     query_ids,
 ) -> None:
-    """Build per-query traces (+ per-speaker breakdown) when trace_limit > 0.
+    """Build per-query traces (+ per-speaker breakdown), at most ``trace_limit`` of them.
+
+    ``trace_limit: 0`` means NO LIMIT — every query is traced. That is what the knob already
+    means for the dataset (``datasets/runtime.py`` slices ``questions[:trace_limit]`` only when
+    positive) and what DataConfig documents ("0 = no limit"); this path used to read 0 as "off",
+    so one number meant opposite things at the two ends of the run. Traces are switched off by
+    leaving ``build_query_traces`` out of the graph.
 
     Per-item scores and answer details come off the bus as keyed ItemSets and are joined
     by query id: WER is published in reference order and recall in retrieved order, so a
     positional pairing would cross them."""
-    if not (s.trace_limit > 0 and results_with_scores):
+    if not results_with_scores:
         return
 
-    limit = min(s.trace_limit, len(results_with_scores))
+    limit = (
+        len(results_with_scores) if s.trace_limit <= 0
+        else min(s.trace_limit, len(results_with_scores))
+    )
     references = s.get_artifact(
         "reference_transcription", default=[]
     )  # bus-only (M1d-2)
@@ -170,7 +179,10 @@ def _run_judge(
     if cfg is None or not getattr(cfg, "enabled", False):
         return
     if "query_traces" not in results:
-        raise RuntimeError("LLM judge requires query traces; set trace_limit > 0")
+        raise RuntimeError(
+            "LLM judge requires query traces, and none were built — add a "
+            "`build_query_traces` node to the graph (and wire it into answer_judge)."
+        )
 
     s.cb("phase_6_judge", 0, s.total, "Phase 6: LLM judge")
     judge_mode = getattr(cfg, "judge_mode", "retrieval")
@@ -352,6 +364,9 @@ def _stage_finalize(s: RunState) -> None:
     explicit build_query_traces node; the LLM judge to answer_judge."""
     s.stage_times["total_s"] = time.perf_counter() - s.t_total
     s.results["latency"] = s.stage_times
+    # Per-node wall time — every node that ran, including the LLM stages the bucket-based
+    # `latency` never covered (answer generation and the judge were simply absent).
+    s.results["node_latency"] = dict(s.node_times)
     # Judge metrics (J3): the judge node is downstream of the report assembler, so its per-query
     # scores are merged into the report here, at the terminal node, via the metric registry.
     from .metrics import attach_judge_metrics
@@ -365,6 +380,18 @@ def _stage_finalize(s: RunState) -> None:
         s.stage_times.get("retrieval_s", 0),
         s.stage_times["total_s"],
     )
+    if s.node_times:
+        # Slowest first: on an LLM run answer_gen/answer_judge dominate, and that is exactly
+        # what the bucket summary above cannot show.
+        logger.info(
+            "Node latency — %s",
+            "  ".join(
+                f"{node}={secs:.1f}s"
+                for node, secs in sorted(
+                    s.node_times.items(), key=lambda kv: -kv[1]
+                )
+            ),
+        )
 
 
 # Per-query trace / answer-gen keys producers write top-level (working state during the run);

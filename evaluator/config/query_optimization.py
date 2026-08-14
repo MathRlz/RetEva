@@ -56,6 +56,9 @@ class QueryOptimizationConfig(LLMBackendMixin):
     # `llm:` block unless set here); None = omit. temperature 0 alone does not
     # pin an LLM's sampling.
     seed: Optional[int] = None
+    # Requests kept in flight for this component's per-item loop (inherited from the
+    # `llm:` block unless set here); 1 = serial.
+    concurrency: int = 1
 
     def __post_init__(self) -> None:
         valid_methods = {"rewrite", "hyde", "decompose", "multi_query"}

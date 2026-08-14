@@ -39,6 +39,14 @@ DISCRIMINATOR_FIELDS = frozenset(
     {"op", "axis", "level", "family", "trace", "target", "union", "modality"}
 )
 
+#: node_kind → param names that must NOT overlay that kind's feature config, because the name
+#: collides across namespaces. `query_refine`'s ``method`` picks a REFINE STRATEGY
+#: (models/retrieval/query/optimization.py:_REFINE_STRATEGIES — rewrite_with_context /
+#: relevance_feedback / self_rag_critique), while ``QueryOptimizationConfig.method`` is the
+#: rewrite/hyde/decompose/multi_query family. Overlaying one onto the other made every refine
+#: strategy name a hard ValueError, i.e. the node could not be used at all.
+_KIND_KEEP = {"query_refine": frozenset({"method"})}
+
 #: node_kind → the RunState attribute holding that feature's global config. Nodes whose
 #: presence implies the feature carry ``force_enabled``.
 _FEATURE_BASES = {
@@ -76,7 +84,8 @@ def _cast(value: Any, field_type: Any) -> Any:
 
 
 def resolve_node_config(
-    base: Any, params: Optional[dict], *, force_enabled: bool = False
+    base: Any, params: Optional[dict], *, force_enabled: bool = False,
+    keep_on_node: frozenset = frozenset(),
 ) -> Any:
     """``base`` with this node's ``params`` overlaid — the single resolution point.
 
@@ -88,7 +97,8 @@ def resolve_node_config(
     types = {f.name: f.type for f in fields(base)}
     overlay: Dict[str, Any] = {}
     for key, value in (params or {}).items():
-        if key in DISCRIMINATOR_FIELDS or key not in types or value in (None, ""):
+        if (key in DISCRIMINATOR_FIELDS or key in keep_on_node
+                or key not in types or value in (None, "")):
             continue
         try:
             overlay[key] = _cast(value, types[key])
@@ -111,7 +121,8 @@ def resolve_graph_node_configs(state: Any, stage_graph: Any) -> Dict[str, Any]:
 
     resolved: Dict[str, Any] = {}
     for node in getattr(stage_graph, "nodes", ()):
-        entry = _FEATURE_BASES.get(node_kind(node.stage, node.params))
+        kind = node_kind(node.stage, node.params)
+        entry = _FEATURE_BASES.get(kind)
         if entry is None:
             continue
         attr, force = entry
@@ -121,6 +132,7 @@ def resolve_graph_node_configs(state: Any, stage_graph: Any) -> Dict[str, Any]:
         else:
             base = getattr(state, attr, None)
         resolved[node.id] = resolve_node_config(
-            base, node.params, force_enabled=force
+            base, node.params, force_enabled=force,
+            keep_on_node=_KIND_KEEP.get(kind, frozenset()),
         )
     return resolved

@@ -41,10 +41,11 @@ def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores, retrieved_key
     results["first_relevant_rank_distribution"] = rank_dist
     results["retrieval_failure_rate"] = failure_rate
 
-    if s.trace_limit > 0:
-        _attach_failure_analysis(
-            results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
-        )
+    # Unconditional: this was gated on `trace_limit > 0`, which with 0 meaning "no limit"
+    # would switch the analysis OFF exactly for full runs.
+    _attach_failure_analysis(
+        results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
+    )
 
     if s.compute_confidence_intervals and len(retrieved_keys) >= MIN_SAMPLES_FOR_CI:
         ci_inputs = {

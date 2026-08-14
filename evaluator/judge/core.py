@@ -156,9 +156,7 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
     """Run the multi-aspect LLM judge over the (first ``max_cases``) traces. One failed trace is
     dropped-and-logged so the stage never aborts. Returns the aggregate report incl. per-case
     ``details`` ([{query_id, judge:{overall, aspect_scores, verdict, reason}}])."""
-    from tqdm import tqdm
-
-    from ..utils.progress import progress_disabled
+    from ..llm_client.parallel import map_completions
 
     max_cases = getattr(judge_config, "max_cases", 0)
     if max_cases < 0:
@@ -167,8 +165,8 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
     client = LLMClient(judge_config.to_llm_config(), component="judge")
 
     selected = traces if max_cases == 0 else traces[:max_cases]
-    details: List[Dict[str, Any]] = []
-    for trace in tqdm(selected, desc="Judging", unit="case", disable=progress_disabled()):
+
+    def _one(trace: Dict[str, Any]):
         try:
             verdict = judge_trace(trace, client=client, config=judge_config)
         except Exception as exc:  # noqa: BLE001 — drop-and-log one bad case, keep the rest (M3)
@@ -176,8 +174,16 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
                 "judge failed for query_id=%s (%s: %s); skipping this case",
                 trace.get("query_id"), type(exc).__name__, exc,
             )
-            continue
-        details.append({"query_id": trace.get("query_id"), "judge": verdict})
+            return None
+        return {"query_id": trace.get("query_id"), "judge": verdict}
+
+    # Ordered + error-isolated: a dropped case still just disappears from `details`.
+    judged = map_completions(
+        selected, _one,
+        workers=getattr(judge_config, "concurrency", 1),
+        desc="Judging", unit="case",
+    )
+    details: List[Dict[str, Any]] = [d for d in judged if d is not None]
 
     overalls = [d["judge"]["overall"] for d in details]
     aspect_means = {

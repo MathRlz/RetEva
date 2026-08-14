@@ -1,46 +1,34 @@
-# Text RAG over PubMed: pubmed_qa questions -> retrieve from the PubMed corpus -> LLM answers.
+# Two-hop RAG: the LLM rewrites the question from the FIRST hop's retrieved context.
 #
-# The generation arm WITHOUT the voice front-end: the question text goes straight to the
-# embedder (no tts/asr, so no WER — see configs/campaign/pubmed200_rag_answer.yaml for the
-# spoken-query version of the same pipeline). Graph shape is `custom` (no query head), which
-# is fine: the label only names the mode in reports/leaderboard.
+# Identical to pubmed_qa_rag_fulltext.yaml (same 115 questions, same corpus, same generator,
+# same full-text answer context) except that retrieval runs twice:
 #
-#   dataset_source -> corpus_embedding -> vector_db          (the PubMed corpus IS the index)
-#   dataset_source -> text_embedding -> retrieval            (question text -> top-k docs)
-#   retrieval -> answer_gen -> answer_metrics                (LLM answer, ROUGE-L vs short_answer)
-#                            -> answer_judge                 (LLM-scored relevance/faithfulness)
+#   text_embedding -> retrieval                       hop 1: the question as asked
+#   retrieval + question -> query_refine              an LLM rewrites it USING those docs
+#   text_embedding_refined -> retrieval_refined       hop 2: the rewritten query
 #
-# Requires a reachable LLM endpoint: `ollama serve` + `ollama pull gemma4:latest`.
-# answer_gen and answer_judge FAIL LOUDLY without one (no silent per-item fallback).
-# Traces are on because the graph has a build_query_traces node; trace_limit only caps
-# how many are built (0 = all).
+# Everything downstream (metrics, generation, traces, judge) reads HOP 2, so the reported
+# numbers are the refined ones; run the unrefined config for the baseline. The rewrite costs one
+# extra LLM call per query plus a second embed+retrieve pass, so it has to earn that back in
+# Recall@k.
 #
-# The query edges read `reference_text` (= the dataset's question_text) into the `query_text`
-# port. dataset_source DECLARES a `query_text` output but its handler never publishes one —
-# in the voiced graphs `query_text` is what asr produces, so with no asr node the question
-# text is only reachable as `reference_text` (handlers/source.py:192).
+# The generator still prompts with the ORIGINAL question (reference_text), not the rewrite — a
+# rewrite is a retrieval device, and prompting with it would confound generation quality with
+# rewrite quality. Traces show the original question for the same reason, so a trace whose
+# retrieved docs look oddly phrased is expected.
 #
-# The LLM must reply `Short Answer: yes|no|maybe` + `Long Answer: <prose>`. The decision line is
-# exact-matched against the dataset's `short_answer` (PubMedQA final_decision) →
-# `mean_decision_accuracy` + `decision_unknown_rate`; the prose is what ROUGE scores.
+# `query_optimization.enabled: true` below is REQUIRED: without it the run carries no
+# query-optimization config, the refine node falls back to library defaults (OpenAI, empty key),
+# every call fails silently and the query passes through unchanged. The node logs how many
+# queries it actually rewrote — check that line before trusting a result.
 #
-# ANSWER GT: ROUGE-L scores against the RELEVANT DOC's metadata field named by
-# `answer_generation.reference_metadata_field` (below) — NOT against the question's
-# `short_answer` (that artifact is wired into answer_gen but nothing reads it today). A
-# campaign set built before 2026-08-13 has no doc metadata, so ROUGE-L reports `n/a`;
-# rebuild with `python3 scripts/build_pubmed_campaign.py -n 200` to get `long_answer` into
-# the corpus docs. Until then answer_judge (LLM-scored faithfulness/relevance over the
-# retrieved context) is the only answer-quality signal — retrieval metrics are unaffected.
-# The pubmed_qa_small set has no answer GT at all: use the campaign set for answers.
-#
-# Data: build it first with `python3 scripts/build_pubmed_campaign.py -n 200`.
 experiment:
-  name: pubmed_qa_rag_text
+  name: pubmed_qa_rag_fulltext_refine
   output_dir: evaluation_results
 dataset:
   id: pubmed_qa
-  questions: examples/data/pubmed_qa_campaign/questions.json
-  corpus: examples/data/pubmed_qa_campaign/corpus.json
+  questions: examples/data/pubmed_qa_fulltext/questions.json
+  corpus: examples/data/pubmed_qa_fulltext/corpus.json
   trace_limit: 0        # 0 = no limit: every question runs and every one is traced
   batch_size: 8         # no ASR in the graph, so batching is embed-bound only
 data:
@@ -52,6 +40,16 @@ graph:
   - vector_db
   - text_embedding
   - retrieval
+  # Hop 2: rewrite the question using what hop 1 retrieved, then retrieve again with it.
+  - id: query_refine
+    type: query_refine
+    params:
+      method: rewrite_with_context   # or relevance_feedback / self_rag_critique
+      context_top_k: 3               # how many hop-1 docs the rewriter sees
+  - id: text_embedding_refined
+    type: text_embedding
+  - id: retrieval_refined
+    type: retrieval
   - id: answer_gen
     type: answer_gen
     params:
@@ -78,7 +76,7 @@ graph:
       # `full_text` = the PMC article from metadata.full_text, chunked and filtered to the
       # chunks closest to the question. Run `scripts/fetch_pubmed_fulltext.py` on the corpus
       # first; docs with no full text silently fall back to their abstract passage.
-      context_source: retrieved_text
+      context_source: full_text
       context_chunk_chars: 1200
       context_chunks: 4
   - retrieval_metrics
@@ -99,28 +97,38 @@ graph:
   - {from: dataset_source, output: reference_text, to: text_embedding, input: query_text}
   - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
   - {from: vector_db, to: retrieval, input: vector_index}
+  # hop 1 -> the rewriter: the current query plus the docs it found
+  - {from: dataset_source, output: reference_text, to: query_refine, input: query_text}
+  - {from: retrieval, to: query_refine, input: retrieved}
+  # the rewritten query drives hop 2 (refined_query_text outranks query_text in the chain)
+  - {from: query_refine, output: refined_query_text, to: text_embedding_refined, input: query_text}
+  - {from: text_embedding_refined, output: text_query_vectors, to: retrieval_refined, input: query_vectors}
+  - {from: vector_db, to: retrieval_refined, input: vector_index}
+  - {from: query_refine, output: refined_query_text, to: retrieval_refined, input: query_text}
+  - {from: dataset_source, to: retrieval_refined, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_refined, input: relevant_docs}
   - {from: dataset_source, output: reference_text, to: retrieval, input: query_text}
   - {from: dataset_source, to: retrieval, input: reference_transcription}
   - {from: dataset_source, to: retrieval, input: relevant_docs}
   - {from: dataset_source, output: reference_text, to: answer_gen, input: query_text}
-  - {from: retrieval, to: answer_gen, input: retrieved}
+  - {from: retrieval_refined, to: answer_gen, input: retrieved}
   - {from: dataset_source, to: answer_gen, input: short_answers}
   - {from: dataset_source, to: answer_gen, input: relevant_docs}
-  - {from: retrieval, to: retrieval_metrics, input: retrieved}
+  - {from: retrieval_refined, to: retrieval_metrics, input: retrieved}
   - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
   - {from: answer_gen, to: answer_metrics, input: generated_answers}
-  - {from: retrieval, to: answer_metrics, input: retrieved}
+  - {from: retrieval_refined, to: answer_metrics, input: retrieved}
   - {from: dataset_source, to: answer_metrics, input: relevant_docs}
   - {from: dataset_source, to: answer_metrics, input: short_answers}
   - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
   - {from: answer_metrics, to: metrics, input: answer_scores}
-  - {from: retrieval, to: metrics, input: retrieved}
+  - {from: retrieval_refined, to: metrics, input: retrieved}
   # no `query_text` edge into metrics: its port is plain (not the OneOf chain), so it cannot
   # take the reference_text route — and with no asr node it would only feed WER diagnostics.
   - {from: dataset_source, to: metrics, input: reference_transcription}
   - {from: dataset_source, to: metrics, input: relevant_docs}
   - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
-  - {from: retrieval, to: build_query_traces, input: retrieved}
+  - {from: retrieval_refined, to: build_query_traces, input: retrieved}
   - {from: answer_gen, to: build_query_traces, input: generated_answers}
   - {from: metrics, to: build_query_traces, input: metrics}
   - {from: dataset_source, to: build_query_traces, input: reference_transcription}
@@ -129,7 +137,7 @@ graph:
   - {from: metrics, to: answer_judge, input: metrics}
   - {from: build_query_traces, to: answer_judge, input: query_traces}
   - {from: answer_gen, to: answer_judge, input: generated_answers}
-  - {from: retrieval, to: answer_judge, input: retrieved}
+  - {from: retrieval_refined, to: answer_judge, input: retrieved}
   - {from: dataset_source, to: answer_judge, input: relevant_docs}
   - {from: retrieval_metrics, to: answer_judge, input: per_query_recall5}
   - {from: metrics, to: finalize, input: metrics}
@@ -137,7 +145,7 @@ graph:
   - {from: answer_judge, to: finalize, input: judge_scores}
   - {from: answer_judge, to: finalize, input: judge_pass}
   - {from: answer_gen, to: finalize, input: generated_answers}
-  - {from: retrieval, to: finalize, input: retrieved}
+  - {from: retrieval_refined, to: finalize, input: retrieved}
   - {from: answer_judge, to: finalize, input: judge_aspect_accuracy}
   - {from: answer_judge, to: finalize, input: judge_aspect_clarity}
   - {from: answer_judge, to: finalize, input: judge_aspect_completeness}
@@ -153,6 +161,8 @@ nodes:
     store: inmemory
   retrieval:
     k: 10
+query_optimization:
+  enabled: true      # REQUIRED — see the header; the LLM backend comes from `llm:` below
 llm:
   model: gemma4:latest
   use_local_server: true

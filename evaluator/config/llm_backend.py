@@ -29,6 +29,20 @@ class LLMConfig:
     # Optional run-level cap on cumulative LLM tokens (0 = no cap). Exceeding it aborts the
     # run with BudgetExceededError so an expensive judge/answer-gen sweep can't run away (T8).
     max_tokens_budget: int = 0
+    # How many requests to keep in flight for the per-item LLM loops (answer generation,
+    # judging). 1 = strictly serial, today's behaviour and the safe default for a rate-limited
+    # remote API; a local server (Ollama/vLLM) batches concurrent requests into shared forward
+    # passes, so 4 is typically 2.5-3.5x on one GPU. The SERVER must allow it too
+    # (`OLLAMA_NUM_PARALLEL=4 ollama serve`), and each slot holds its own KV cache.
+    #
+    # REPRODUCIBILITY COST, measured (12 questions, mistral:7b-instruct, seed 42, temp 0):
+    # two SERIAL runs produce byte-identical answers (12/12), but serial vs concurrency=4
+    # matches only 5/12 — batching changes the batch composition, hence the numerics, hence
+    # near-tie token choices. Decisions were unchanged (accuracy 0.4167 in both), wording was
+    # not (ROUGE-L 0.1833 -> 0.1760). Keep 1 for a run you intend to quote exactly; raise it
+    # for sweeps and exploration. (The LLM judge already varies run-to-run even serially:
+    # 0.8278 vs 0.8028 on identical answers.)
+    concurrency: int = 1
     # Per-call retries for TRANSIENT failures only (timeouts, connection errors, HTTP
     # 429/5xx — never auth/schema 4xx), with short backoff, so one hiccup doesn't drop the
     # item and shrink the eval set (A4). 0 disables.

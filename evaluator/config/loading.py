@@ -129,6 +129,7 @@ def build_from_dict(cls, config_dict: Dict[str, Any], *, validate: bool = True) 
         "use_local_server",
         "local_server_url",
         "seed",
+        "concurrency",
     }
     # A component config that does not declare a propagated field (e.g. an older one without
     # `seed`) simply doesn't receive it — never a constructor error.

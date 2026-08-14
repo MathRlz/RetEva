@@ -39,9 +39,12 @@ def _run_one_node(
         spec.fn(state)
     finally:
         dur = time.perf_counter() - _t
-        if not spec.self_timed:
-            # stage_times is shared; a lock keeps the += from losing updates under parallelism.
-            with _STAGE_TIMES_LOCK:
+        # stage_times is shared; a lock keeps the += from losing updates under parallelism.
+        with _STAGE_TIMES_LOCK:
+            # Every node, including `self_timed` ones (which own a bucket but historically
+            # left the LLM stages untimed) — this is the per-node breakdown the report shows.
+            state.node_times[node.id] = state.node_times.get(node.id, 0.0) + dur
+            if not spec.self_timed:
                 state.stage_times[spec.time_key] = (
                     state.stage_times.get(spec.time_key, 0.0) + dur
                 )

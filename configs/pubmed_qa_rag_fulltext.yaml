@@ -22,7 +22,7 @@ dataset:
   id: pubmed_qa
   questions: examples/data/pubmed_qa_fulltext/questions.json
   corpus: examples/data/pubmed_qa_fulltext/corpus.json
-  trace_limit: 115      # the judge needs traces; 115 = the whole set
+  trace_limit: 0        # 0 = no limit: every question runs and every one is traced
   batch_size: 8         # no ASR in the graph, so batching is embed-bound only
 data:
   num_workers: 0
@@ -37,6 +37,21 @@ graph:
     type: answer_gen
     params:
       method: simple
+      max_cases: 0       # 0 = generate for every query
+      # The prompt IS part of the experiment — spelled out here so a change to the code
+      # defaults cannot silently alter an already-reported run. These are the built-ins.
+      system_prompt: |-
+        You are a concise medical research assistant. Answer based ONLY on the provided context. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Context:
+        {context}
+
+        Question: {question}
+
+        Short Answer:
       context_docs: 3   # how many retrieved docs are pasted into the prompt
       compute_rouge: true
       reference_metadata_field: long_answer   # the doc metadata field holding the answer GT
@@ -51,7 +66,13 @@ graph:
   - answer_metrics
   - metrics
   - build_query_traces
-  - answer_judge
+  - id: answer_judge
+    type: answer_judge
+    params:
+      max_cases: 0     # 0 = judge EVERY trace (the default is 50 — the silent cap
+                       # that judged 50 of 1209 in an earlier run)
+      system_prompt: |-
+        You are an expert evaluator for a medical question-answering retrieval system. Score each requested aspect from 0.0 (worst) to 1.0 (best). Be strict and consistent. Respond with STRICT JSON only — no prose, no markdown.
   - finalize
   edges:
   - {from: dataset_source, to: corpus_embedding, input: corpus}
@@ -114,11 +135,16 @@ nodes:
   retrieval:
     k: 10
 llm:
-  model: mistral:7b-instruct
+  model: gemma4:latest
   use_local_server: true
   local_server_url: http://localhost:11434/v1/chat/completions
   api_key_env: DUMMY_KEY
   temperature: 0.0
+  # 4 requests in flight — ~1.9x on answer generation and judging. The SERVER must
+  # allow it: `OLLAMA_NUM_PARALLEL=4 ollama serve`, else requests just queue. Costs
+  # bit-reproducibility of the generated text (batching changes the numerics); set 1
+  # for a run you intend to quote exactly.
+  concurrency: 4
   seed: 42          # forwarded to the server; temperature 0 alone does not pin sampling
   timeout_s: 120
 runtime:
