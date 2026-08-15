@@ -8,7 +8,7 @@ import os
 import time
 import urllib.request
 from collections import OrderedDict
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from ..config.llm_backend import LLMConfig
 from ..logging_config import get_logger
@@ -32,6 +32,34 @@ def _is_transient(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.HTTPError):  # subclass of URLError — check first
         return exc.code == 429 or exc.code >= 500
     return isinstance(exc, (urllib.error.URLError, socket.timeout, TimeoutError))
+
+
+def _explain(exc: Exception, cfg: Any) -> str:
+    """The failure plus what the SERVER said and what to try — the bare exception is not enough.
+
+    A local server under memory pressure answers 5xx with a body naming the real cause (e.g. a
+    KV-cache allocation failure when `OLLAMA_NUM_PARALLEL` slots each reserve the model's full
+    context). Without the body you get "HTTP Error 500" or a bare "timed out" and no idea that
+    the fix is `OLLAMA_CONTEXT_LENGTH`, not the client.
+    """
+    import urllib.error
+
+    detail = str(exc)
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", "replace").strip()
+            if body:
+                detail = f"{detail} — server said: {body[:300]}"
+        except Exception:  # noqa: BLE001 - the body is best-effort context
+            pass
+    workers = int(getattr(cfg, "concurrency", 1) or 1)
+    if workers > 1:
+        detail += (
+            f" [concurrency={workers}: each slot reserves its own context, so a local server "
+            f"can exhaust VRAM and 5xx or stall. Check `ollama ps` (PROCESSOR should be "
+            f"100% GPU) and cap it with OLLAMA_CONTEXT_LENGTH, or lower concurrency]"
+        )
+    return detail
 
 
 def _cache_key(messages: List[Dict[str, str]], model: str, temperature: float) -> str:
@@ -113,7 +141,7 @@ class LLMClient:
                     time.sleep(delay)
                     continue
                 raise RuntimeError(
-                    f"LLM call failed ({cfg.get_api_base()}): {exc}"
+                    f"LLM call failed ({cfg.get_api_base()}): {_explain(exc, cfg)}"
                 ) from exc
 
         if "error" in body:

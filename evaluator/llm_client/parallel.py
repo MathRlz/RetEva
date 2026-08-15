@@ -30,6 +30,7 @@ def map_completions(
     workers: int = 1,
     desc: str = "LLM",
     unit: str = "case",
+    heartbeat_s: float = 60.0,
 ) -> List[Any]:
     """Apply ``fn`` to every item, up to ``workers`` in flight, preserving input order.
 
@@ -53,14 +54,34 @@ def map_completions(
                              disable=progress_disabled())
         ]
 
-    from concurrent.futures import ThreadPoolExecutor
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     workers = min(int(workers), total)
     logger.info("%s: %d item(s), %d concurrent request(s)", desc, total, workers)
+
+    results: List[Any] = [None] * total
+    started = last_event = time.monotonic()
+    done_count = 0
+    next_beat = max(1, total // 10)
+
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="llm") as pool:
-        # executor.map yields in submission order → the assembled list is order-stable even
-        # though completion order is not.
-        return list(
-            tqdm(pool.map(fn, materialized), total=total, desc=desc, unit=unit,
-                 disable=progress_disabled())
-        )
+        futures = {pool.submit(fn, item): i for i, item in enumerate(materialized)}
+        # Progress follows COMPLETION, not submission order: with an ordered iterator one slow
+        # item hides every other worker's progress, which is how a stalled run looked identical
+        # to a healthy one for hours. Results are still assembled by index.
+        pending = tqdm(as_completed(futures), total=total, desc=desc, unit=unit,
+                       disable=progress_disabled())
+        for future in pending:
+            results[futures[future]] = future.result()
+            done_count += 1
+            now = time.monotonic()
+            # A bar is suppressed whenever stderr is not a TTY — i.e. every `nohup` sweep — so
+            # the log needs its own coarse heartbeat.
+            if done_count % next_beat == 0 or now - last_event > heartbeat_s:
+                logger.info(
+                    "%s: %d/%d done (%.0fs elapsed, %d in flight)",
+                    desc, done_count, total, now - started, total - done_count,
+                )
+            last_event = now
+    return results

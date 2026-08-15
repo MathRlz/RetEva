@@ -85,7 +85,34 @@ def collect_problems(config: Any) -> Tuple[List[str], List[str]]:
     _validate_dataset_compat(config, warnings)
     _validate_metric_allowlist(config, errors)
     _validate_variant_rollup(config, errors)
+    _validate_llm_concurrency(config, warnings)
     return errors, warnings
+
+
+#: Seconds of head-room a single in-flight LLM request is assumed to need. With N in flight the
+#: server interleaves them, so each one's WALL time grows roughly N-fold.
+_LLM_SECONDS_PER_WORKER = 60
+
+
+def _validate_llm_concurrency(config, warnings):
+    """Warn when a component's timeout was sized for serial calls but it runs concurrently.
+
+    A timeout that is fine at concurrency 1 becomes a timeout STORM at 4: every request takes
+    ~N x longer, each timeout retries twice, and the retries pile onto an already-saturated
+    server. Cheap to check, expensive to discover at hour two of a sweep."""
+    for name in ("answer_generation", "judge", "query_optimization", "query_correction"):
+        cfg = getattr(config, name, None)
+        if cfg is None or not getattr(cfg, "enabled", False):
+            continue
+        workers = int(getattr(cfg, "concurrency", 1) or 1)
+        timeout = int(getattr(cfg, "timeout_s", 0) or 0)
+        needed = workers * _LLM_SECONDS_PER_WORKER
+        if workers > 1 and timeout < needed:
+            warnings.append(
+                f"{name}.concurrency={workers} with timeout_s={timeout}: each request's wall "
+                f"time grows with concurrency, so this will time out and retry under load. "
+                f"Use timeout_s >= {needed}, or lower the concurrency."
+            )
 
 
 def _validate_variant_rollup(config, errors):

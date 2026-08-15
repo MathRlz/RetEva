@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..llm_client.client import LLMClient
@@ -93,6 +94,15 @@ _LONG_RE = re.compile(r"long\s*answer\s*[:\-–]?\s*\**\s*", re.IGNORECASE)
 _BARE_DECISION_RE = re.compile(
     r"^\W*\**\s*(yes|no|maybe)\b\s*(?=[.,;:!)\]\n]|\*|$)", re.IGNORECASE
 )
+
+
+#: The answer loop runs concurrently (llm_client/parallel.py), but full-text context selection
+#: embeds chunks — a torch forward pass plus a cache/sqlite lookup — and NEITHER the embedding
+#: pipeline nor the manifest is thread-safe. Four workers through one sentence-transformers model
+#: wedged a 1209-question sweep for twelve hours with no timeout to break it. Do not remove this
+#: lock for "parallel embedding": GPU work does not overlap across Python threads anyway (GIL +
+#: CUDA serialisation), so it costs throughput nothing.
+_EMBEDDER_LOCK = threading.Lock()
 
 
 def _normalize_decision(value: Any) -> Optional[str]:
@@ -248,8 +258,9 @@ def select_full_text_context(
         picked = chunks[:keep]
     else:
         try:
-            vecs = embedder.process_batch(chunks)
-            qvec = embedder.process_batch([question])[0]
+            with _EMBEDDER_LOCK:      # see _EMBEDDER_LOCK — not optional under concurrency
+                vecs = embedder.process_batch(chunks)
+                qvec = embedder.process_batch([question])[0]
             order = _cosine_rank(qvec, vecs)[:keep]
             picked = [chunks[i] for i in sorted(order)]  # keep document order in the prompt
         except Exception as exc:  # noqa: BLE001 - context selection must not fail a run
