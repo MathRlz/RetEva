@@ -5,12 +5,6 @@
    'parent-drawflow' — a custom first class disables canvas dragging #}
   <div id="dag-preview-canvas"></div>
   <div class="row">
-    {# Config & Run only (preset_name set): run the preset unchanged, alongside Open in builder. #}
-    {% if preset_name %}
-    <button hx-post="/ui/run-preset" hx-vals='{"name": "{{ preset_name }}"}'
-            hx-target="#run-output" hx-indicator="#run-ind" type="button">Run preset as-is</button>
-    <span id="run-ind" class="htmx-indicator muted">starting…</span>
-    {% endif %}
     <button id="dag-open-builder" type="button">Open in builder</button>
     <button id="dag-toggle-full" type="button" class="secondary"
             title="Show the derived execution nodes (metrics, report, finalize, …)">View full DAG</button>

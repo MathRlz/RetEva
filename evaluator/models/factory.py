@@ -117,6 +117,16 @@ def create_text_embedding_model(model_type: str, model_name: Optional[str] = Non
 AudioBuilder = Callable[..., Any]
 _AUDIO_EMBEDDING_BUILDERS: Dict[str, AudioBuilder] = {}
 
+_LEGACY_APM_SIZES: Dict[str, str] = {
+    "base": "openai/whisper-base",
+    "small": "openai/whisper-small",
+    "medium": "openai/whisper-medium",
+    "large": "openai/whisper-large",
+    "large-v2": "openai/whisper-large-v2",
+    "large-v3": "openai/whisper-large-v3",
+    "m4t-v2-large": "facebook/seamless-m4t-v2-large",
+}
+
 
 def register_audio_embedding_builder(model_type: str, builder: AudioBuilder) -> None:
     _AUDIO_EMBEDDING_BUILDERS[model_type] = builder
@@ -133,12 +143,22 @@ def _build_attention_pool_audio(
     device: str,
     **extra,
 ):
+    encoder_type = extra.pop("encoder_type", None)
+    encoder_size = extra.pop("encoder_size", None)
     _check_extra_params(model_type, model_class, extra)
-    name = audio_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
+    if encoder_type and encoder_size:
+        from evaluator.models.a2e.attention_pool import AttentionPoolAudioModel
+        name = (AttentionPoolAudioModel.Params.ENCODER_SIZES
+                .get(encoder_type, {}).get(encoder_size)
+                or model_name or "openai/whisper-large")
+    elif size and size in _LEGACY_APM_SIZES:
+        name = _LEGACY_APM_SIZES[size]
+    else:
+        name = audio_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
     return model_class(
         audio_encoder_name=name,
         emb_dim=emb_dim,
-        model_path=model_path,
+        model_path=extra.get("model_path") or model_path,
         pooling=extra.get("pooling", "attention"),
     ).to(torch.device(device))
 

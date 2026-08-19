@@ -325,6 +325,9 @@ class ModelServiceProvider:
             entries: List[Dict[str, Any]] = []
             for model_type in sorted(registry.list_types()):
                 meta = dict(registry.get_metadata(model_type) or {})
+                if meta.pop("hidden", False):
+                    continue
+                display_name = meta.pop("display_name", None)
                 entry: Dict[str, Any] = {
                     "type": model_type,
                     "name": registry.get_default_name(model_type) or model_type,
@@ -333,6 +336,8 @@ class ModelServiceProvider:
                     "requires_path": bool(meta.pop("requires_path", False)),
                     "default_device_hint": "cuda",
                 }
+                if display_name:
+                    entry["display_label"] = display_name
                 aliases = meta.pop("aliases", None)
                 if aliases:
                     entry["aliases"] = list(aliases)

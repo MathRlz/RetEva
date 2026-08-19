@@ -34,6 +34,8 @@ def _model_families() -> Dict[str, List[Dict[str, Any]]]:
         types: List[Dict[str, Any]] = []
         for mtype in reg.list_types():
             meta = reg.get_metadata(mtype) or {}
+            if meta.get("hidden"):
+                continue
             types.append({
                 "type": mtype,
                 "sizes": reg.get_sizes(mtype) or {},

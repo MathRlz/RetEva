@@ -12,20 +12,20 @@
    Do not hand-edit a hex here — re-run the validator. */
 :root {
   color-scheme: dark;
-  --bg: #0f172a;            --surface: #111827;      --surface-2: #0b1220;
-  --border: #1f2937;        --border-strong: #334155;
-  --text: #e2e8f0;          --text-2: #cbd5e1;       --text-muted: #94a3b8;
-  --accent: #1d4ed8;        --accent-hover: #2563eb; --accent-ink: #fff;
-  --go: #16a34a;            --go-hover: #15803d;     --link: #60a5fa;
-  --ok: #4ade80;            --error: #f87171;        --warn: #fbbf24;
+  --bg: #1e1e2e;            --surface: #313244;      --surface-2: #181825;
+  --border: #45475a;        --border-strong: #585b70;
+  --text: #cdd6f4;          --text-2: #bac2de;       --text-muted: #a6adc8;
+  --accent: #89b4fa;        --accent-hover: #b4befe; --accent-ink: #1e1e2e;
+  --go: #a6e3a1;            --go-hover: #94e2d8;     --link: #89dceb;
+  --ok: #a6e3a1;            --error: #f38ba8;        --warn: #f9e2af;
 
-  --chart-ink: #e2e8f0;     --chart-grid: #1f2937;   --chart-zero: #374151;
-  --chart-muted: #94a3b8;   --chart-dim: #64748b;
-  --chart-pos: #3987e5;     --chart-neg: #e66767;
-  --chart-cat-1: #3987e5;   --chart-cat-2: #d95926;
-  --chart-cat-3: #199e70;   --chart-cat-4: #c98500;
-  --chart-ord-1: #cde2fb;   --chart-ord-2: #86b6ef;  --chart-ord-3: #3987e5;
-  --chart-ord-4: #256abf;   --chart-ord-5: #184f95;
+  --chart-ink: #cdd6f4;     --chart-grid: #45475a;   --chart-zero: #585b70;
+  --chart-muted: #a6adc8;   --chart-dim: #7f849c;
+  --chart-pos: #89b4fa;     --chart-neg: #f38ba8;
+  --chart-cat-1: #89b4fa;   --chart-cat-2: #fab387;
+  --chart-cat-3: #a6e3a1;   --chart-cat-4: #f9e2af;
+  --chart-ord-1: #e6e9f5;   --chart-ord-2: #b4befe;  --chart-ord-3: #89b4fa;
+  --chart-ord-4: #74c7ec;   --chart-ord-5: #89dceb;
 }
 
 @media (prefers-color-scheme: light) {
@@ -45,6 +45,14 @@
     --chart-cat-3: #1baf7a; --chart-cat-4: #eda100;
     --chart-ord-1: #86b6ef; --chart-ord-2: #5598e7;  --chart-ord-3: #2a78d6;
     --chart-ord-4: #1c5cab; --chart-ord-5: #104281;
+
+    --dag-src: #2e7d32;       --dag-src-bg: #e8f5e9;
+    --dag-model: #1565c0;     --dag-model-bg: #e3f2fd;
+    --dag-transform: #546e7a; --dag-transform-bg: #eceff1;
+    --dag-metric: #ef6c00;    --dag-metric-bg: #fff3e0;
+    --dag-sink: #6a1b9a;      --dag-sink-bg: #f3e5f5;
+    --dag-edge: #b0bec5;      --dag-edge-active: #1565c0;
+    --dag-text: #212121;      --dag-muted: #616161;
   }
 }
 
@@ -64,6 +72,14 @@
   --chart-cat-3: #1baf7a;   --chart-cat-4: #eda100;
   --chart-ord-1: #86b6ef;   --chart-ord-2: #5598e7;  --chart-ord-3: #2a78d6;
   --chart-ord-4: #1c5cab;   --chart-ord-5: #104281;
+
+  --dag-src: #2e7d32;       --dag-src-bg: #e8f5e9;
+  --dag-model: #1565c0;     --dag-model-bg: #e3f2fd;
+  --dag-transform: #546e7a; --dag-transform-bg: #eceff1;
+  --dag-metric: #ef6c00;    --dag-metric-bg: #fff3e0;
+  --dag-sink: #6a1b9a;      --dag-sink-bg: #f3e5f5;
+  --dag-edge: #b0bec5;      --dag-edge-active: #1565c0;
+  --dag-text: #212121;      --dag-muted: #616161;
 }
 
 /* Screen-reader-only (table captions on chart panels) */
@@ -86,7 +102,8 @@ section.step { border-top: 1px solid var(--border); padding: 14px 0; }
 section.step:first-of-type { border-top: none; }
 label.field { display: grid; gap: 4px; margin-bottom: 10px; font-size: .9rem; }
 label.field > span { color: var(--text-2); }
-input, select, textarea { background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 9px; font: inherit; }
+input, select, textarea { background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 9px; font: inherit; color-scheme: dark light; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
 .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
 button { background: var(--accent); color: var(--accent-ink); border: none; border-radius: 8px; padding: 9px 14px; cursor: pointer; font: inherit; }
@@ -142,14 +159,17 @@ details.step[open] > summary::before { transform: rotate(90deg); }
 
 /* ── Shared DAG view (builder + Config&Run preview) ──────────────────────── */
 :root {
-  --dag-src: #2e7d32;       --dag-src-bg: #e8f5e9;
-  --dag-model: #1565c0;     --dag-model-bg: #e3f2fd;
-  --dag-transform: #546e7a; --dag-transform-bg: #eceff1;
-  --dag-metric: #ef6c00;    --dag-metric-bg: #fff3e0;
-  --dag-sink: #6a1b9a;      --dag-sink-bg: #f3e5f5;
-  --dag-edge: #b0bec5;      --dag-edge-active: #1565c0;
-  --dag-text: #212121;      --dag-muted: #616161;
+  --dag-src: #a6e3a1;       --dag-src-bg: #1a2e27;
+  --dag-model: #89b4fa;     --dag-model-bg: #1c2240;
+  --dag-transform: #a6adc8; --dag-transform-bg: #252535;
+  --dag-metric: #fab387;    --dag-metric-bg: #2d2018;
+  --dag-sink: #cba6f7;      --dag-sink-bg: #261b35;
+  --dag-edge: #585b70;      --dag-edge-active: #89b4fa;
+  --dag-text: #cdd6f4;      --dag-muted: #a6adc8;
 }
+
+/* drawflow library injects white bg on its container — override to match theme */
+.drawflow { background: var(--surface-2) !important; }
 
 /* node card: content-driven width, explicit type scale.
    !important: drawflow.min.css (width:160px; padding:15px) can load AFTER this file
@@ -160,7 +180,7 @@ details.step[open] > summary::before { transform: rotate(90deg); }
   padding: 0 !important;
   border: 1.5px solid var(--dag-transform) !important;
   background: var(--dag-transform-bg) !important;
-  border-radius: 6px; color: var(--dag-text);
+  border-radius: 6px; color: var(--dag-text) !important;
 }
 .drawflow .drawflow-node .drawflow_content_node { width: 100%; }
 .drawflow .drawflow-node.selected,
@@ -168,12 +188,12 @@ details.step[open] > summary::before { transform: rotate(90deg); }
   border-width: 2.5px; box-shadow: 0 2px 8px rgba(0,0,0,.18);
 }
 .node-title { font-size: 13px; font-weight: 600; padding: 3px 8px;
-              border-bottom: 1px solid rgba(0,0,0,.08); }
+              border-bottom: 1px solid var(--border); color: var(--dag-text); }
 .node-model { font-size: 11px; font-weight: 500; color: var(--dag-model);
               padding: 1px 8px 2px; min-height: 14px; }
 .node-columns { font-size: 10px; padding: 1px 8px 2px; color: var(--dag-model);
                 display: flex; flex-wrap: wrap; gap: 2px 8px;
-                border-bottom: 1px dashed rgba(0,0,0,.08); }
+                border-bottom: 1px dashed var(--border); }
 .node-io { display: flex; justify-content: space-between; gap: 12px;
            font-size: 10px; padding: 2px 8px 5px; color: var(--dag-muted); }
 /* Port dots are aligned to each name row by dag_view.js, so the row pitch must exceed the
@@ -213,8 +233,8 @@ details.step[open] > summary::before { transform: rotate(90deg); }
 
 /* read-only preview container (styled by id — a class attribute would break
    drawflow's fixed-mode pan, which checks e.target.classList[0]) */
-#dag-preview-canvas { border: 1px solid #ccc; border-radius: 4px; position: relative;
-                      min-height: 200px; background: #fff; }
+#dag-preview-canvas { border: 1px solid var(--border); border-radius: 4px; position: relative;
+                      min-height: 200px; background: var(--surface-2); }
 
 /* inspect panel */
 .dag-detail dt { font-weight: 600; float: left; clear: left; width: 90px;
@@ -224,7 +244,7 @@ details.step[open] > summary::before { transform: rotate(90deg); }
 
 /* edge decorations (labels pan/zoom with the precanvas) */
 .dag-edge-label { position: absolute; transform: translate(-50%, -50%);
-  font-size: 10px; color: var(--dag-muted); background: rgba(255,255,255,.88);
+  font-size: 10px; color: var(--dag-muted); background: var(--surface-2);
   padding: 0 4px; border-radius: 3px; pointer-events: none; z-index: 4;
   white-space: nowrap; }
 .dag-edge-arrow { position: absolute; transform: translate(-50%, -50%);
@@ -236,8 +256,8 @@ details.step[open] > summary::before { transform: rotate(90deg); }
   display: flex; gap: 4px; }
 .dag-zoom-controls button { width: 26px; height: 26px; padding: 0;
   font-size: 14px; line-height: 1; cursor: pointer;
-  border: 1px solid #b0bec5; border-radius: 4px; background: #fff; }
-.dag-zoom-controls button:hover { background: #eceff1; }
+  border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text); }
+.dag-zoom-controls button:hover { background: var(--border); }
 
 /* optional-input edges: present but de-emphasized (data spine stays crisp) */
 .drawflow .connection.dag-opt-edge .main-path {

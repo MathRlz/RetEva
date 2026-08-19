@@ -118,9 +118,18 @@
       if (name === 'size') return;  // rendered as the size select
       const cur = extra[name] ?? meta.default ?? '';
       let widget;
-      if (meta.choices && meta.choices.length) {
-        widget = selectEl(meta.choices.map(c => ({value: c, label: c})), String(cur),
+      if (meta.encoder_sizes) {
+        const encoderType = ((host.params || {}).params || {})["encoder_type"] ?? "whisper";
+        const sizeMap = meta.encoder_sizes[String(encoderType)] || {};
+        const choices = Object.keys(sizeMap);
+        const defVal = choices.includes(String(cur)) ? String(cur) : (choices[0] || '');
+        widget = selectEl(choices.map(c => ({value: c, label: c})), defVal,
                           v => host.setExtraParam(name, v));
+      } else if (meta.choices && meta.choices.length) {
+        const onChange = meta.rerenders
+            ? v => { host.setExtraParam(name, v); renderPanel(host); }
+            : v => host.setExtraParam(name, v);
+        widget = selectEl(meta.choices.map(c => ({value: c, label: c})), String(cur), onChange);
       } else if (typeof meta.default === 'boolean') {
         widget = document.createElement('input'); widget.type = 'checkbox';
         widget.checked = Boolean(cur);
@@ -141,13 +150,19 @@
     panel.appendChild(group);
     modelsPromise().then(models => {
       const fam = models[spec.family] || [];
+      // Single-model family: auto-select so schema fields are immediately visible.
+      if (fam.length === 1 && !current.model) {
+        host.setParam('model', fam[0].type);
+        renderPanel(host);
+        return;
+      }
       // The empty option NAMES the inherited model (the flat config default the run reads) —
       // a bare "(default)" tells the user nothing about what will actually run.
       const dm = spec.default_model;
       const dmName = dm && (fam.find(m => m.type === dm) || {}).name;
       const inheritLabel = dm ? `${dm}${dmName ? ' — ' + dmName : ''} (default)` : '(default)';
-      const opts = [{value: '', label: inheritLabel}]
-        .concat(fam.map(m => ({value: m.type, label: `${m.type} — ${m.name}`})));
+      const opts = (fam.length > 1 ? [{value: '', label: inheritLabel}] : [])
+        .concat(fam.map(m => ({value: m.type, label: m.display_label || `${m.type} — ${m.name}`})));
       group.appendChild(fieldRow('model', selectEl(opts, current.model || '', v => {
         host.setParam('model', v);
         host.setParam('size', '');   // size choices belong to the model → reset

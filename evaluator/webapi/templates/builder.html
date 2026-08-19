@@ -13,12 +13,12 @@
      absolutely positioned so it overlays (never pushes the canvas down). */
   .menu-dd { position: relative; }
   .menu-dd > summary { cursor: pointer; list-style: none; padding: 4px 10px; font-size: 13px;
-                       border: 1px solid #ccc; border-radius: 4px; background: #f7f7f7; }
+                       border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: var(--text); }
   .menu-dd > summary::-webkit-details-marker { display: none; }
-  .menu-dd > summary::after { content: ' ▾'; color: #888; }
+  .menu-dd > summary::after { content: ' ▾'; color: var(--text-muted); }
   .menu-dd[open] > .menu { position: absolute; z-index: 30; top: 100%; left: 0; margin-top: 2px;
-    min-width: 220px; max-width: 360px; background: #fff; border: 1px solid #ccc; border-radius: 4px;
-    padding: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, .14); }
+    min-width: 220px; max-width: 360px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 4px;
+    padding: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
   #validation { margin: 4px 0; }
   /* palette: a row of category dropdowns (click a category, choose a node) */
   #palette-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
@@ -33,11 +33,10 @@
   .palette-cat .menu button.cat-sink   { border-left-color: var(--dag-sink); }
   /* drag the bottom-right handle to resize the graph viewport (overflow:hidden is required
      for CSS resize and matches Drawflow's clipped canvas) */
-  #canvas { width: 100%; height: 600px; min-height: 300px; border: 1px solid #ccc;
-            position: relative; resize: vertical; overflow: hidden; }
+  #canvas { width: 100%; height: 600px; min-height: 300px; border: 1px solid var(--border);
+            position: relative; resize: vertical; overflow: hidden; background: var(--surface-2); }
   #spec { width: 100%; height: 150px; font-family: monospace; font-size: 12px; }
-  #toolbar #llm-panel, #toolbar #branch-list, #toolbar #config-yaml { font-size: 12px; }
-  #config-yaml { width: 100%; height: 80px; }
+  #llm-panel { font-size: 12px; }
   /* node-card styles are shared via /static/app.css */
   /* param panel below the canvas: a readable-width form (label left, widget right) — no floats,
      so dense operator forms (model + device + discriminator selects + switches) never tangle. */
@@ -47,32 +46,31 @@
   #param-panel input, #param-panel select { width: 200px; flex: 0 0 auto; }
   #param-panel input[type=checkbox] { width: auto; }
   #param-panel h4 { margin: 6px 0 4px; }
-  #param-panel .group { border-top: 1px dashed #ccc; margin-top: 6px; padding-top: 4px; }
-  #param-panel .hint { font-size: 11px; color: #888; }
+  #param-panel .group { border-top: 1px dashed var(--border-strong); margin-top: 6px; padding-top: 4px; }
+  #param-panel .hint { font-size: 11px; color: var(--text-muted); }
   #param-panel .help { color: #6a8bbf; cursor: help; font-size: 11px; }
 </style>
 {% endblock %}
 {% block body %}
 <div class="panel">
   <h2>Pipeline builder</h2>
-  <p class="muted">Pick a mode to load its starter graph, then click a node on the canvas to edit
-    its model + params below. Add nodes from the palette (click a category, then a node); export or
-    validate the node-centric graph. Tucked menus hold the graph LLM, branches and load/save.</p>
+  <p class="muted">Click a node on the canvas to edit its model + params. Add nodes from the
+    palette; import an existing config or reload the starter template. Export or validate the graph.</p>
   <div id="builder">
-    <!-- toolbar: mode + main buttons + tucked secondary menus -->
+    <!-- toolbar: main buttons + tucked secondary menus -->
     <div id="toolbar">
-      <label class="inline">mode
-        <select id="mode">
-          {% for t in graph_templates %}
-          <option value="{{ t.name }}">{{ t.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
       <button id="btn-template" type="button">Reload template</button>
-      <button id="btn-export" type="button">Export spec</button>
+      <input type="file" id="import-config-file" accept=".yaml,.yml" style="display:none">
+      <button type="button" id="btn-import-config">Import config <span style="display:inline-block;transform:scaleY(-1)">⤓</span></button>
       <button id="btn-export-config" type="button">Export config ⤓</button>
       <button id="btn-validate" type="button">Validate</button>
       <button id="btn-run" type="button" class="primary">Run ▶</button>
+    </div>
+    <div id="validation"></div>
+    <!-- palette: a row of category dropdowns (click a category, choose a node) -->
+    <div id="palette-bar">
+      <strong class="muted" style="font-size:12px">Add node</strong>
+      <div id="palette-list">loading…</div>
       <details class="menu-dd"><summary>LLM</summary>
         <div class="menu">
           <p class="muted" style="font-size:11px;margin:0 0 4px">One LLM for the whole graph; every
@@ -80,37 +78,6 @@
           <div id="llm-panel"></div>
         </div>
       </details>
-      <details class="menu-dd"><summary>Branches</summary>
-        <div class="menu">
-          <p class="muted" style="font-size:11px;margin:0 0 4px">Variant set (§8): each branch
-            overrides one node's params; shared prefixes run once (CSE). Empty = single run.</p>
-          <div id="branch-list"></div>
-          <button id="btn-add-branch" type="button" class="secondary">+ add branch</button>
-        </div>
-      </details>
-      <details class="menu-dd"><summary>Load / Save</summary>
-        <div class="menu">
-          <div id="load-config">
-            <textarea id="config-yaml" placeholder="paste an experiment YAML to open its graph (models, dataset, edges) for editing"></textarea>
-            <button id="btn-load-config" type="button" class="secondary">Load onto canvas</button>
-          </div>
-          <div id="saved-graphs" style="margin-top:6px">
-            <button id="btn-save-graph" type="button" class="secondary">Save current graph</button>
-            <div id="saved-list"></div>
-          </div>
-        </div>
-      </details>
-      <details class="menu-dd" id="spec-menu"><summary>Exported spec</summary>
-        <div class="menu">
-          <textarea id="spec" readonly placeholder="exported node-centric graph appears here"></textarea>
-        </div>
-      </details>
-    </div>
-    <div id="validation"></div>
-    <!-- palette: a row of category dropdowns (click a category, choose a node) -->
-    <div id="palette-bar">
-      <strong class="muted" style="font-size:12px">Add node</strong>
-      <div id="palette-list">loading…</div>
     </div>
     <!-- full-width graph canvas -->
     <div id="canvas"></div>
@@ -123,6 +90,7 @@ const canvasEl = document.getElementById('canvas');
 const editor = new Drawflow(canvasEl);
 editor.start();
 DagView.attachZoom(editor, canvasEl);  // wheel scroll-in/out + corner controls (B4c)
+let CURRENT_MODE = '{{ graph_templates[0].name if graph_templates else "" }}';
 let CATALOGUE = {};      // node type -> contract (from /api/graph/nodes)
 // model lists, param schemas, dataset info + the per-node form renderer live in node_form.js
 // (window.NodeForm), shared with the Config & Run page.
@@ -165,7 +133,7 @@ fetch('/api/graph/nodes').then(r => r.json()).then(d => {
     det.appendChild(menu);
     list.appendChild(det);
   });
-  if (!loadSeed()) loadTemplate(document.getElementById('mode').value);
+  if (!loadSeed()) loadTemplate(CURRENT_MODE);
 });
 
 // Dropdown behavior shared by the toolbar menus + palette categories: only one open at a time;
@@ -178,13 +146,6 @@ document.addEventListener('click', e => {
     if (!d.contains(e.target)) d.removeAttribute('open');
   });
 });
-// Export spec → reveal the exported-spec dropdown so the output is visible. Defer past this click
-// so the click-away handler (which fires on the same click) doesn't immediately re-close it.
-document.getElementById('btn-export').addEventListener('click', () => {
-  const m = document.getElementById('spec-menu');
-  if (m) (window.requestAnimationFrame || setTimeout)(() => { m.open = true; });
-});
-
 // UI-graph ↔ execution-DAG split: the canvas shows ONLY the meaningful operations the user
 // authors; the structural plumbing (metrics/report/finalize/aggregate/sinks/measure-comparisons,
 // flagged `structural` by render_node) is auto-derived at build (graph_spec_to_config_dict). Strip
@@ -205,8 +166,7 @@ function loadSeed() {
   sessionStorage.removeItem('dag_builder_seed');
   try {
     const seed = meaningfulOnly(JSON.parse(raw));
-    const modeSel = document.getElementById('mode');
-    if ([...modeSel.options].some(o => o.value === seed.mode)) modeSel.value = seed.mode;
+    if (seed.mode) CURRENT_MODE = seed.mode;
     DagView.drawGraph(editor, seed, CATALOGUE);
     syncCounter(seed.nodes);
     syncAllVectorDb();  // a loaded vector_db shows one index output per wired corpus stream
@@ -238,9 +198,7 @@ function loadTemplate(mode) {
       '<p class="error">failed to load template</p>';
   });
 }
-document.getElementById('mode').onchange = e => loadTemplate(e.target.value);
-document.getElementById('btn-template').onclick = () =>
-  loadTemplate(document.getElementById('mode').value);
+document.getElementById('btn-template').onclick = () => loadTemplate(CURRENT_MODE);
 
 
 // E3: drop a node with one port per declared input (required + optional) / output,
@@ -367,44 +325,6 @@ function syncAllVectorDb() {
   } finally { _vdbSyncing = false; }
 }
 
-// ── Branch authoring (P5, §8 variant sets) ───────────────────────────
-let BRANCHES = [];  // [{id, node, params}] — params is a JSON object patch
-function canvasNodeTypes() {
-  const dr = editor.export().drawflow.Home.data;
-  return [...new Set(Object.values(dr).map(n => n.data.type))];
-}
-function renderBranches() {
-  const list = document.getElementById('branch-list');
-  list.innerHTML = '';
-  BRANCHES.forEach((b, i) => {
-    const row = document.createElement('div');
-    row.className = 'group';
-    const id = inputEl('text', b.id, 'branch id', v => { BRANCHES[i].id = v; });
-    const nodeSel = selectEl(
-      [{value: '', label: '(no override — baseline)'}]
-        .concat(canvasNodeTypes().map(t => ({value: t, label: t}))),
-      b.node || '', v => { BRANCHES[i].node = v; });
-    const params = inputEl('text',
-      b.params && Object.keys(b.params).length ? JSON.stringify(b.params) : '',
-      '{"model": "whisper", "size": "tiny"}', v => {
-        try { BRANCHES[i].params = v ? JSON.parse(v) : {}; params.classList.remove('invalid'); }
-        catch (e) { params.classList.add('invalid'); }
-      });
-    const del = document.createElement('button');
-    del.type = 'button'; del.className = 'secondary'; del.textContent = '✕';
-    del.onclick = () => { BRANCHES.splice(i, 1); renderBranches(); };
-    row.appendChild(fieldRow('id', id));
-    row.appendChild(fieldRow('node', nodeSel));
-    row.appendChild(fieldRow('params', params));
-    row.appendChild(del);
-    list.appendChild(row);
-  });
-}
-document.getElementById('btn-add-branch').onclick = () => {
-  BRANCHES.push({id: 'branch' + (BRANCHES.length + 1), node: '', params: {}});
-  renderBranches();
-};
-
 // Serialize the canvas → node-centric {mode, nodes:[{id,type,params}], edges:[...]}.
 // Edges are PORT-LEVEL (explicit wiring): {from, output, to, input} — the connection's
 // Drawflow port indices map back through the producer's rendered outputs and the consumer's
@@ -437,11 +357,7 @@ function exportSpec() {
       });
     });
   });
-  const spec = {mode: document.getElementById('mode').value, nodes, edges};
-  const branches = BRANCHES
-    .filter(b => b.id)
-    .map(b => (b.node ? {id: b.id, [b.node]: b.params || {}} : {id: b.id}));
-  if (branches.length) spec.branches = branches;
+  const spec = {mode: CURRENT_MODE, nodes, edges};
   const llm = llmBlock();
   if (llm) spec.llm = llm;   // global graph LLM (inherited by every llm-using node)
   return spec;
@@ -588,25 +504,28 @@ function renderLlmPanel() {
 }
 renderLlmPanel();
 
-document.getElementById('btn-export').onclick = () => {
-  document.getElementById('spec').value = JSON.stringify(exportSpec(), null, 2);
-};
-// Export config — serialize the canvas to a runnable node-centric config YAML (the inverse of
-// "Load a YAML config"): show it in the spec box and download config.yaml.
+// Export config — validate first (same styled fragment as the Validate button), then download
+// config.yaml only when there are no hard errors.
 document.getElementById('btn-export-config').onclick = () => {
   const panel = document.getElementById('validation');
-  fetch('/api/graph/to-config', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({spec: exportSpec(), experiment_name: 'builder_export'})})
-    .then(r => r.json().then(j => ({ok: r.ok, j})))
-    .then(({ok, j}) => {
-      if (!ok) { panel.innerHTML = `<p class="error">${j.detail || 'export failed'}</p>`; return; }
-      document.getElementById('spec').value = j.yaml;
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([j.yaml], {type: 'text/yaml'}));
-      a.download = 'config.yaml';
-      a.click();
-      URL.revokeObjectURL(a.href);
-      panel.innerHTML = '<p class="ok">config.yaml exported ✓</p>';
+  panel.innerHTML = '<p class="muted">validating…</p>';
+  fetch('/ui/validate-builder', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(exportSpec())})
+    .then(r => r.text())
+    .then(html => {
+      panel.innerHTML = html;
+      if (panel.querySelector('.error, .error-box')) return;   // errors shown — stop before download
+      return fetch('/api/graph/to-config', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({spec: exportSpec(), experiment_name: 'builder_export'})})
+        .then(r => r.json().then(j => ({ok: r.ok, j})))
+        .then(({ok, j}) => {
+          if (!ok) { panel.innerHTML += `<p class="error">${j.detail || 'export failed'}</p>`; return; }
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(new Blob([j.yaml], {type: 'text/yaml'}));
+          a.download = 'config.yaml'; a.click(); URL.revokeObjectURL(a.href);
+          panel.innerHTML += '<p class="ok">config.yaml downloaded ✓</p>';
+        });
     })
     .catch(e => { panel.innerHTML = `<p class="error">${e}</p>`; });
 };
@@ -642,14 +561,12 @@ document.getElementById('btn-run').onclick = (ev) => {
     })
     .catch(e => { panel.innerHTML = `<p class="error">${e}</p>`; btn.disabled = false; });
 };
-// Load a YAML config onto the canvas — round-trip an existing experiment into the builder.
-// The server returns the same {mode, levels, nodes} seed as a template, but with the config's
-// models/dataset folded onto each node, so it renders through the shared DagView path.
-document.getElementById('btn-load-config').onclick = () => {
+// ── Import: load a YAML config file onto the canvas ────────────────────────
+function _loadYamlOntoCanvas(yamlText) {
   const panel = document.getElementById('validation');
   panel.innerHTML = '<p class="muted">loading config…</p>';
   fetch('/api/graph/from-config', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({yaml: document.getElementById('config-yaml').value})})
+    body: JSON.stringify({yaml: yamlText})})
     .then(r => r.json().then(j => ({ok: r.ok, j})))
     .then(({ok, j}) => {
       if (!ok) { panel.innerHTML = `<p class="error">${j.detail || 'load failed'}</p>`; return; }
@@ -657,52 +574,30 @@ document.getElementById('btn-load-config').onclick = () => {
       editor.clearModuleSelected();
       document.getElementById('param-panel').innerHTML =
         '<em>select a node to edit its model + params</em>';
-      const modeSel = document.getElementById('mode');
-      if (j.mode && [...modeSel.options].some(o => o.value === j.mode)) modeSel.value = j.mode;
-      const g = meaningfulOnly(j);  // canvas authors meaningful ops only; plumbing is derived
+      if (j.mode) CURRENT_MODE = j.mode;
+      const g = meaningfulOnly(j);
       DagView.drawGraph(editor, g, CATALOGUE);
       syncCounter(g.nodes);
       syncAllVectorDb();
-      restoreVariants(j);  // a branched config re-hydrates its Branches panel
+      restoreVariants(j);
       DagView.zoomFit(editor, canvasEl);
     })
     .catch(e => { panel.innerHTML = `<p class="error">${e}</p>`; });
-};
-// ── Saved graphs: persist the canvas spec by name + a gallery to reopen one ──────────
-function refreshSavedGraphs() {
-  fetch('/api/graphs').then(r => r.json()).then(d => {
-    const gs = d.graphs || [];
-    document.getElementById('saved-list').innerHTML = gs.length
-      ? gs.map(g =>
-          `<div class="saved-row"><span class="saved-name">${g.name}</span>` +
-          `<small class="muted">${g.mode || ''} · ${g.n_nodes}n</small>` +
-          `<button type="button" class="link load-graph" data-name="${g.name}">load</button>` +
-          `<button type="button" class="link del-graph" data-name="${g.name}">✕</button></div>`
-        ).join('')
-      : '<p class="muted" style="font-size:11px">no saved graphs yet</p>';
-  });
 }
-document.getElementById('btn-save-graph').onclick = () => {
-  const name = prompt('Save graph as:');
-  if (!name) return;
-  const panel = document.getElementById('validation');
-  fetch('/api/graphs', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name, spec: exportSpec()})})
-    .then(r => r.json().then(j => ({ok: r.ok, j})))
-    .then(({ok, j}) => {
-      panel.innerHTML = ok
-        ? `<p class="ok">Saved as "${j.name}" ✓</p>` : `<p class="error">${j.detail}</p>`;
-      if (ok) refreshSavedGraphs();
-    });
-};
+(function () {
+  const fileInput = document.getElementById('import-config-file');
+  document.getElementById('btn-import-config').onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => { _loadYamlOntoCanvas(e.target.result); fileInput.value = ''; };
+    reader.readAsText(file);
+  };
+})();
 // Re-hydrate the Branches + LLM panels from a render payload that carried them (saved graphs),
-// so a loaded variant set / LLM is restored and re-runs faithfully — not silently dropped.
+// Restore LLM panel from a loaded payload (branches silently dropped — use parallel canvas chains instead).
 function restoreVariants(payload) {
-  BRANCHES = (payload.branches || []).map(b => {
-    const node = Object.keys(b).find(k => k !== 'id') || '';
-    return {id: b.id, node, params: node ? (b[node] || {}) : {}};
-  });
-  renderBranches();
   LLM.endpoint = 'local'; LLM.model = ''; LLM.temperature = '';
   const llm = payload.llm;
   if (llm) {
@@ -715,31 +610,5 @@ function restoreVariants(payload) {
   }
   renderLlmPanel();
 }
-function loadSavedGraph(name) {
-  const panel = document.getElementById('validation');
-  panel.innerHTML = '<p class="muted">loading…</p>';
-  fetch(`/api/graphs/${encodeURIComponent(name)}`).then(r => r.json().then(j => ({ok: r.ok, j})))
-    .then(({ok, j}) => {
-      if (!ok) { panel.innerHTML = `<p class="error">${j.detail || 'load failed'}</p>`; return; }
-      panel.innerHTML = '';
-      editor.clearModuleSelected();
-      document.getElementById('param-panel').innerHTML =
-        '<em>select a node to edit its model + params</em>';
-      if (j.render.mode) document.getElementById('mode').value = j.render.mode;
-      DagView.drawGraph(editor, j.render, CATALOGUE);
-      syncCounter(j.render.nodes);
-      syncAllVectorDb();
-      restoreVariants(j.render);
-      DagView.zoomFit(editor, canvasEl);
-    });
-}
-document.getElementById('saved-list').onclick = (e) => {
-  const name = e.target.getAttribute('data-name');
-  if (!name) return;
-  if (e.target.classList.contains('load-graph')) loadSavedGraph(name);
-  else if (e.target.classList.contains('del-graph') && confirm(`Delete "${name}"?`))
-    fetch(`/api/graphs/${encodeURIComponent(name)}`, {method: 'DELETE'}).then(refreshSavedGraphs);
-};
-refreshSavedGraphs();
 </script>
 {% endblock %}

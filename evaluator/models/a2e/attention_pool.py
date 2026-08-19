@@ -255,7 +255,12 @@ def _select_backend(audio_encoder_name: str) -> _EncoderBackend:
     return _WhisperBackend(audio_encoder_name)
 
 
-@register_audio_embedding_model('attention_pool', default_name='openai/whisper-large', description='Attention pooling audio embedding model (Whisper encoder)')
+@register_audio_embedding_model(
+    'attention_pool',
+    default_name='openai/whisper-large',
+    description='Attention pooling audio embedding model (Whisper or SeamlessM4T encoder)',
+    display_name='attention pool',
+)
 class AttentionPoolAudioModel(AudioEmbeddingModel):
     """
     Audio embedding model using attention pooling architecture.
@@ -268,24 +273,36 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
 
     @dataclass
     class Params:
-        size: str = "large"
+        encoder_type: str = "whisper"
+        encoder_size: str = "large"
         emb_dim: int = 2048
         pooling: str = "attention"
-        SIZES: ClassVar[Dict[str, str]] = {
-            "base": "openai/whisper-base",
-            "small": "openai/whisper-small",
-            "medium": "openai/whisper-medium",
-            "large": "openai/whisper-large",
-            "large-v2": "openai/whisper-large-v2",
-            "large-v3": "openai/whisper-large-v3",
+        model_path: Optional[str] = None
+        ENCODER_SIZES: ClassVar[Dict[str, Dict[str, str]]] = {
+            "whisper": {
+                "base": "openai/whisper-base",
+                "small": "openai/whisper-small",
+                "medium": "openai/whisper-medium",
+                "large": "openai/whisper-large",
+                "large-v2": "openai/whisper-large-v2",
+                "large-v3": "openai/whisper-large-v3",
+            },
+            "m4t": {
+                "v2-large": "facebook/seamless-m4t-v2-large",
+            },
         }
-        CHOICES: ClassVar[Dict[str, List[str]]] = {"pooling": POOLING_CHOICES}
-        # Per-field help the builder shows as a tooltip (richer than the generic glossary —
-        # the pooling variants in particular need explaining).
+        RERENDERS: ClassVar[List[str]] = ["encoder_type"]
+        CHOICES: ClassVar[Dict[str, List[str]]] = {
+            "encoder_type": ["whisper", "m4t"],
+            "pooling": POOLING_CHOICES,
+        }
         DESCRIPTIONS: ClassVar[Dict[str, str]] = {
+            "encoder_type": "Encoder backbone: Whisper (speech) or SeamlessM4T (multilingual).",
+            "encoder_size": "Encoder checkpoint size — options depend on encoder_type.",
             "emb_dim": "Projection-head output dim; should match the text embedder.",
             "pooling": ("Sequence→vector pooling: attention (learned) · mean · "
                         "mean_whiten (whitened mean) · mean_abtt (all-but-the-top mean)."),
+            "model_path": "Path to pre-trained APM weights (.pt file). Leave blank to use untrained encoder.",
         }
 
     def __init__(self,
@@ -492,7 +509,12 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         return name
 
 
-@register_audio_embedding_model('attention_pool_m4t', default_name='facebook/seamless-m4t-v2-large', description='Attention pooling audio embedding model (SeamlessM4T-v2 encoder)')
+@register_audio_embedding_model(
+    'attention_pool_m4t',
+    default_name='facebook/seamless-m4t-v2-large',
+    description='Attention pooling audio embedding model (SeamlessM4T-v2 encoder)',
+    hidden=True,
+)
 class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
     """Attention-pool audio model on a SeamlessM4T-v2 speech encoder.
 
@@ -507,6 +529,7 @@ class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
         size: str = "v2-large"
         emb_dim: int = 2048
         pooling: str = "attention"
+        model_path: Optional[str] = None
         SIZES: ClassVar[Dict[str, str]] = {
             "v2-large": "facebook/seamless-m4t-v2-large",
         }
@@ -517,6 +540,7 @@ class M4TAttentionPoolAudioModel(AttentionPoolAudioModel):
             "emb_dim": "Projection-head output dim; should match the text embedder.",
             "pooling": ("Sequence→vector pooling: attention (learned) · mean · "
                         "mean_whiten (whitened mean) · mean_abtt (all-but-the-top mean)."),
+            "model_path": "Path to pre-trained APM weights (.pt file). Leave blank to use untrained encoder.",
         }
 
     def __init__(self,

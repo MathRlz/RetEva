@@ -201,8 +201,10 @@ class ModelRegistry:
         # ``DESCRIPTIONS: ClassVar[Dict[str, str]] = {"pooling": "how frames are pooled …"}``.
         # The builder renders it as a tooltip; the webapi layers a shared glossary as fallback.
         descriptions = getattr(params_cls, "DESCRIPTIONS", {}) or {}
+        encoder_sizes_map = getattr(params_cls, "ENCODER_SIZES", {}) or {}
+        rerenders_set = set(getattr(params_cls, "RERENDERS", []) or [])
         for f in dc_fields(params_cls):
-            if f.name in ("SIZES", "CHOICES", "DESCRIPTIONS"):
+            if f.name in ("SIZES", "CHOICES", "DESCRIPTIONS", "ENCODER_SIZES", "RERENDERS"):
                 continue
             entry: Dict[str, Any] = {"default": f.default}
             if f.name == "size" and sizes:
@@ -211,6 +213,10 @@ class ModelRegistry:
                 entry["choices"] = list(choices_map[f.name])
             if f.name in descriptions:
                 entry["help"] = descriptions[f.name]
+            if encoder_sizes_map and f.name == "encoder_size":
+                entry["encoder_sizes"] = encoder_sizes_map
+            if f.name in rerenders_set:
+                entry["rerenders"] = True
             schema[f.name] = entry
         return schema
 

@@ -129,6 +129,34 @@ def register_config_routes(
             errors=errors, warnings=warnings, **_graph_diagram_context(preview)
         )
 
+    @router.post("/ui/config-from-yaml", response_class=HTMLResponse, include_in_schema=False)
+    async def ui_config_from_yaml(request: Request) -> HTMLResponse:
+        """Upload a YAML config file and render its pipeline preview + editable param forms,
+        same as /ui/config-preview but sourced from uploaded content rather than a preset name."""
+        from evaluator import EvaluationConfig
+        from evaluator.config.validation import collect_problems
+
+        form = await request.form()
+        raw_yaml = str(form.get("yaml") or "").strip()
+        if not raw_yaml:
+            return HTMLResponse('<p class="error">No YAML content received.</p>')
+        try:
+            import yaml as _yaml
+            d = _yaml.safe_load(raw_yaml)
+            config = EvaluationConfig.from_dict(d, validate=False).with_auto_devices()
+            preview = graph_preview(config)
+            canvas = config_to_canvas_spec(config)
+        except Exception as exc:  # noqa: BLE001
+            return HTMLResponse(
+                f'<p class="error">Could not parse config: {html.escape(str(exc))}</p>'
+            )
+        errors, warnings = collect_problems(config)
+        return page(
+            request, "_config_run.html", preset_name=None,
+            edit_nodes_json=_edit_nodes_json("upload", canvas, config),
+            errors=errors, warnings=warnings, **_graph_diagram_context(preview),
+        )
+
     @router.post("/ui/validate-graph", response_class=HTMLResponse, include_in_schema=False)
     async def ui_validate_graph(request: Request) -> HTMLResponse:
         """Re-validate the user's edited Config & Run graph (non-blocking): returns the problems

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -121,9 +122,19 @@ def _aggregate(aspect_scores: Dict[str, float], config) -> float:
     return sum(vals) / len(vals)
 
 
+#: Appended to the system prompt on a re-ask. The observed parse failure is a reply that ran out
+#: of context mid-object (`{"aspect_scores": {`), so the fix is a shorter one, not a longer wait.
+_TERSE_RETRY = (
+    "\nReply with JSON ONLY — no prose, no markdown. Keep \"reason\" under 20 words."
+)
+
+
 def judge_trace(trace: Dict[str, Any], *, client: LLMClient, config) -> Dict[str, Any]:
     """Judge one trace across ``config.judge_aspects`` in a single LLM call. Returns
-    ``{overall, aspect_scores, verdict, reason}`` (scores in [0, 1])."""
+    ``{overall, aspect_scores, verdict, reason}`` (scores in [0, 1]).
+
+    An unparsable reply is re-asked ONCE with a terser instruction: a judged case is expensive,
+    and losing it to a cut-off `reason` silently shrinks the judged set."""
     aspects = list(config.judge_aspects)
     sys_p, user_p = build_judge_prompt(
         trace, aspects=aspects, judge_mode=config.judge_mode,
@@ -135,7 +146,20 @@ def judge_trace(trace: Dict[str, Any], *, client: LLMClient, config) -> Dict[str
         [{"role": "system", "content": sys_p}, {"role": "user", "content": user_p}],
         use_cache=True,
     )
-    verdict = _parse_json_verdict(content)
+    try:
+        verdict = _parse_json_verdict(content)
+    except RuntimeError:
+        logger.warning(
+            "judge reply for query_id=%s did not parse — re-asking for terse JSON",
+            trace.get("query_id"),
+        )
+        # use_cache=False: never re-serve the reply that just failed to parse.
+        content = client.call(
+            [{"role": "system", "content": sys_p + _TERSE_RETRY},
+             {"role": "user", "content": user_p}],
+            use_cache=False,
+        )
+        verdict = _parse_json_verdict(content)
     raw = verdict.get("aspect_scores") or {}
     aspect_scores = {a: float(raw[a]) for a in aspects if a in raw}
     overall = (
@@ -166,6 +190,9 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
 
     selected = traces if max_cases == 0 else traces[:max_cases]
 
+    failures: Dict[str, int] = {}
+    failures_lock = threading.Lock()
+
     def _one(trace: Dict[str, Any]):
         try:
             verdict = judge_trace(trace, client=client, config=judge_config)
@@ -174,6 +201,9 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
                 "judge failed for query_id=%s (%s: %s); skipping this case",
                 trace.get("query_id"), type(exc).__name__, exc,
             )
+            with failures_lock:
+                kind = type(exc).__name__
+                failures[kind] = failures.get(kind, 0) + 1
             return None
         return {"query_id": trace.get("query_id"), "judge": verdict}
 
@@ -184,6 +214,16 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
         desc="Judging", unit="case",
     )
     details: List[Dict[str, Any]] = [d for d in judged if d is not None]
+    failed = len(selected) - len(details)
+    if failed:
+        # `cases` counts successes, so without this line a shortfall is invisible in the report
+        # and a single warning per case is lost in a long log.
+        logger.warning(
+            "judged %d/%d traces — %d failed (%s)", len(details), len(selected), failed,
+            ", ".join(f"{k} {v}" for k, v in sorted(failures.items())) or "unknown",
+        )
+    else:
+        logger.info("judged %d/%d traces (0 failed)", len(details), len(selected))
 
     overalls = [d["judge"]["overall"] for d in details]
     aspect_means = {
@@ -197,6 +237,11 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
         "judge_mode": judge_config.judge_mode,
         "aspects": aspects,
         "cases": len(details),
+        # cases + failed_cases == attempted: a judged set smaller than the trace set is a fact
+        # the report has to carry, not something to infer from the log.
+        "attempted": len(selected),
+        "failed_cases": failed,
+        "failures": dict(sorted(failures.items())),
         "mean_score": _mean(overalls),
         "aspect_means": aspect_means,
         "pass_rate": (

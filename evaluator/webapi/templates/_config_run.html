@@ -1,16 +1,16 @@
 {# Config & Run: the chosen preset's pipeline preview + editable per-node parameter forms. The
-   preview (_graph.html) carries "Run preset as-is" + "Open in builder"; edit params below, then
-   "Run with changes". Run status lands in #run-output (top). #}
+   preview (_graph.html) carries "Open in builder"; edit params below, then "Run".
+   Run status lands in #run-output (top). #}
 <div id="run-output"></div>
 {% include "_graph.html" %}
 
 <section id="node-forms" class="step">
-  <h4>Parameters <small class="muted">edit, then “Validate” / “Run with changes”</small></h4>
+  <h4>Parameters <small class=”muted”>edit, then “Validate” / “Run”</small></h4>
   <div id="validation-output">{% include "_validation.html" %}</div>
   <div id="node-forms-list"></div>
   <div class="action-bar row">
     <button id="validate-btn" type="button" class="secondary">Validate</button>
-    <button id="run-edited" type="button">Run with changes</button>
+    <button id="run-edited" type="button">Run</button>
   </div>
 </section>
 <script type="application/json" id="edit-nodes-data">{{ edit_nodes_json | safe }}</script>
