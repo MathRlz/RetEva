@@ -84,6 +84,12 @@ graph:
     params:
       max_cases: 0     # 0 = judge EVERY trace (the default is 50 — the silent cap
                        # that judged 50 of 1209 in an earlier run)
+      # Each judged case sends judge_top_k documents' TEXT plus the question and the
+      # generated answer — the largest prompt in the pipeline. If prompt + reply exceed
+      # the server's context (OLLAMA_CONTEXT_LENGTH) the JSON is cut off; that reply is
+      # re-asked once tersely, and a second failure is counted in report.judge.
+      # failed_cases. If failures persist, `judge_top_k: 3` is the lever — note it
+      # changes what the judge sees, and therefore the scores.
       system_prompt: |-
         You are an expert evaluator for a medical question-answering retrieval system. Score each requested aspect from 0.0 (worst) to 1.0 (best). Be strict and consistent. Respond with STRICT JSON only — no prose, no markdown.
   - finalize
@@ -166,13 +172,19 @@ llm:
   local_server_url: http://localhost:11434/v1/chat/completions
   api_key_env: DUMMY_KEY
   temperature: 0.0
-  # 4 requests in flight — ~1.9x on answer generation and judging. The SERVER must
-  # allow it: `OLLAMA_NUM_PARALLEL=4 ollama serve`, else requests just queue. Costs
-  # bit-reproducibility of the generated text (batching changes the numerics); set 1
-  # for a run you intend to quote exactly.
+  # 4 requests in flight — ~1.9x on answer generation and judging. Start the server as
+  #   OLLAMA_NUM_PARALLEL=4 OLLAMA_CONTEXT_LENGTH=8192 ollama serve
+  # BOTH vars matter: each parallel slot reserves its own KV cache, and left uncapped
+  # Ollama gives every slot the model's full context (128k for gemma4) — four of those
+  # exhausts a 24 GB card and every request comes back 500. Verify with `ollama ps`:
+  # CONTEXT ~32768 total and PROCESSOR 100% GPU. Costs bit-reproducibility of the
+  # generated text (batching changes the numerics); set 1 for a run you will quote.
   concurrency: 4
   seed: 42          # forwarded to the server; temperature 0 alone does not pin sampling
-  timeout_s: 120
+  # Scaled for concurrency: with N requests in flight each one's WALL time is roughly
+  # N x its solo time, so a serial-sized timeout turns into a timeout storm (every
+  # timeout also retries twice, adding load to an already-saturated server).
+  timeout_s: 600
 runtime:
   cache:
     enabled: true

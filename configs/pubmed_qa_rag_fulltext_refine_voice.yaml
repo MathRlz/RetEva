@@ -1,46 +1,59 @@
-# Two-hop RAG: the LLM rewrites the question from the FIRST hop's retrieved context.
+# Two-hop RAG on SPOKEN questions: TTS -> Whisper -> jina retrieval -> LLM query rewrite.
 #
-# Identical to pubmed_qa_rag_fulltext.yaml (same 115 questions, same corpus, same generator,
-# same full-text answer context) except that retrieval runs twice:
+# The voice arm of pubmed_qa_rag_fulltext_refine.yaml. Each question is synthesized, transcribed
+# back by Whisper, and the ASR HYPOTHESIS is what drives retrieval — so the numbers carry the
+# whole voice path, not an oracle transcript:
 #
-#   text_embedding -> retrieval                       hop 1: the question as asked
-#   retrieval + question -> query_refine              an LLM rewrites it USING those docs
+#   dataset_source -> tts -> asr(whisper large)       the question as heard
+#   asr -> text_embedding(jina_v4) -> retrieval       hop 1
+#   retrieval + asr text -> query_refine              an LLM rewrites it USING those docs
 #   text_embedding_refined -> retrieval_refined       hop 2: the rewritten query
 #
-# Everything downstream (metrics, generation, traces, judge) reads HOP 2, so the reported
-# numbers are the refined ones; run the unrefined config for the baseline. The rewrite costs one
-# extra LLM call per query plus a second embed+retrieve pass, so it has to earn that back in
-# Recall@k.
+# Everything downstream (metrics, generation, traces, judge) reads HOP 2. transcription_metrics
+# scores the ASR against the dataset's reference transcription, so a retrieval drop can be
+# attributed to WER rather than guessed at — delete that node and its four edges if you do not
+# want it.
 #
-# The generator still prompts with the ORIGINAL question (reference_text), not the rewrite — a
-# rewrite is a retrieval device, and prompting with it would confound generation quality with
-# rewrite quality. Traces show the original question for the same reason, so a trace whose
-# retrieved docs look oddly phrased is expected.
+# The generator prompts with the ASR TEXT (not the rewrite, and not the reference): the rewrite
+# is a retrieval device, and prompting with it would confound generation quality with rewrite
+# quality. To make generation oracle-text instead, change the answer_gen query_text edge to
+# `{from: dataset_source, output: reference_text, to: answer_gen, input: query_text}`.
 #
 # `query_optimization.enabled: true` below is REQUIRED: without it the run carries no
 # query-optimization config, the refine node falls back to library defaults (OpenAI, empty key),
 # every call fails silently and the query passes through unchanged. The node logs how many
 # queries it actually rewrote — check that line before trusting a result.
 #
+# First run synthesizes 1209 clips into the tts output_dir (cached afterwards) and downloads
+# whisper-large; budget for both.
 experiment:
-  name: pubmed_qa_rag_fulltext_refine
+  name: pubmed_qa_rag_fulltext_refine_voice
   output_dir: evaluation_results
 dataset:
   id: pubmed_qa
-  questions: examples/data/pubmed_qa_fulltext/questions.json
-  corpus: examples/data/pubmed_qa_fulltext/corpus.json
+  questions: examples/data/pubmed_qa_fulltext_big/questions.json
+  corpus: examples/data/pubmed_qa_fulltext_big/corpus.json
   trace_limit: 0        # 0 = no limit: every question runs and every one is traced
-  batch_size: 8         # no ASR in the graph, so batching is embed-bound only
+  batch_size: 8
 data:
   num_workers: 0
 graph:
   nodes:
   - dataset_source
+  - id: tts
+    type: tts
+    params:
+      provider: mms
+      voice: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_fulltext_big/audio
   - corpus_embedding
   - vector_db
+  - asr
   - text_embedding
   - retrieval
-  # Hop 2: rewrite the question using what hop 1 retrieved, then retrieve again with it.
+  # Hop 2: rewrite the (transcribed) question using what hop 1 retrieved, then retrieve again.
   - id: query_refine
     type: query_refine
     params:
@@ -79,6 +92,7 @@ graph:
       context_source: full_text
       context_chunk_chars: 1200
       context_chunks: 4
+  - transcription_metrics
   - retrieval_metrics
   - answer_metrics
   - metrics
@@ -100,11 +114,20 @@ graph:
   edges:
   - {from: dataset_source, to: corpus_embedding, input: corpus}
   - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
-  - {from: dataset_source, output: reference_text, to: text_embedding, input: query_text}
+  # voice front end: synthesize the question, then transcribe it back
+  - {from: dataset_source, to: tts, input: query_text}
+  - {from: dataset_source, to: asr, input: query_audio}
+  - {from: tts, to: asr, input: query_audio}
+  - {from: dataset_source, to: asr, input: reference_transcription}
+  # hop 1 retrieves with the ASR hypothesis
+  - {from: asr, to: text_embedding, input: query_text}
   - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
   - {from: vector_db, to: retrieval, input: vector_index}
-  # hop 1 -> the rewriter: the current query plus the docs it found
-  - {from: dataset_source, output: reference_text, to: query_refine, input: query_text}
+  - {from: asr, to: retrieval, input: query_text}
+  - {from: dataset_source, to: retrieval, input: reference_transcription}
+  - {from: dataset_source, to: retrieval, input: relevant_docs}
+  # hop 1 -> the rewriter: the transcribed query plus the docs it found
+  - {from: asr, to: query_refine, input: query_text}
   - {from: retrieval, to: query_refine, input: retrieved}
   # the rewritten query drives hop 2 (refined_query_text outranks query_text in the chain)
   - {from: query_refine, output: refined_query_text, to: text_embedding_refined, input: query_text}
@@ -113,32 +136,37 @@ graph:
   - {from: query_refine, output: refined_query_text, to: retrieval_refined, input: query_text}
   - {from: dataset_source, to: retrieval_refined, input: reference_transcription}
   - {from: dataset_source, to: retrieval_refined, input: relevant_docs}
-  - {from: dataset_source, output: reference_text, to: retrieval, input: query_text}
-  - {from: dataset_source, to: retrieval, input: reference_transcription}
-  - {from: dataset_source, to: retrieval, input: relevant_docs}
-  - {from: dataset_source, output: reference_text, to: answer_gen, input: query_text}
+  # generation prompts with the ASR text — the rewrite never reaches the prompt
+  - {from: asr, to: answer_gen, input: query_text}
   - {from: retrieval_refined, to: answer_gen, input: retrieved}
   - {from: dataset_source, to: answer_gen, input: short_answers}
   - {from: dataset_source, to: answer_gen, input: relevant_docs}
+  # WER/CER: the ASR hypothesis against the dataset's reference transcription
+  - {from: asr, to: transcription_metrics, input: query_text}
+  - {from: dataset_source, to: transcription_metrics, input: reference_transcription}
   - {from: retrieval_refined, to: retrieval_metrics, input: retrieved}
   - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
   - {from: answer_gen, to: answer_metrics, input: generated_answers}
   - {from: retrieval_refined, to: answer_metrics, input: retrieved}
   - {from: dataset_source, to: answer_metrics, input: relevant_docs}
   - {from: dataset_source, to: answer_metrics, input: short_answers}
+  - {from: transcription_metrics, to: metrics, input: transcription_scores}
   - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
   - {from: answer_metrics, to: metrics, input: answer_scores}
   - {from: retrieval_refined, to: metrics, input: retrieved}
-  # no `query_text` edge into metrics: its port is plain (not the OneOf chain), so it cannot
-  # take the reference_text route — and with no asr node it would only feed WER diagnostics.
+  - {from: asr, to: metrics, input: query_text}
   - {from: dataset_source, to: metrics, input: reference_transcription}
   - {from: dataset_source, to: metrics, input: relevant_docs}
+  - {from: transcription_metrics, to: metrics, input: per_query_wer}
+  - {from: transcription_metrics, to: metrics, input: per_query_cer}
   - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
   - {from: retrieval_refined, to: build_query_traces, input: retrieved}
   - {from: answer_gen, to: build_query_traces, input: generated_answers}
   - {from: metrics, to: build_query_traces, input: metrics}
   - {from: dataset_source, to: build_query_traces, input: reference_transcription}
   - {from: dataset_source, to: build_query_traces, input: relevant_docs}
+  - {from: transcription_metrics, to: build_query_traces, input: per_query_wer}
+  - {from: transcription_metrics, to: build_query_traces, input: per_query_cer}
   - {from: retrieval_metrics, to: build_query_traces, input: per_query_recall5}
   - {from: metrics, to: answer_judge, input: metrics}
   - {from: build_query_traces, to: answer_judge, input: query_traces}
@@ -160,11 +188,14 @@ graph:
   - {from: answer_judge, to: finalize, input: judge_aspect_faithfulness}
   - {from: answer_judge, to: finalize, input: judge_aspect_relevance}
 nodes:
-  text_embedding:
-    model: labse
-    # NOT the card the local LLM server uses: gemma4 (~9.6 GB) plus one KV cache per parallel
-    # slot fills a 24 GB card, and once Ollama spills layers to CPU every request slows ~10x.
+  asr:
+    model: whisper
+    size: large        # openai/whisper-large (80-mel); `large-v3` is also registered
     device: cuda:1
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    device: cuda:2     # keep the embedder off the card the LLM server uses
   vector_db:
     store: inmemory
   retrieval:
@@ -194,6 +225,8 @@ runtime:
   cache:
     enabled: true
     cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
     cache_embeddings: true
     cache_vector_db: true
   logging:
