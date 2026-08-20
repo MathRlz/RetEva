@@ -244,7 +244,15 @@ class _ModelBuilders:
         )
         if self.service_provider is not None:
             return from_provider(dev)
-        return from_factory(dev)
+        model = from_factory(dev)
+        if self.device_pool is not None:
+            import torch as _torch
+            self.device_pool.register_eviction_callback(
+                model_category,
+                lambda m=model: m.to(_torch.device("cpu")),
+            )
+            self.device_pool.touch(model_category)
+        return model
 
     def asr(self):
         mcfg = self.mcfg

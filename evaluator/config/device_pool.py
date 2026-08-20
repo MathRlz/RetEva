@@ -18,6 +18,7 @@ class DevicePoolConfig:
     available_devices: List[str] = field(default_factory=lambda: ["auto"])
     memory_buffer_percent: float = 0.1
     allow_cpu_fallback: bool = True
+    allow_gpu_eviction: bool = True
     model_device_overrides: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):

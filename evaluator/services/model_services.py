@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Generic, Optional, TypeVar
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar
 import gc
 import logging
 import time
+
+if TYPE_CHECKING:
+    from ..devices import GPUPool
 
 import torch
 
@@ -31,7 +34,11 @@ class FactoryModelService(Generic[T]):
 
     factory: Callable[[], T]
     label: str = "model"
-    _instance: Optional[T] = None
+    pool: Optional["GPUPool"] = field(default=None, repr=False)
+    model_type: Optional[str] = None
+    memory_gb: float = 0.0
+    _instance: Optional[T] = field(default=None, init=False, repr=False)
+    _on_gpu: bool = field(default=False, init=False, repr=False)
 
     def start(self) -> None:
         if self._instance is None:
@@ -39,17 +46,49 @@ class FactoryModelService(Generic[T]):
             self._instance = self.factory()
             elapsed = time.perf_counter() - t0
             logger.info("service.start label=%s load_time=%.2fs", self.label, elapsed)
+            if self.pool is not None and self.model_type is not None:
+                self.pool.register_eviction_callback(self.model_type, self._evict_to_cpu)
+                self._on_gpu = True
+
+    def _evict_to_cpu(self) -> None:
+        """Called by GPUPool when this model is evicted from GPU."""
+        if self._instance is not None:
+            to_method = getattr(self._instance, "to", None)
+            if callable(to_method):
+                to_method(torch.device("cpu"))
+        self._on_gpu = False
+        logger.info("service.evicted label=%s", self.label)
+
+    def _ensure_on_gpu(self) -> None:
+        """Re-promote model to GPU if it was evicted."""
+        if self._on_gpu or self.pool is None or self.model_type is None:
+            return
+        device = self.pool.allocate(self.model_type, self.memory_gb)
+        if device == "cpu":
+            return
+        to_method = getattr(self._instance, "to", None)
+        if callable(to_method):
+            to_method(torch.device(device))
+        self._on_gpu = True
+        self.pool.register_eviction_callback(self.model_type, self._evict_to_cpu)
+        logger.info("service.promoted label=%s device=%s", self.label, device)
 
     def stop(self) -> None:
         if self._instance is None:
             return
         _offload_and_clear(self._instance)
         self._instance = None
+        self._on_gpu = False
         logger.info("service.stop label=%s", self.label)
 
     def get(self) -> T:
-        self.start()
+        if self._instance is None:
+            self.start()
+        else:
+            self._ensure_on_gpu()
         assert self._instance is not None
+        if self.pool is not None and self.model_type is not None:
+            self.pool.touch(self.model_type)
         return self._instance
 
     def move_to_device(self, device: str) -> None:
@@ -57,6 +96,7 @@ class FactoryModelService(Generic[T]):
         to_method = getattr(model, "to", None)
         if callable(to_method):
             to_method(torch.device(device))
+            self._on_gpu = device != "cpu"
             logger.info("service.move label=%s device=%s", self.label, device)
 
 

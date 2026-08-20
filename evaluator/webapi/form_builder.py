@@ -258,11 +258,29 @@ def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
     # Build the base (un-expanded) DAG for the canvas; keep `config` for the per-node model/
     # dataset fold (its model/data blocks are unchanged by branch expansion).
     base_config = config
+    inspect_config = config
     if branches:
         base_config = copy.deepcopy(config)
         base_config.graph_override = {
             k: v for k, v in override.items() if k != "branches"
         }
+        # Seed first branch's model-node overrides into inspect_config so _node_inspect
+        # can show real values for nodes whose params live only in branches (not in
+        # nodes.*). Only fills fields that are currently empty — explicit nodes.* values
+        # still win. Result: clicking a node shows first-branch values, not "default".
+        from evaluator.config.graph_config import _MODEL_NODE_FIELDS
+        inspect_config = copy.deepcopy(config)
+        first_branch = branches[0] if branches else {}
+        for _node_name, _node_overrides in first_branch.items():
+            if _node_name == "id" or not isinstance(_node_overrides, dict):
+                continue
+            if _node_name not in _MODEL_NODE_FIELDS:
+                continue
+            for _yaml_key, _cfg_field in _MODEL_NODE_FIELDS[_node_name].items():
+                if getattr(inspect_config.model, _cfg_field, None) in (None, "", {}):
+                    _val = _node_overrides.get(_yaml_key)
+                    if _val not in (None, "", {}):
+                        setattr(inspect_config.model, _cfg_field, _val)
     graph = build_graph_for_config(base_config)
     dataset_params = _dataset_source_params(config)
 
@@ -270,7 +288,7 @@ def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
         params = dict(node.params or {})
         # Fold the resolved model/retrieval settings (config.model / vector_db) onto the node;
         # setdefault so an explicit per-node graph-override param still wins.
-        for key, value in _node_inspect(config, node).items():
+        for key, value in _node_inspect(inspect_config, node).items():
             params.setdefault(key, value)
         # A single-source dataset lives in config.data, not on the node — push it onto the
         # dataset_source so the canvas carries a runnable source.

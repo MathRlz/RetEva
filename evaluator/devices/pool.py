@@ -2,9 +2,10 @@
 
 import logging
 import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Generator
+from typing import Callable, Dict, List, Optional, Generator
 
 from .monitor import GPUMonitor, get_monitor
 
@@ -53,6 +54,7 @@ class GPUPool:
         monitor: Optional[GPUMonitor] = None,
         memory_buffer_percent: float = 0.1,
         allow_cpu_fallback: bool = True,
+        allow_gpu_eviction: bool = False,
     ):
         """``devices`` is a list like ["cuda:0", "cuda:1"], or ["auto"] to
         auto-detect. ``memory_buffer_percent`` (0.0-1.0) is kept free on each GPU;
@@ -60,6 +62,9 @@ class GPUPool:
         self._monitor = monitor or get_monitor()
         self._memory_buffer_percent = memory_buffer_percent
         self._allow_cpu_fallback = allow_cpu_fallback
+        self._allow_gpu_eviction = allow_gpu_eviction
+        self._eviction_callbacks: Dict[str, Callable[[], None]] = {}
+        self._lru: OrderedDict[str, None] = OrderedDict()
         self._strategy = None
         # The webapi runs allocations on a ThreadPoolExecutor; without this lock two
         # threads can both pass the ``free >= memory_gb`` check and over-commit a GPU
@@ -142,6 +147,18 @@ class GPUPool:
                 )
                 return device
 
+            # Try GPU eviction before falling back to CPU
+            if self._allow_gpu_eviction and self._eviction_callbacks:
+                if self._evict_for_space(memory_gb):
+                    device = self._find_best_device(memory_gb)
+                    if device is not None:
+                        self._reserve(device, model_type, memory_gb)
+                        logger.info(
+                            "Eviction freed space; allocated '%s' for '%s' (%.2fGB)",
+                            device, model_type, memory_gb,
+                        )
+                        return device
+
             if self._allow_cpu_fallback and "cpu" not in self._devices:
                 logger.warning(
                     f"No GPU available for '{model_type}' requiring {memory_gb:.2f}GB. "
@@ -192,6 +209,9 @@ class GPUPool:
             usage = self._devices[device]
             usage.reserved_memory_gb += memory_gb
             usage.allocations[model_type] = memory_gb
+            if device != "cpu":
+                self._lru[model_type] = None
+                self._lru.move_to_end(model_type)
 
     def release(self, model_type: str) -> None:
         """Release a model's allocation."""
@@ -202,12 +222,41 @@ class GPUPool:
                     usage.reserved_memory_gb -= memory_gb
                     # Prevent negative values due to floating point errors
                     usage.reserved_memory_gb = max(0.0, usage.reserved_memory_gb)
+                    self._lru.pop(model_type, None)
                     logger.debug(
                         f"Released '{model_type}' from '{device}' "
                         f"({memory_gb:.2f}GB freed, {usage.free_memory_gb:.2f}GB now free)"
                     )
                     return
             logger.warning(f"Attempted to release '{model_type}' but no allocation found")
+
+    def register_eviction_callback(self, model_type: str, callback: Callable[[], None]) -> None:
+        """Register a callable invoked to move model_type to CPU when it must be evicted."""
+        self._eviction_callbacks[model_type] = callback
+
+    def touch(self, model_type: str) -> None:
+        """Mark model_type as most-recently used (moves to LRU tail)."""
+        with self._lock:
+            if model_type in self._lru:
+                self._lru.move_to_end(model_type)
+
+    def _evict_for_space(self, needed_gb: float) -> bool:
+        """Evict LRU GPU models until needed_gb fits on some GPU. Returns True if space freed."""
+        for model_type in list(self._lru.keys()):
+            if model_type not in self._eviction_callbacks:
+                continue
+            device = self.get_device_for_model(model_type)
+            if device is None or device == "cpu":
+                continue
+            logger.info(
+                "gpu.evict model_type=%s device=%s reason=lru needed_gb=%.2f",
+                model_type, device, needed_gb,
+            )
+            self._eviction_callbacks[model_type]()
+            self.release(model_type)
+            if self._find_best_device(needed_gb) is not None:
+                return True
+        return False
 
     def get_usage(self) -> Dict[str, DeviceUsage]:
         """Current allocation status: device string -> DeviceUsage."""
@@ -262,6 +311,7 @@ def pool_from_config(device_pool_cfg) -> "GPUPool":
         devices=list(device_pool_cfg.available_devices),
         memory_buffer_percent=device_pool_cfg.memory_buffer_percent,
         allow_cpu_fallback=device_pool_cfg.allow_cpu_fallback,
+        allow_gpu_eviction=device_pool_cfg.allow_gpu_eviction,
     )
     pool.set_strategy(pick_strategy(device_pool_cfg))
     return pool
