@@ -45,6 +45,8 @@ class ModelConfig:
     # --- Audio embedding ---
     audio_emb_model_type: Optional[str] = None
     audio_emb_size: Optional[str] = None
+    audio_emb_encoder_type: Optional[str] = None   # "whisper" | "m4t"
+    audio_emb_encoder_size: Optional[str] = None   # e.g. "large", "v2-large"
     audio_emb_model_name: Optional[str] = None
     audio_emb_adapter_path: Optional[str] = None
     audio_emb_model_path: Optional[str] = None

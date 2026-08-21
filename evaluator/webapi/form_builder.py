@@ -117,6 +117,16 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     (``resolve_node_form`` — one serializer, so the three surfaces cannot drift; a hand-rolled
     copy here once dropped ``input_ports`` and broke the preview's ports)."""
     from ..pipeline.introspection import is_structural
+    from ..pipeline.graph.operators import node_kind, expand_alias
+
+    # Merge inspect values under node.params so the form sees the real model/params
+    # (not the empty node.params for branched nodes whose config lives in branches[*]).
+    merged = {**_node_inspect(config, node), **dict(node.params or {})}
+    kind = node_kind(node.stage, merged)
+    _, alias_disc = expand_alias(kind, {})
+    # Strip alias discriminators from visible params — same contract as render_node so the
+    # builder seed round-trips correctly (refetchForm uses these params + the alias type).
+    visible_params = {k: v for k, v in merged.items() if k not in (alias_disc or {})}
 
     return {
         "id": node.id,
@@ -132,9 +142,18 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
         # shows on dataset nodes so an experiment reads from its DAG
         "columns": dataset_columns(node.params),
         "inspect": _node_inspect(config, node),
+        # params: carried for the builder seed — when "Open in Builder" transfers this preview
+        # into sessionStorage, node.data.params must be populated so refetchForm sends the
+        # model/encoder values; expand_alias then injects discriminators (modality=audio etc.)
+        # and the server resolves the correct family (audio_embedding, not text_embedding).
+        "params": visible_params,
         # label / category / domain / inputs / outputs / optional_inputs / input_ports /
         # model_field / family / node_params / default_model — field-resolved per instance.
-        **resolve_node_form(node.stage, dict(node.params or {})),
+        **resolve_node_form(node.stage, merged),
+        # Override resolve_node_form's raw operator name ("embed") with the concrete alias kind
+        # ("audio_embedding") — same fix as render_node. Without this, the builder seed stores
+        # type="embed" and refetchForm with no discriminators defaults to text_embedding.
+        "type": kind,
     }
 
 
@@ -299,7 +318,24 @@ def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
 
     payload = graph_render_payload(graph, _render)
     if branches:
-        payload["branches"] = branches
+        from evaluator.pipeline.graph.operators import node_kind as _node_kind, operator_discriminators
+        disc_by_kind: Dict[str, Dict] = {}
+        for _n in graph.nodes:
+            _kind = _node_kind(_n.stage, _n.params)
+            _disc_keys = operator_discriminators(_n.stage)
+            _disc_vals = {k: v for k, v in (_n.params or {}).items() if k in _disc_keys}
+            if _disc_vals:
+                disc_by_kind[_kind] = _disc_vals
+        enriched_branches = []
+        for _branch in branches:
+            _eb: Dict[str, Any] = {}
+            for _key, _val in _branch.items():
+                if isinstance(_val, dict) and _key in disc_by_kind:
+                    _eb[_key] = {**disc_by_kind[_key], **_val}
+                else:
+                    _eb[_key] = _val
+            enriched_branches.append(_eb)
+        payload["branches"] = enriched_branches
     return payload
 
 
@@ -379,17 +415,27 @@ def render_node(node: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     field-aware form contract (ports/label/family/switches) — the shape ``DagView.drawGraph``
     consumes, identical to ``/api/graph/template``."""
     from ..pipeline.introspection import is_structural
+    from ..pipeline.graph.operators import node_kind, expand_alias
 
-    form = resolve_node_form(node.stage, dict(node.params or {}))
+    kind = node_kind(node.stage, params)
+    # Strip alias discriminators from visible params (implied by kind, redundant to pass through).
+    # "audio_embedding" implies {axis: query, modality: audio} — no need to carry them in params.
+    _, alias_disc = expand_alias(kind, {})
+    visible_params = {k: v for k, v in params.items() if k not in (alias_disc or {})}
+
+    form = resolve_node_form(node.stage, params)
     _overlay_routed_aliases(form, node)
     return {
         "id": node.id,
-        "type": node.stage,
-        "params": params,
+        "params": visible_params,
         "bindings": [list(b) for b in node.bindings],
         # mark plumbing so the simplified view hides it by default (power-user "view full DAG").
         "structural": is_structural(node.stage, dict(node.params or {})),
         **form,
+        # Overwrite form["type"] (= raw operator "embed") with the alias kind ("audio_embedding").
+        # Frontend uses this to call /api/graph/node-form — alias names self-document their
+        # discriminators via expand_alias, so the correct model family resolves without params.
+        "type": kind,
     }
 
 
@@ -552,6 +598,8 @@ def _node_param_specs(node_def, params=None) -> list:
             # the controlling param's current value matches (e.g. gpu_id ⇐ store).
             entry["show_if"] = dict(meta["show_if"])
         if key in discriminators:
+            if key in (params or {}):
+                continue  # alias pre-set this discriminator — hide from editable form
             entry["rerenders"] = True
         _attach_help(entry, meta.get("help"))
         specs.append(entry)

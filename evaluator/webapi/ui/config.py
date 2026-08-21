@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from evaluator import list_presets
 from evaluator.services import ModelServiceProvider
-from evaluator.webapi.form_builder import config_to_canvas_spec, graph_preview
+from evaluator.webapi.form_builder import graph_preview
 
 
 def _graph_diagram_context(preview: dict) -> dict:
@@ -30,6 +30,11 @@ def _graph_diagram_context(preview: dict) -> dict:
                 {
                     "id": n["id"],
                     "stage": n["stage"],
+                    # type/label override stage for aliased operators (e.g. "embed" → "audio_embedding")
+                    # so the preview and seed use the concrete kind, not the raw operator.
+                    "type": n.get("type") or n["stage"],
+                    "label": n.get("label"),
+                    "family": n.get("family"),
                     # the default-simplified preview hides structural plumbing (metrics/report/
                     # finalize/sinks) — _graph.html filters on this flag, so it MUST ride along.
                     "structural": n.get("structural", False),
@@ -57,10 +62,11 @@ def _graph_diagram_context(preview: dict) -> dict:
     }
 
 
-def _edit_nodes_json(name: str, canvas: dict, config=None) -> str:
+def _edit_nodes_json(name: str, preview: dict, config=None) -> str:
     """The meaningful nodes' editable form data (id/type/params/node_params/family/model_field) for
-    the Config & Run inline parameter forms — embedded as JSON the page renders via NodeForm. The
-    structural plumbing is dropped (auto-derived); the run re-derives it (graph_spec_to_config)."""
+    the Config & Run inline parameter forms — embedded as JSON the page renders via NodeForm.
+    Uses the expanded graph (graph_preview) so every node instance (e.g. multiple audio_embedding
+    nodes from branches) gets its own form card. Structural plumbing is dropped."""
     import json as _json
 
     from evaluator.webapi.form_builder import default_model_for
@@ -71,13 +77,16 @@ def _edit_nodes_json(name: str, canvas: dict, config=None) -> str:
             "params": n.get("params") or {},
             "node_params": n.get("node_params") or [],
             "family": n.get("family"), "model_field": n.get("model_field"),
+            # bindings: [[artifact, source_id], …] — used by buildSpec() to reconstruct
+            # explicit port edges so the run path wires correctly for multi-instance graphs.
+            "bindings": n.get("bindings") or [],
             # the form's empty model option names the inherited model — the LOADED config's
             # flat default here, not the dataclass default (audit: no bare "(default)")
             "default_model": default_model_for(n.get("model_field"), config),
         }
-        for n in canvas.get("nodes", []) if not n.get("structural")
+        for n in preview.get("nodes", []) if not n.get("structural")
     ]
-    payload = _json.dumps({"mode": canvas.get("mode"), "name": name, "nodes": nodes})
+    payload = _json.dumps({"mode": preview.get("mode"), "name": name, "nodes": nodes})
     return payload.replace("</", "<\\/")  # safe inside <script type="application/json">
 
 
@@ -117,7 +126,6 @@ def register_config_routes(
             config = (EvaluationConfig.from_dict(get_preset(name), validate=False)
                       .with_auto_devices())
             preview = graph_preview(config)
-            canvas = config_to_canvas_spec(config)
         except Exception as exc:  # noqa: BLE001 — surface a bad preset/build inline
             return HTMLResponse(
                 f'<p class="error">Could not load preset: {html.escape(str(exc))}</p>'
@@ -125,7 +133,7 @@ def register_config_routes(
         errors, warnings = collect_problems(config)
         return page(
             request, "_config_run.html", preset_name=name,
-            edit_nodes_json=_edit_nodes_json(name, canvas, config),
+            edit_nodes_json=_edit_nodes_json(name, preview, config),
             errors=errors, warnings=warnings, **_graph_diagram_context(preview)
         )
 
@@ -145,7 +153,6 @@ def register_config_routes(
             d = _yaml.safe_load(raw_yaml)
             config = EvaluationConfig.from_dict(d, validate=False).with_auto_devices()
             preview = graph_preview(config)
-            canvas = config_to_canvas_spec(config)
         except Exception as exc:  # noqa: BLE001
             return HTMLResponse(
                 f'<p class="error">Could not parse config: {html.escape(str(exc))}</p>'
@@ -153,7 +160,7 @@ def register_config_routes(
         errors, warnings = collect_problems(config)
         return page(
             request, "_config_run.html", preset_name=None,
-            edit_nodes_json=_edit_nodes_json("upload", canvas, config),
+            edit_nodes_json=_edit_nodes_json("upload", preview, config),
             errors=errors, warnings=warnings, **_graph_diagram_context(preview),
         )
 

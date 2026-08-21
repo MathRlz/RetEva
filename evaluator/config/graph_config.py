@@ -58,6 +58,8 @@ _MODEL_NODE_FIELDS = {
     "audio_embedding": {
         "model": "audio_emb_model_type",
         "size": "audio_emb_size",
+        "encoder": "audio_emb_encoder_type",
+        "encoder-size": "audio_emb_encoder_size",
         "name": "audio_emb_model_name",
         "device": "audio_emb_device",
         "model_path": "audio_emb_model_path",

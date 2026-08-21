@@ -43,7 +43,8 @@ graph:
 nodes:
   audio_embedding:
     model: attention_pool
-    size: large
+    encoder: whisper
+    encoder-size: large
     dim: 2048
     embedding_space: jina_v4_space
     params:

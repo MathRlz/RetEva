@@ -179,12 +179,6 @@ graph:
   - {from: answer_judge, to: finalize, input: judge_aspect_relevance}
 
 nodes:
-  tts:
-    provider: mms
-    voice: en
-    sample_rate: 16000
-    seed: 42
-    output_dir: evaluation_results/pubmed_fulltext_big_tts_cmp/mms/audio
   asr:
     model: whisper
     size: large

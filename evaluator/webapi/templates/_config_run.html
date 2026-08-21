@@ -51,10 +51,16 @@
     });
   }
 
-  const buildSpec = () => ({
-    mode: data.mode,
-    nodes: (data.nodes || []).map(n => ({id: n.id, type: n.type, params: n.params})),
-  });
+  const buildSpec = () => {
+    const nodes = (data.nodes || []).map(n => ({id: n.id, type: n.type, params: n.params}));
+    // Reconstruct explicit port edges from bindings so multi-instance graphs (e.g. 6
+    // audio_embedding@branch nodes) wire correctly instead of relying on auto-wiring.
+    const edges = [];
+    (data.nodes || []).forEach(n => {
+      (n.bindings || []).forEach(b => edges.push({from: b[1], to: n.id, input: b[0]}));
+    });
+    return {mode: data.mode, nodes, edges};
+  };
 
   // Validate (non-blocking): re-check the edited graph, refresh the problems panel in place.
   document.getElementById('validate-btn').onclick = () => {

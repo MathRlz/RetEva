@@ -28,7 +28,7 @@
   // model family / param switches) — carried into both the read-only preview render and the
   // builder seed so an operator instance renders as itself (corpus_embedding ≠ text_embedding).
   const contractOf = n => ({
-    id: n.id, type: n.stage, label: n.label, bindings: n.bindings || [],
+    id: n.id, type: n.type || n.stage, label: n.label, bindings: n.bindings || [],
     inputs: n.inputs, outputs: n.outputs, optional_inputs: n.optional_inputs,
     // input_ports collapse a OneOf chain to ONE port — dropping them exploded the chain
     // into N dangling ports and detached its edges from the visible port.

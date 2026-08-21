@@ -44,8 +44,9 @@ graph:
   - {from: retrieval, to: finalize, input: retrieved}
 nodes:
   audio_embedding:
-    model: attention_pool_m4t
-    size: v2-large
+    model: attention_pool
+    encoder: m4t
+    encoder-size: v2-large
     dim: 2048
     embedding_space: jina_v4_space
     params:

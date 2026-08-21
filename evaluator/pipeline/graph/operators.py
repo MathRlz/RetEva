@@ -73,7 +73,11 @@ for _op, _fixed in ALIASES.values():
 
 
 def operator_discriminators(operator: str) -> frozenset:
-    """The discriminator field keys for an operator (empty for single-kind operators)."""
+    """The discriminator field keys for an operator (empty for single-kind operators).
+    Resolves aliases to their base operator first (e.g. "audio_embedding" → "embed")."""
+    if operator in ALIASES:
+        base_op, _ = ALIASES[operator]
+        return _DISCRIMINATORS.get(base_op, frozenset())
     return _DISCRIMINATORS.get(operator, frozenset())
 
 

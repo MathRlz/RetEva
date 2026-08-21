@@ -295,13 +295,18 @@ class _ModelBuilders:
 
     def audio_emb(self):
         mcfg = self.mcfg
+        extra = dict(mcfg.audio_emb_params)
+        if mcfg.audio_emb_encoder_type:
+            extra.setdefault("encoder_type", mcfg.audio_emb_encoder_type)
+        if mcfg.audio_emb_encoder_size:
+            extra.setdefault("encoder_size", mcfg.audio_emb_encoder_size)
         return self._build(
             "audio_embedding", mcfg.audio_emb_model_type, mcfg.audio_emb_device,
             lambda dev: self.service_provider.get_audio_embedding_model(
                 mcfg.audio_emb_model_type, mcfg.audio_emb_model_name,
                 mcfg.audio_emb_model_path, mcfg.audio_emb_dim, dev,
                 size=mcfg.audio_emb_size, quantization=mcfg.quantization_for("audio_emb"),
-                **mcfg.audio_emb_params,
+                **extra,
             ),
             lambda dev: create_audio_embedding_model(
                 mcfg.audio_emb_model_type,
@@ -311,7 +316,7 @@ class _ModelBuilders:
                 device=dev,
                 size=mcfg.audio_emb_size,
                 quantization=mcfg.quantization_for("audio_emb"),
-                **mcfg.audio_emb_params,
+                **extra,
             ),
         )
 

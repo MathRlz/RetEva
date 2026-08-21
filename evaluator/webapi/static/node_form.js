@@ -114,9 +114,11 @@
   // The model's own Params fields (size handled separately) → the `params:{…}` dict.
   function renderSchemaFields(panel, host, schema) {
     const extra = (host.params || {}).params || {};
+    const topParams = host.params || {};
     Object.entries(schema.params_schema || {}).forEach(([name, meta]) => {
       if (name === 'size') return;  // rendered as the size select
-      const cur = extra[name] ?? meta.default ?? '';
+      // Fall back to top-level params for fields the YAML stored there (e.g. model_path).
+      const cur = extra[name] ?? topParams[name] ?? meta.default ?? '';
       let widget;
       if (meta.encoder_sizes) {
         const encoderType = ((host.params || {}).params || {})["encoder_type"] ?? "whisper";
