@@ -142,6 +142,7 @@ def register_config_routes(
         """Upload a YAML config file and render its pipeline preview + editable param forms,
         same as /ui/config-preview but sourced from uploaded content rather than a preset name."""
         from evaluator import EvaluationConfig
+        from evaluator.config.graph_config import build_evaluation_config_kwargs
         from evaluator.config.validation import collect_problems
 
         form = await request.form()
@@ -151,7 +152,11 @@ def register_config_routes(
         try:
             import yaml as _yaml
             d = _yaml.safe_load(raw_yaml)
-            config = EvaluationConfig.from_dict(d, validate=False).with_auto_devices()
+            if not isinstance(d, dict):
+                raise ValueError("YAML must be a config mapping (key: value).")
+            config = EvaluationConfig.from_dict(
+                build_evaluation_config_kwargs(d), validate=False
+            ).with_auto_devices()
             preview = graph_preview(config)
         except Exception as exc:  # noqa: BLE001
             return HTMLResponse(

@@ -86,36 +86,48 @@ def _model_summary(model: Any, family: str) -> str:
     return f"{mtype}:{name or size or 'default'}"
 
 
-_MODEL_SUMMARY_KEYS = {  # flat-dict key -> (family, the node's model_field)
-    "asr_model": ("asr", "model.asr_model_type"),
-    "text_emb_model": ("text_emb", "model.text_emb_model_type"),
-    "audio_emb_model": ("audio_emb", "model.audio_emb_model_type"),
+_MODEL_SUMMARY_KEYS = {  # flat-dict key -> (family, the node kind that carries it)
+    "asr_model": ("asr", "asr"),
+    "text_emb_model": ("text_emb", "text_embedding"),
+    "audio_emb_model": ("audio_emb", "audio_embedding"),
 }
 
 
 def _active_model_summaries(config: Any) -> Dict[str, str]:
     """Model summary strings for ONLY the families the executed graph actually uses, so a default
-    (e.g. ``asr_model: wav2vec2:default``) never leaks for a node the run never had — the last
-    hiding spot of the original bug. Best-effort: if the graph can't be built, emit all three."""
-    active = None
+    (e.g. ``asr_model: wav2vec2:default``) never leaks for a node the run never had. Resolves each
+    present family's ACTUAL model(s) off the graph's own nodes (the flat default overlaid by each
+    node's own params — same resolver factory.py/validation.py use), not the flat default blindly
+    — a branched config with 2+ distinct models in one family joins them as ``a+b`` instead of
+    silently reporting only the (possibly unset) flat default. Best-effort: if the graph can't be
+    built, falls back to the flat default for all three (the pre-graph-config-shape case)."""
+    from ..pipeline.graph.operators import node_kind
+    from .graph_config import resolved_model_config
+
+    graph = None
     try:
         from ..pipeline.graph.modes import build_graph_for_config
-        from ..pipeline.graph.registry import node_model_field
 
-        present = {
-            node_model_field(n.stage, n.params) for n in build_graph_for_config(config).nodes
-        }
-        active = {field for _fam, field in _MODEL_SUMMARY_KEYS.values() if field in present}
+        graph = build_graph_for_config(config)
     except Exception as exc:  # noqa: BLE001 - telemetry must not crash
-        # Fall back to all families, but don't hide *why* the graph wouldn't build.
         from ..logging_config import get_logger
 
         get_logger(__name__).debug("active-model summary fell back (graph build failed): %s", exc)
-        active = None
+
     out: Dict[str, str] = {}
-    for key, (family, field) in _MODEL_SUMMARY_KEYS.items():
-        if active is None or field in active:
+    for key, (family, kind) in _MODEL_SUMMARY_KEYS.items():
+        if graph is None:
             out[key] = _model_summary(config.model, family)
+            continue
+        nodes = [n for n in graph.nodes if node_kind(n.stage, n.params) == kind]
+        if not nodes:
+            continue
+        summaries: list = []
+        for n in nodes:
+            summary = _model_summary(resolved_model_config(config, n), family)
+            if summary not in summaries:
+                summaries.append(summary)
+        out[key] = "+".join(summaries)
     return out
 
 

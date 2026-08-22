@@ -72,7 +72,7 @@ def _stage_augment_audio(s: RunState) -> None:
     from ..node_config import resolve_node_config
 
     cfg = s.resolved_config() or resolve_node_config(
-        getattr(s.config, "audio_augmentation", None) or AudioAugmentationConfig(),
+        getattr(s.config, "augmentation", None) or AudioAugmentationConfig(),
         s.node_params, force_enabled=True,
     )
     augmenter = AudioAugmenter(cfg)

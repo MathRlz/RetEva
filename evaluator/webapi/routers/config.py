@@ -131,7 +131,7 @@ def build_config_router(
         import yaml as _yaml
 
         from evaluator.config import EvaluationConfig
-        from evaluator.config.graph_config import to_legacy_dict
+        from evaluator.config.graph_config import build_evaluation_config_kwargs
 
         text = payload.get("yaml") or ""
         if not str(text).strip():
@@ -140,7 +140,7 @@ def build_config_router(
             raw = _yaml.safe_load(text)
             if not isinstance(raw, dict):
                 raise ValueError("YAML must be a config mapping (key: value).")
-            config = EvaluationConfig.from_dict(to_legacy_dict(raw), validate=False)
+            config = EvaluationConfig.from_dict(build_evaluation_config_kwargs(raw), validate=False)
             return config_to_canvas_spec(config)
         except HTTPException:
             raise
@@ -162,7 +162,7 @@ def build_config_router(
         import yaml as _yaml
 
         from evaluator.config import EvaluationConfig
-        from evaluator.config.graph_config import to_legacy_dict
+        from evaluator.config.graph_config import build_evaluation_config_kwargs
         from evaluator.pipeline import build_graph_for_config
 
         from evaluator.webapi.form_builder import lift_single_source_dataset
@@ -191,8 +191,9 @@ def build_config_router(
         if spec.get("llm"):
             config["llm"] = spec["llm"]
         try:
-            # validate it builds — to_legacy_dict mutates its input, so deep-copy first
-            cfg = EvaluationConfig.from_dict(to_legacy_dict(copy.deepcopy(config)), validate=False)
+            # validate it builds — build_evaluation_config_kwargs deep-copies its input, so
+            # `config` (returned as YAML below) is untouched.
+            cfg = EvaluationConfig.from_dict(build_evaluation_config_kwargs(config), validate=False)
             build_graph_for_config(cfg)
         except Exception as exc:  # noqa: BLE001 — surface any build error as 400
             raise HTTPException(status_code=400, detail=str(exc)) from exc

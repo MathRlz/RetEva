@@ -307,18 +307,23 @@ def _stage_corpus_embedding(s: RunState) -> None:
                 load_info=s.load_info,
                 corpus=list(bus_corpus) if bus_corpus is not None else None,
             )
-        model_type = params.get("model") or s.config.model.text_emb_model_type
+        # Same overlay _node_pipeline just built the pipeline from (stage="text_embedding",
+        # this node's own params) — reuse it instead of hand-rolling `params.get(x) or
+        # config.model.y` again.
+        from types import SimpleNamespace
+
+        from ...config.graph_config import resolved_model_config
+
+        mcfg = resolved_model_config(s.config, SimpleNamespace(stage="text_embedding", params=params))
+        model_type = mcfg.text_emb_model_type
         if model_type:
-            override = params.get("embedding_space") or getattr(
-                s.config.model, "text_emb_embedding_space", None
-            )
             cv.space = (
-                str(override)
-                if override
+                str(mcfg.text_emb_embedding_space)
+                if mcfg.text_emb_embedding_space
                 else resolve_embedding_space(
                     text_embedding_registry,
                     str(model_type),
-                    params.get("name") or s.config.model.text_emb_model_name,
+                    mcfg.text_emb_model_name,
                 )
             )
         s.put_artifact("corpus_vectors", cv)

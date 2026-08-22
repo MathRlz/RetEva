@@ -105,13 +105,13 @@ def get_preset(name: str, auto_devices: bool = True) -> Dict[str, Any]:
         raise ValueError(
             f"Unknown preset '{name}'. Available presets: {', '.join(list_presets())}"
         )
-    from .graph_config import to_legacy_dict
+    from .graph_config import build_evaluation_config_kwargs
 
     with open(path, "r", encoding="utf-8") as handle:
         raw: Dict[str, Any] = yaml.safe_load(handle) or {}
-    # Presets are node-centric YAML; translate to the legacy dict the rest of the
+    # Presets are node-centric YAML; translate to the from_dict kwargs the rest of the
     # pipeline (and _apply_auto_devices' model.* device fields) expects.
-    preset = to_legacy_dict(raw)
+    preset = build_evaluation_config_kwargs(raw)
     if auto_devices:
         _apply_auto_devices(preset)
     return preset

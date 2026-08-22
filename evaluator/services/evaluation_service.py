@@ -109,10 +109,21 @@ def _warm_up_model_services(config: EvaluationConfig, bundle: Any, logger) -> No
 def _configure_local_llm_runtime(
     config: EvaluationConfig, service_provider: ModelServiceProvider, logger
 ) -> None:
-    """Start local LLM server when local judge/query optimization mode is enabled."""
-    judge_local = bool(config.judge.enabled and config.judge.use_local_server)
-    query_local = bool(
-        config.query_optimization.enabled and config.query_optimization.use_local_server
+    """Start local LLM server when local judge/query optimization mode is enabled.
+
+    Checked across the flat default AND every graph node's resolved override — a node-level
+    override that turns on ``use_local_server`` only for one branch must not be invisible here
+    (the server just wouldn't come up, and that node's resolved config would silently point at
+    no local endpoint)."""
+    from ..config.validation import _configured_feature_configs
+
+    judge_local = any(
+        cfg.enabled and cfg.use_local_server
+        for cfg in _configured_feature_configs(config, "judge")
+    )
+    query_local = any(
+        cfg.enabled and cfg.use_local_server
+        for cfg in _configured_feature_configs(config, "query_optimization")
     )
     if not (judge_local or query_local):
         return
@@ -228,6 +239,8 @@ def run_evaluation(
             experiment_name=config.experiment_name,
             verbosity=config.logging.verbosity,
         )
+        from ..logging_config import add_run_file_handler
+        add_run_file_handler(config.output_dir, config.experiment_name)
         cache_manager = CacheManager(
             cache_dir=config.cache.cache_dir,
             enabled=config.cache.enabled,
@@ -348,8 +361,3 @@ def load_dataset_and_build_index(
 
 # Re-exported so existing import paths stay stable after the F4 extraction.
 from .corpus_index import build_corpus_index  # noqa: E402,F401
-from .matrix import (  # noqa: E402,F401
-    _apply_setup_overrides,
-    _build_comparison_bundle,
-    run_evaluation_matrix,
-)

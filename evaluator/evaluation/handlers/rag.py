@@ -49,6 +49,10 @@ def _generate_answer_details(
     node can enrich them in place). Scoring is the answer_metrics node's job."""
     # Resolved before execution: global ⊕ node params; the node's presence forces enabled.
     cfg = s.resolved_config(default=s.answer_gen_config)
+    # Stash it for the (separate) answer_metrics node — resolved_config() is keyed by the
+    # CURRENT node, and scoring runs under a different node id, so it can't see this node's
+    # own override without this handoff (see _stage_answer_metrics).
+    s.answer_gen_resolved_config = cfg
     if cfg is None or not getattr(cfg, "enabled", False):
         return {}
 
@@ -271,7 +275,9 @@ def _stage_answer_metrics(s: RunState) -> None:
         answer_results,
         traces_data=(query_ids, _relevant_from_bus(s), results_with_scores),
         corpus_lookup=_answer_corpus_lookup(s, results_with_scores),
-        config=s.answer_gen_config,
+        # The SAME resolved config generation used (stashed by _generate_answer_details) —
+        # not the flat default, so a node-level answer_gen override affects its own scoring.
+        config=getattr(s, "answer_gen_resolved_config", None) or s.answer_gen_config,
         decision_gt=_decision_labels(s),
     )
     # Publish every aggregate score_answers computed — the report node binds this artifact and

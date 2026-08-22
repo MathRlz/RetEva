@@ -94,25 +94,71 @@ def collect_problems(config: Any) -> Tuple[List[str], List[str]]:
 _LLM_SECONDS_PER_WORKER = 60
 
 
+# node_kind → (EvaluationConfig flat field, force_enabled) for every feature node a graph node
+# can override — mirrors graph_config._FEATURE_NODE_CONFIG / evaluation.node_config._FEATURE_BASES,
+# kept as its own copy since both of those key off different objects (a RunState / a raw dict)
+# and this one resolves straight off `config` at load time, before any RunState exists.
+_FEATURE_NODE_KINDS = {
+    "answer_judge": ("judge", True),
+    "answer_gen": ("answer_generation", True),
+    "query_optimization": ("query_optimization", False),
+    "query_refine": ("query_optimization", False),
+    "multi_query_retrieval": ("query_optimization", False),
+    "query_correction": ("query_correction", False),
+}
+
+
+def _configured_feature_configs(config, flat_attr):
+    """The flat default (once, if set) plus every graph node's resolved override for whichever
+    feature ``flat_attr`` names (e.g. ``"judge"``) — so a node-level override that enables a
+    feature (or sets its own ``api_key_env``/``concurrency``/``timeout_s``) is caught here, not
+    only the flat default. Graph-less configs just yield the flat default (``config.graph``
+    raises for those — caught, not propagated; see ``_configured_model_types``)."""
+    from ..evaluation.node_config import _KIND_KEEP, resolve_node_config
+    from ..pipeline.graph.operators import node_kind
+
+    flat = getattr(config, flat_attr, None)
+    if flat is not None:
+        yield flat
+    try:
+        nodes = config.graph.nodes
+    except Exception:
+        return
+    for node in nodes:
+        kind = node_kind(node.stage, node.params)
+        entry = _FEATURE_NODE_KINDS.get(kind)
+        if entry is None or entry[0] != flat_attr:
+            continue
+        cfg = resolve_node_config(
+            flat, node.params, force_enabled=entry[1],
+            keep_on_node=_KIND_KEEP.get(kind, frozenset()),
+        )
+        if cfg is not None:
+            yield cfg
+
+
 def _validate_llm_concurrency(config, warnings):
     """Warn when a component's timeout was sized for serial calls but it runs concurrently.
 
     A timeout that is fine at concurrency 1 becomes a timeout STORM at 4: every request takes
     ~N x longer, each timeout retries twice, and the retries pile onto an already-saturated
     server. Cheap to check, expensive to discover at hour two of a sweep."""
+    seen = set()
     for name in ("answer_generation", "judge", "query_optimization", "query_correction"):
-        cfg = getattr(config, name, None)
-        if cfg is None or not getattr(cfg, "enabled", False):
-            continue
-        workers = int(getattr(cfg, "concurrency", 1) or 1)
-        timeout = int(getattr(cfg, "timeout_s", 0) or 0)
-        needed = workers * _LLM_SECONDS_PER_WORKER
-        if workers > 1 and timeout < needed:
-            warnings.append(
-                f"{name}.concurrency={workers} with timeout_s={timeout}: each request's wall "
-                f"time grows with concurrency, so this will time out and retry under load. "
-                f"Use timeout_s >= {needed}, or lower the concurrency."
-            )
+        for cfg in _configured_feature_configs(config, name):
+            if not getattr(cfg, "enabled", False):
+                continue
+            workers = int(getattr(cfg, "concurrency", 1) or 1)
+            timeout = int(getattr(cfg, "timeout_s", 0) or 0)
+            needed = workers * _LLM_SECONDS_PER_WORKER
+            key = (name, workers, timeout)
+            if workers > 1 and timeout < needed and key not in seen:
+                seen.add(key)
+                warnings.append(
+                    f"{name}.concurrency={workers} with timeout_s={timeout}: each request's wall "
+                    f"time grows with concurrency, so this will time out and retry under load. "
+                    f"Use timeout_s >= {needed}, or lower the concurrency."
+                )
 
 
 def _validate_variant_rollup(config, errors):
@@ -186,25 +232,57 @@ def _validate_devices(config, errors, warnings, cuda_available, cuda_count):
                 )
 
 
+_KIND_FAMILY = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding": "audio_emb"}
+
+
+def _configured_model_types(config):
+    """Yield (family, model_type) for the flat default (always, all three families) plus every
+    graph node's resolved per-node override — so a branch-only model type (never promoted into
+    the flat default, per the node-centric fold) fails here at validate time instead of only
+    surfacing as a factory.py build crash. Graph-less configs (no explicit ``graph.nodes``, no
+    template) simply contribute only the flat triple — ``config.graph`` raises for those, caught
+    here rather than propagated (a config with no graph can't run either way; validate()
+    shouldn't crash discovering that)."""
+    yield "asr", config.model.asr_model_type
+    yield "text_emb", config.model.text_emb_model_type
+    yield "audio_emb", config.model.audio_emb_model_type
+
+    from .graph_config import resolved_model_config
+    from ..pipeline.graph.operators import node_kind
+
+    try:
+        nodes = config.graph.nodes
+    except Exception:
+        return
+    for node in nodes:
+        family = _KIND_FAMILY.get(node_kind(node.stage, node.params))
+        if family is None:
+            continue
+        mcfg = resolved_model_config(config, node)
+        yield family, getattr(mcfg, f"{family}_model_type")
+
+
 def _validate_model_types(config, errors):
-    """Check each configured model type is registered."""
+    """Check every configured model type (the flat default AND any per-node branch override)
+    is registered, deduped by (family, model_type)."""
     from ..models.registry import (
         asr_registry,
         text_embedding_registry,
         audio_embedding_registry,
     )
 
-    checks = [
-        (config.model.asr_model_type, asr_registry, "ASR"),
-        (config.model.text_emb_model_type, text_embedding_registry, "text embedding"),
-        (
-            config.model.audio_emb_model_type,
-            audio_embedding_registry,
-            "audio embedding",
-        ),
-    ]
-    for model_type, registry, label in checks:
-        if model_type is not None and not registry.is_registered(model_type):
+    registries = {
+        "asr": (asr_registry, "ASR"),
+        "text_emb": (text_embedding_registry, "text embedding"),
+        "audio_emb": (audio_embedding_registry, "audio embedding"),
+    }
+    seen = set()
+    for family, model_type in _configured_model_types(config):
+        if model_type is None or (family, model_type) in seen:
+            continue
+        seen.add((family, model_type))
+        registry, label = registries[family]
+        if not registry.is_registered(model_type):
             available = ", ".join(registry.list_types())
             errors.append(
                 f"Unknown {label} model type: '{model_type}'. "
@@ -478,31 +556,39 @@ def preflight_check(config: Any) -> List[str]:
 
     import os
 
+    # API-key-env checks: the flat default AND every graph node's resolved override (a
+    # node-level override that enables the feature, or points at a different api_key_env, is
+    # invisible to a check that only looks at the flat default — see _configured_feature_configs).
+    _checked_envs: set = set()
+
     # Check for judge API key if enabled
-    if config.judge.enabled:
-        api_key = os.environ.get(config.judge.api_key_env)
-        if not api_key:
-            warnings.append(
-                f"LLM judge is enabled but {config.judge.api_key_env} environment variable "
-                f"is not set. Judge scoring will fail."
-            )
+    for cfg in _configured_feature_configs(config, "judge"):
+        if cfg.enabled and cfg.api_key_env not in _checked_envs:
+            _checked_envs.add(cfg.api_key_env)
+            if not os.environ.get(cfg.api_key_env):
+                warnings.append(
+                    f"LLM judge is enabled but {cfg.api_key_env} environment variable "
+                    f"is not set. Judge scoring will fail."
+                )
 
     # Check for answer_generation API key if enabled
-    if config.answer_generation.enabled:
-        api_key = os.environ.get(config.answer_generation.api_key_env)
-        if not api_key:
-            warnings.append(
-                f"answer_generation is enabled but {config.answer_generation.api_key_env} "
-                f"environment variable is not set. Answer generation will fail."
-            )
+    for cfg in _configured_feature_configs(config, "answer_generation"):
+        if cfg.enabled and cfg.api_key_env not in _checked_envs:
+            _checked_envs.add(cfg.api_key_env)
+            if not os.environ.get(cfg.api_key_env):
+                warnings.append(
+                    f"answer_generation is enabled but {cfg.api_key_env} "
+                    f"environment variable is not set. Answer generation will fail."
+                )
 
     # Check for query_optimization API key if enabled
-    if config.query_optimization.enabled:
-        api_key = os.environ.get(config.query_optimization.api_key_env)
-        if not api_key:
-            warnings.append(
-                f"query_optimization is enabled but {config.query_optimization.api_key_env} "
-                f"environment variable is not set. Query optimization will fail."
-            )
+    for cfg in _configured_feature_configs(config, "query_optimization"):
+        if cfg.enabled and cfg.api_key_env not in _checked_envs:
+            _checked_envs.add(cfg.api_key_env)
+            if not os.environ.get(cfg.api_key_env):
+                warnings.append(
+                    f"query_optimization is enabled but {cfg.api_key_env} "
+                    f"environment variable is not set. Query optimization will fail."
+                )
 
     return warnings

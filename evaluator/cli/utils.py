@@ -28,8 +28,24 @@ def _describe_model(model_type, model_name, adapter_path) -> str:
     return desc
 
 
+# node kind -> (model_type, model_name, adapter_path) ModelConfig field names, in the join
+# order used below (mirrors the historical asr_then_text ordering for the common templates).
+_FAMILY_ATTRS = (
+    ("asr", ("asr_model_type", "asr_model_name", "asr_adapter_path")),
+    ("audio_embedding", ("audio_emb_model_type", "audio_emb_model_name", "audio_emb_adapter_path")),
+    ("text_embedding", ("text_emb_model_type", "text_emb_model_name", "text_emb_adapter_path")),
+)
+
+
 def generate_model_description(config) -> str:
-    """Generate model description string for experiment ID.
+    """Generate model description string for experiment ID / output filename.
+
+    Derived from the graph's ACTUAL model-bearing nodes (each one's resolved model — the flat
+    default overlaid by that node's own params, same as factory.py builds it), not from the
+    template label + flat default alone: a branch-only role (no top-level ``nodes.<role>``
+    default) previously described as its unset flat default (e.g. ``None``); a branched config
+    now names every DISTINCT model it actually uses instead of only the flat one. Falls back to
+    the flat default (historical asr+text-embed shape) if the graph can't be built.
 
     Args:
         config: EvaluationConfig object.
@@ -38,27 +54,29 @@ def generate_model_description(config) -> str:
         Model description string.
     """
     model = config.model
-    template = config.graph_template
-    if template == "audio_emb_retrieval":
-        return _describe_model(
-            model.audio_emb_model_type,
-            model.audio_emb_model_name,
-            model.audio_emb_adapter_path,
+    try:
+        graph = config.graph
+    except Exception:
+        graph = None
+    if graph is None:
+        return (
+            f"{_describe_model(model.asr_model_type, model.asr_model_name, model.asr_adapter_path)}"
+            f"_{_describe_model(model.text_emb_model_type, model.text_emb_model_name, model.text_emb_adapter_path)}"
         )
-    if template == "asr_only":
-        return _describe_model(
-            model.asr_model_type, model.asr_model_name, model.asr_adapter_path
-        )
-    # asr_text_retrieval
-    asr_desc = _describe_model(
-        model.asr_model_type, model.asr_model_name, model.asr_adapter_path
-    )
-    emb_desc = _describe_model(
-        model.text_emb_model_type,
-        model.text_emb_model_name,
-        model.text_emb_adapter_path,
-    )
-    return f"{asr_desc}_{emb_desc}"
+
+    from evaluator.config.graph_config import resolved_model_config
+    from evaluator.pipeline.graph.operators import node_kind
+
+    parts: list = []
+    for kind, attrs in _FAMILY_ATTRS:
+        for n in graph.nodes:
+            if node_kind(n.stage, n.params) != kind:
+                continue
+            mcfg = resolved_model_config(config, n)
+            desc = _describe_model(*(getattr(mcfg, a) for a in attrs))
+            if desc not in parts:
+                parts.append(desc)
+    return "_".join(parts) if parts else "no_model"
 
 
 def generate_output_filename(config) -> str:

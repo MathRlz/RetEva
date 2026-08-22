@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from evaluator import ConfigurationError, EvaluationConfig, run_evaluation, run_evaluation_matrix
+from evaluator import ConfigurationError, EvaluationConfig, run_evaluation
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.graph_store import GraphStore
 from evaluator.webapi.jobs import JobManager
@@ -31,9 +31,6 @@ from evaluator.webapi.routers import (
 def create_app(
     *,
     evaluation_runner: Callable[[EvaluationConfig], Any] = run_evaluation,
-    matrix_runner: Callable[
-        [EvaluationConfig, List[Dict[str, Any]]], Dict[str, Any]
-    ] = run_evaluation_matrix,
     provider_factory: Callable[[], ModelServiceProvider] = ModelServiceProvider,
     graph_store: Optional[GraphStore] = None,
 ) -> FastAPI:
@@ -66,10 +63,7 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    jobs = JobManager(
-        evaluation_runner=evaluation_runner,
-        matrix_runner=matrix_runner,
-    )
+    jobs = JobManager(evaluation_runner=evaluation_runner)
 
     app.include_router(base_router.build_base_router(provider_factory))
     app.include_router(config_router.build_config_router(provider_factory))

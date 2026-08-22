@@ -5,7 +5,6 @@ from .api import (
     evaluate_from_preset,
     quick_evaluate,
     run_evaluation,
-    run_evaluation_matrix,
     EvaluationError,
 )
 from .config import EvaluationConfig
@@ -19,7 +18,6 @@ __all__ = [
     "evaluate_from_preset",
     "quick_evaluate",
     "run_evaluation",
-    "run_evaluation_matrix",
     # Core types
     "EvaluationConfig",
     "EvaluationResults",

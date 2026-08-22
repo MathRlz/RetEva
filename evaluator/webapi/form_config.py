@@ -230,19 +230,21 @@ def graph_spec_to_config_dict(
 
     The canvas exports ``{mode, nodes:[{id,type,params}], edges:[{from,to}], branches?, llm?}``
     — a node-centric ``graph`` block plus an optional global ``llm``. We wrap it and run it
-    through :func:`graph_config.to_legacy_dict` (the same translator the YAML loader uses), so
-    a graph built in the UI takes the identical path as a hand-written config. The dataset
-    rides a ``dataset_source`` node whose ``dataset`` param names a registered dataset
-    (``to_legacy_dict`` synthesizes the ``data.datasets`` entry); a graph with no resolvable
-    dataset passes translation but is rejected downstream by :func:`prepare_run_config`.
+    through :func:`graph_config.build_evaluation_config_kwargs` (the same translator the YAML
+    loader uses), so a graph built in the UI takes the identical path as a hand-written config.
+    The dataset rides a ``dataset_source`` node whose ``dataset`` param names a registered
+    dataset (``build_evaluation_config_kwargs`` synthesizes the ``data.datasets`` entry); a
+    graph with no resolvable dataset passes translation but is rejected downstream by
+    :func:`prepare_run_config`.
     """
-    from evaluator.config.graph_config import to_legacy_dict
+    from evaluator.config.graph_config import build_evaluation_config_kwargs
 
-    # to_legacy_dict mutates the node dicts it's handed (it strips folded params in place);
-    # deep-copy so the caller's spec is never altered (safe to call twice on the same object).
+    # Deep-copy up front: this local `graph` gets mutated below (display-param stripping,
+    # derived edges) before being handed off, and the caller's spec must never be altered
+    # (safe to call this function twice on the same spec object).
     graph = deepcopy({k: spec[k] for k in _GRAPH_SPEC_KEYS if k in spec})
     # The canvas 'mode' is a display label derived from the nodes — not a config key. Strip it so
-    # the graph goes through to_legacy_dict as an explicit-nodes graph (which rejects graph.mode).
+    # the graph goes through translation as an explicit-nodes graph (which rejects graph.mode).
     graph.pop("mode", None)
     _strip_display_params(graph.get("nodes") or [])
     # The builder IS the authoring assistant: a spec whose edges aren't port-level yet
@@ -260,7 +262,7 @@ def graph_spec_to_config_dict(
     # A drawn feature node (judge / answer-gen / tts / …) enables its capability and carries its
     # params — the loader's _FEATURE_NODE_CONFIG fold handles both from node presence.
     _validate_node_types(graph.get("nodes") or [])
-    legacy = to_legacy_dict(config_dict)
+    legacy = build_evaluation_config_kwargs(config_dict)
     # The builder authors only meaningful operations; append the derived structural plumbing so the
     # canvas graph runs as the full execution DAG (skipped for branched graphs: they expand apart).
     if not graph.get("branches"):

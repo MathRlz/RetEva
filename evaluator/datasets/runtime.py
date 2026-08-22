@@ -279,19 +279,20 @@ def load_dataset_sources(config: Any):
 
     dataset_sources = load_runtime_datasets(config)
     cfg_sources = getattr(config.data, "datasets", {}) or {}
-    q_id = next(
-        (s for s, e in cfg_sources.items() if (e or {}).get("role") in ("questions", "both")),
-        None,
-    )
-    c_id = next(
-        (s for s, e in cfg_sources.items() if (e or {}).get("role") in ("corpus", "both")),
-        None,
-    )
-    if q_id and c_id and q_id != c_id and {q_id, c_id} <= set(dataset_sources):
-        join = validate_dataset_join(dataset_sources[q_id], dataset_sources[c_id])
-        if join["disjoint"]:
-            disable_ir_metrics, join_warning = True, join["warning"]
-            logger.warning("dataset join: %s", join_warning)
+    q_ids = [s for s, e in cfg_sources.items() if (e or {}).get("role") in ("questions", "both")]
+    c_ids = [s for s, e in cfg_sources.items() if (e or {}).get("role") in ("corpus", "both")]
+    warnings = []
+    for q_id in q_ids:
+        for c_id in c_ids:
+            if q_id == c_id or not ({q_id, c_id} <= set(dataset_sources)):
+                continue
+            join = validate_dataset_join(dataset_sources[q_id], dataset_sources[c_id])
+            if join["disjoint"]:
+                disable_ir_metrics = True
+                warnings.append(f"[{q_id}↔{c_id}] {join['warning']}")
+    if warnings:
+        join_warning = "; ".join(warnings)
+        logger.warning("dataset join: %s", join_warning)
     return dataset_sources, disable_ir_metrics, join_warning
 
 

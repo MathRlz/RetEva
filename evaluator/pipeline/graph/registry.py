@@ -198,24 +198,23 @@ def _effective_inputs(stage: str, params: Optional[dict]) -> Tuple[str, ...]:
 
 
 def dataset_columns(params: Optional[dict]) -> List[Dict[str, str]]:
-    """The display schema of a dataset_source node instance: ``[{name, artifact, type}]``.
+    """The display schema of a dataset_source node instance: ``[{name, artifact, type, dtype}]``.
 
-    Built from the injected ``params.fields`` column schema (+ the artifact registry's
-    modality as the human-readable type). Empty when the node carries no schema."""
-    from ..artifacts import artifact_modality, is_registered
+    Built from the injected ``params.fields`` column schema + the artifact registry's
+    modality (``type``, the human-readable category) and ``dtype`` (the concrete shape,
+    e.g. ``"List[CorpusDocument]"``). Empty when the node carries no schema."""
+    from ..artifacts import artifact_dtype, artifact_modality, is_registered
 
     fields = (params or {}).get("fields") or {}
     columns: List[Dict[str, str]] = []
     for name, artifact in fields.items():
+        registered = is_registered(str(artifact))
         columns.append(
             {
                 "name": str(name),
                 "artifact": str(artifact),
-                "type": (
-                    str(artifact_modality(str(artifact)).value)
-                    if is_registered(str(artifact))
-                    else "?"
-                ),
+                "type": str(artifact_modality(str(artifact)).value) if registered else "?",
+                "dtype": artifact_dtype(str(artifact)) if registered else "?",
             }
         )
     return columns

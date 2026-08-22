@@ -62,12 +62,11 @@ def _build_node_pipeline(s: "RunState", stage: str, params: dict):
     forgoing model-reuse is fine)."""
     from types import SimpleNamespace
 
-    from ...config.graph_config import _MODEL_NODE_FIELDS
+    from ...config.graph_config import resolved_model_config
     from ...pipeline.factory import _ModelBuilders
 
-    node_to_field = _MODEL_NODE_FIELDS.get(stage, {})
-    overrides = {field: params[key] for key, field in node_to_field.items() if key in params}
-    eff_model = replace(s.config.model, **overrides)
+    node = SimpleNamespace(stage=stage, params=params)
+    eff_model = resolved_model_config(s.config, node)
     model = getattr(
         _ModelBuilders(SimpleNamespace(model=eff_model), None, None), _BUILDER_METHOD[stage]
     )()

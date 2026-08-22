@@ -303,6 +303,16 @@ def build_corpus_index(
     """Embed the corpus and build the retrieval index when the mode retrieves.
 
     Runs after the model pipelines are built (TTS already offloaded).
+
+    KNOWN LIMITATION: ``audio_emb_pipeline``/``text_emb_pipeline`` here are always the single
+    SHARED pipeline factory.py built from the flat ``config.model`` default — never a per-branch
+    resolved one. A ``corpus_embedding`` node carries no ``params.model`` of its own, so it
+    never triggers the executor's per-node override (``_node_pipeline``); the branch expansion's
+    CSE always collapses it to one shared instance regardless of how many distinct branch-side
+    embedding models exist upstream. A branched config that genuinely needs distinct corpus
+    embeddings per branch is unsupported today — the branches must share a corpus embedding
+    space (a top-level ``nodes.<role>`` default is required precisely so this shared pipeline is
+    buildable; see ``configs/apm_admed_all_models.yaml``'s base ``nodes.audio_embedding`` block).
     """
     logger = get_logger(__name__)
 

@@ -153,5 +153,5 @@ def _print_graph(config: EvaluationConfig) -> None:
         print(f"    {node.id}: ({ins}) -> ({outs}){deps}{params}{suffix}")
         columns = dataset_columns(node.params)
         if columns:
-            cols = ", ".join(f"{c['name']}:{c['type']}" for c in columns)
+            cols = ", ".join(f"{c['name']}:{c['type']}({c['dtype']})" for c in columns)
             print(f"      columns: {cols}")

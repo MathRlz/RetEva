@@ -54,6 +54,7 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     if graph is not None:
         validate_models(config, graph)
         validate_graph_embedding_spaces(graph, config)
+        validate_graph_vector_db_configs(graph, config)
     return flags
 
 
@@ -68,6 +69,7 @@ def validate_models(config: Any, graph: Any) -> None:
     a single :class:`ConfigurationError` listing them all (with the available types)."""
     import os
 
+    from ..config.graph_config import resolved_model_config
     from ..models.registry import (
         asr_registry,
         text_embedding_registry,
@@ -79,7 +81,7 @@ def validate_models(config: Any, graph: Any) -> None:
     if model is None:
         return
 
-    # node_model_field(...) -> (type attr on config.model, adapter attr, the family registry)
+    # node_model_field(...) -> (type attr on the resolved ModelConfig, adapter attr, registry)
     field_specs = {
         "model.asr_model_type": ("asr_model_type", "asr_adapter_path", asr_registry),
         "model.text_emb_model_type": (
@@ -96,9 +98,10 @@ def validate_models(config: Any, graph: Any) -> None:
         if spec is None:
             continue
         type_attr, adapter_attr, registry = spec
-        params = node.params or {}
-        # per-node override (graph-first) wins over config.model.*
-        mtype = params.get("model") or getattr(model, type_attr, None)
+        # per-node override (graph-first) wins over config.model.* — same resolver factory.py
+        # and node_pipeline.py use, instead of hand-rolling `params.get(x) or config.model.y`.
+        mcfg = resolved_model_config(config, node)
+        mtype = getattr(mcfg, type_attr, None)
         if mtype is not None and ("type", type_attr, str(mtype)) not in seen:
             seen.add(("type", type_attr, str(mtype)))
             if not registry.is_registered(str(mtype)):
@@ -106,7 +109,7 @@ def validate_models(config: Any, graph: Any) -> None:
                     f"{type_attr}={mtype!r} is not a registered {registry.name} model "
                     f"(available: {', '.join(registry.list_types())})"
                 )
-        adapter = params.get("adapter") or getattr(model, adapter_attr, None)
+        adapter = getattr(mcfg, adapter_attr, None)
         if adapter and ("adapter", str(adapter)) not in seen:
             seen.add(("adapter", str(adapter)))
             if not os.path.exists(adapter):
@@ -140,33 +143,38 @@ def _node_space(node: Any, config: Any) -> Optional[str]:
     dataset_source vector column carries ``params.embedding_space`` directly;
     a fusion node's combined space is unknowable here (None = unchecked).
     """
+    from types import SimpleNamespace
+
+    from ..config.graph_config import resolved_model_config
     from ..models.registry import audio_embedding_registry, text_embedding_registry
     from ..pipeline.graph.operators import node_kind
 
     params = getattr(node, "params", None) or {}
-    model = getattr(config, "model", None)
     stage = node_kind(node.stage, params)
     if stage == "dataset_source":
         return params.get("embedding_space")
     if stage in ("text_embedding", "corpus_embedding"):
-        mtype = params.get("model") or getattr(model, "text_emb_model_type", None)
-        if not mtype:
+        # corpus_embedding shares the text-embedding param namespace (it builds its pipeline
+        # via stage="text_embedding" too — see embedding.py's _stage_corpus_embedding), so
+        # resolve it under that kind explicitly rather than its own unmapped "corpus_embedding".
+        mcfg = resolved_model_config(config, SimpleNamespace(stage="text_embedding", params=params))
+        if not mcfg.text_emb_model_type:
             return None
         return _resolve_space(
             text_embedding_registry,
-            mtype,
-            params.get("name") or getattr(model, "text_emb_model_name", None),
-            params.get("embedding_space") or getattr(model, "text_emb_embedding_space", None),
+            mcfg.text_emb_model_type,
+            mcfg.text_emb_model_name,
+            mcfg.text_emb_embedding_space,
         )
     if stage == "audio_embedding":
-        mtype = params.get("model") or getattr(model, "audio_emb_model_type", None)
-        if not mtype:
+        mcfg = resolved_model_config(config, node)
+        if not mcfg.audio_emb_model_type:
             return None
         return _resolve_space(
             audio_embedding_registry,
-            mtype,
-            params.get("name") or getattr(model, "audio_emb_model_name", None),
-            params.get("embedding_space") or getattr(model, "audio_emb_embedding_space", None),
+            mcfg.audio_emb_model_type,
+            mcfg.audio_emb_model_name,
+            mcfg.audio_emb_embedding_space,
         )
     return None
 
@@ -302,3 +310,45 @@ def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
     issues = check_embedding_spaces(graph, config)
     if issues:
         raise ConfigurationError(issues[0])
+
+
+def _vector_db_backend_key(vector_db_config: Any) -> Optional[tuple]:
+    """A persistent-backend identity for *vector_db_config*, or None for a backend with
+    no on-disk/remote collision surface (inmemory/faiss — each node gets its own
+    process-local index)."""
+    db_type = str(getattr(vector_db_config, "type", "")).lower()
+    if db_type in ("chromadb",):
+        return (db_type, vector_db_config.chromadb_path, vector_db_config.chromadb_collection_name)
+    if db_type in ("qdrant",):
+        location = vector_db_config.qdrant_url or vector_db_config.qdrant_path
+        return (db_type, location, vector_db_config.qdrant_collection_name)
+    return None
+
+
+def validate_graph_vector_db_configs(graph: Any, config: Any) -> None:
+    """Reject two ``vector_db`` nodes that resolve to the same persistent backend +
+    collection — a silent index collision, since ``chromadb_collection_name`` and
+    ``qdrant_collection_name`` both default to ``"documents"`` (§ two-vector_db configs).
+
+    Each node's effective config is computed the same way the executor builds its
+    index (``effective_vector_db_config``), so this only fires once two nodes'
+    per-node overrides genuinely collide — not on every multi-vector_db graph.
+    """
+    from ..pipeline.factory import effective_vector_db_config
+    from ..pipeline.graph.operators import node_kind
+
+    seen: Dict[tuple, str] = {}
+    for node in graph.nodes:
+        if node_kind(node.stage, node.params) != "vector_db":
+            continue
+        effective = effective_vector_db_config(config.vector_db, node.params or {})
+        key = _vector_db_backend_key(effective)
+        if key is None:
+            continue
+        if key in seen:
+            raise ConfigurationError(
+                f"vector_db nodes '{seen[key]}' and '{node.id}' both resolve to the same "
+                f"backend/collection {key} — they will collide (silently share/overwrite "
+                f"the same index). Give each a distinct `collection` and/or `path`/`url`."
+            )
+        seen[key] = node.id

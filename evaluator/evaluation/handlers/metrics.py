@@ -123,10 +123,13 @@ def _drop_ir_if_disabled(s: "RunState", scores: Dict[str, Any]) -> Dict[str, Any
 
 def _corrected_metrics_enabled(s: "RunState") -> bool:
     """C7 opt-in: corrected-text + drug-aware (rx) metrics fire only when the run's
-    query_correction config sets ``corrected_metrics`` (reports/m1c otherwise unchanged)."""
-    return bool(
-        getattr(s.query_correction_config, "corrected_metrics", False)
-    )
+    query_correction config sets ``corrected_metrics`` (reports/m1c otherwise unchanged).
+
+    Reads the query_correction node's own RESOLVED config (stashed by _stage_query_correction —
+    this runs under the metrics node, a different node, so `s.resolved_config()` can't see it),
+    falling back to the flat default when no query_correction node ran this branch."""
+    cfg = getattr(s, "query_correction_resolved_config", None) or s.query_correction_config
+    return bool(getattr(cfg, "corrected_metrics", False))
 
 
 def _branch_scores(s: "RunState", artifacts: Dict[str, Any]) -> Dict[str, Any]:

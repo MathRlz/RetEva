@@ -61,7 +61,7 @@
   }
 
   /* Node card: id, model line, labeled port columns (optional inputs italic + ?).
-   * `columns` ([{name, type}]) renders a dataset node's declared schema, so the
+   * `columns` ([{name, type, dtype}]) renders a dataset node's declared schema, so the
    * diagram reads what data an experiment consumes. */
   function nodeHtml(id, spec, params, columns, label) {
     const ins = inputPorts(spec).map(p => p.optional
@@ -72,7 +72,7 @@
       ? params.model + (params.size ? ' · ' + params.size : '') : '';
     const cols = (columns && columns.length)
       ? `<div class="node-columns">` + columns.map(c =>
-          `<span title="${c.name} → ${c.artifact || ''}">${c.name}:${c.type}</span>`
+          `<span title="${c.name} → ${c.artifact || ''} (${c.dtype || '?'})">${c.name}:${c.type}</span>`
         ).join('') + `</div>`
       : '';
     const title = label || id;

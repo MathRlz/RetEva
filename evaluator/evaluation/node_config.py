@@ -53,11 +53,15 @@ _FEATURE_BASES = {
     "query_correction": ("query_correction_config", False),
     "query_optimization": ("query_opt_config", False),
     "query_refine": ("query_opt_config", False),
+    "multi_query_retrieval": ("query_opt_config", False),
     "answer_gen": ("answer_gen_config", True),
     "answer_judge": ("judge_config", True),
     "fusion": ("embedding_fusion_config", True),
     "tts": ("_config.audio_synthesis", True),
-    "augment_audio": ("_config.audio_augmentation", True),
+    # NB: the real EvaluationConfig field is `augmentation`, not `audio_augmentation` — using
+    # the wrong name here silently made this global unreachable (getattr always None), so
+    # augment_audio nodes only ever saw a bare default overlaid by their own params.
+    "augment_audio": ("_config.augmentation", True),
 }
 
 

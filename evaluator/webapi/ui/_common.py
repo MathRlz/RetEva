@@ -89,7 +89,7 @@ def _graph_view_from_config(config_dict: dict):
             columns = dataset_columns(n.params)
             if columns:
                 io += " · columns: " + ", ".join(
-                    f"{c['name']}:{c['type']}" for c in columns
+                    f"{c['name']}:{c['type']}({c['dtype']})" for c in columns
                 )
             node_io[n.id] = io
         return levels, node_io

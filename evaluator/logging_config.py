@@ -157,6 +157,36 @@ def setup_logging(
     return logger
 
 
+def add_run_file_handler(output_dir: str, experiment_name: str, file_level: int = logging.DEBUG) -> Optional[Path]:
+    """Add a FileHandler writing to ``<output_dir>/run_<experiment_name>.log``.
+
+    Called once per run so the full run log (including finalize) is co-located with
+    the report and resolved config in output_dir. Idempotent: skips if a handler
+    already targets that exact path. Returns the log path, or None on failure."""
+    log_path = Path(output_dir) / f"run_{experiment_name}.log"
+    logger = logging.getLogger("evaluator")
+    # Skip if already writing to this file (e.g. re-entrant call or test re-use).
+    if any(
+        isinstance(h, logging.FileHandler) and Path(h.baseFilename) == log_path.resolve()
+        for h in logger.handlers
+    ):
+        return log_path
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_path)
+        handler.setLevel(file_level)
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        logger.addHandler(handler)
+        return log_path
+    except Exception:  # noqa: BLE001 — best-effort, never break a run
+        return None
+
+
 def get_logger(name: str = "evaluator") -> logging.Logger:
     """Get a logger instance."""
     return logging.getLogger(name)

@@ -73,6 +73,9 @@ def _stage_query_correction(s: "RunState") -> None:
     so correction can be enabled on *one* branch only (the `corr` branch) while others no-op.
     """
     cfg = _node_correction_config(s)
+    # Stash for the (separate) metrics node's `corrected_metrics` opt-in check — see
+    # `evaluation/handlers/metrics.py:_corrected_metrics_enabled`.
+    s.query_correction_resolved_config = cfg
     if cfg is None or not getattr(cfg, "enabled", False):
         return
     from ..query_correction import (
@@ -261,7 +264,10 @@ def _stage_multi_query_retrieval(s: "RunState") -> None:
     from .retrieval import _publish_retrieved
 
     method = s.node_params.get("method", "multi_query")
-    base = s.query_opt_config or QueryOptimizationConfig(enabled=True, method=method)
+    # Resolved per-node (global ⊕ this node's own params — llm backend/model/combine_strategy/…
+    # can now diverge per multi_query_retrieval node, not just method/k); method always wins as
+    # this node kind's own default/override, applied after resolution.
+    base = _node_query_opt_config(s) or QueryOptimizationConfig(enabled=True, method=method)
     cfg = replace(base, enabled=True, method=method)
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
     tep = s.text_embedding_pipeline

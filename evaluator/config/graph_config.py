@@ -31,10 +31,11 @@ class GraphConfigError(ConfigurationError):
     """Raised when a node-centric config cannot be translated."""
 
 
-# nodes.<name>.<key> → ModelConfig field. Each model node shares the same param names. This is the
-# node→flat TRANSLATION (one default per role): the FIRST graph node of a role folds here; further
-# same-role nodes keep their model on the node (a per-node override) — the flat ``model.*`` is the
-# default for nodes without their own. So the config is node-centric while back-compat holds.
+# nodes.<name>.<key> → ModelConfig field. Each model node shares the same param names. A
+# top-level ``nodes.<role>`` block (_translate_nodes) sets the flat ``model.*`` DEFAULT for
+# that role; a graph node's own inline params (_fold_node_params) instead stay ON the node as
+# a per-node override, resolved via ``resolved_model_config``. Also reused to invert flat →
+# node-centric YAML (``legacy_yaml_to_graph_yaml``).
 _MODEL_NODE_FIELDS = {
     "asr": {
         "model": "asr_model_type",
@@ -306,22 +307,30 @@ def _resolve_dataset_refs(
             item["params"] = params
 
 
-def _fold_node_params(
-    node_ids: list, legacy: Dict[str, Any], model: Dict[str, Any]
-) -> None:
-    """Fold config-bearing node params into model / vector_db / feature sub-configs.
+def _fold_node_params(node_ids: list, legacy: Dict[str, Any]) -> None:
+    """Fold config-bearing node params into vector_db / feature sub-configs.
 
-    Self-contained list form: a config-bearing node (asr / *_embedding / vector_db /
-    retrieval) may carry its config inline in params (mirroring the nodes: map). Fold
-    those into model / vector_db and strip them so the graph node stays structural (the
-    runtime per-node override is for branches, not the base model). Transform/sink nodes
-    (augmenter, augment_audio, dataset_sink, dataset_source) keep their params — read at
-    runtime via graph_override. No-op for the plain-string list form (back-compat).
+    Self-contained list form: a config-bearing node (vector_db / retrieval / a feature
+    node) may carry its config inline in params (mirroring the nodes: map). Fold those
+    into vector_db / feature sub-configs. An asr / *_embedding node's own model params
+    stay ON the node — they are a per-node override the executor resolves via
+    ``resolved_model_config``, never promoted into the flat ``model.*`` default (only a
+    top-level ``nodes.<role>`` block, handled by ``_translate_nodes``, sets that
+    default). A ``vector_db`` node's own store/path/collection params likewise stay ON
+    the node (mirroring the model-node precedent) — ``effective_vector_db_config``
+    resolves them as a per-node override at build/run time, so two ``vector_db`` nodes
+    may point at two distinct backends/collections (two corpora, two indices). The fold
+    into the shared ``legacy["vector_db"]`` default ALSO still happens (last node
+    folded wins) — that flat default remains what the few node-context-free call sites
+    read directly (the legacy non-graph pipeline builder, ``build_corpus_index``,
+    flat config validation); it is not authoritative once a node's own params survive.
+    Transform/sink nodes (augmenter, augment_audio, dataset_sink, dataset_source) keep
+    their params — read at runtime via graph_override. No-op for the plain-string list
+    form (back-compat).
     """
     from ..pipeline.graph.operators import node_kind, operator_discriminators
 
     graph_vdb: Dict[str, Any] = {}
-    folded_model_roles: set = set()
     for item in node_ids:
         if isinstance(item, dict):
             ntype, nparams = item.get("type"), item.get("params") or {}
@@ -343,28 +352,20 @@ def _fold_node_params(
         selectors = {k: v for k, v in nparams.items() if k in disc}
         fields = {k: v for k, v in nparams.items() if k not in disc}
         if kind in _MODEL_NODE_FIELDS:
-            if fields and kind not in folded_model_roles:
-                # Node-centric config, first node of a role: its model becomes the flat
-                # ``model.*`` DEFAULT (the shared global pipeline + back-compat). Strip it off
-                # the node, which then reads that global (and the corpus embedder shares it).
-                folded_model_roles.add(kind)
-                model.update(_map_keys(
-                    fields, _MODEL_NODE_FIELDS[kind], f"graph.nodes.{ntype}.params"
-                ))
-                item["params"] = selectors
-            elif fields:
-                # A SECOND+ node of the same role keeps its model ON the node — a per-node
-                # override the executor builds via ``_node_pipeline`` — instead of clobbering
-                # the single flat field. So one graph can run two distinct text embedders
-                # (asymmetric query-enc ≠ doc-enc, or an ablation). The flat ``model.*`` holds
-                # one default per role; nodes without their own model fall back to it.
-                item["params"] = {**selectors, **fields}
-            else:
-                item["params"] = selectors
+            # A node's own model params stay ON the node — a per-node override
+            # ``resolved_model_config`` resolves at build/run time — so a graph may run two
+            # distinct same-role models (asymmetric query-enc ≠ doc-enc, an ablation branch,
+            # or a branch-only role with no flat default at all). The flat ``model.*``
+            # default comes only from a top-level ``nodes.<role>`` block (_translate_nodes).
+            item["params"] = {**selectors, **fields}
         elif kind == "vector_db":
+            # Keep the node's own store/path/collection/gpu_id params ON the node (parity
+            # with _MODEL_NODE_FIELDS) so effective_vector_db_config can give two vector_db
+            # nodes genuinely distinct backends; also fold into the shared flat default for
+            # the node-context-free call sites (see docstring).
             if fields:
                 graph_vdb.update(_vector_db_node_to_config(fields))
-            item["params"] = selectors
+            item["params"] = {**selectors, **fields}
         elif kind == "retrieval":
             # `mode`/`vectors` are per-arm FUNCTIONAL params the search handler reads off the
             # node (retrieval.py: a hybrid vs sparse arm, an audio-vector arm) — keep them on
@@ -456,7 +457,6 @@ def _validate_branches(graph: Dict[str, Any], legacy: Dict[str, Any]) -> None:
 def _translate_graph(
     new: Dict[str, Any],
     legacy: Dict[str, Any],
-    model: Dict[str, Any],
     role_by_dataset_id: Dict[str, str],
 ) -> None:
     """graph → explicit node/edge/branch override (a config is an explicit graph; C2)."""
@@ -476,7 +476,7 @@ def _translate_graph(
                 "graph.nodes must be a list of node-type strings or {id, type, params} dicts."
             )
         _resolve_dataset_refs(node_ids, legacy, role_by_dataset_id)
-        _fold_node_params(node_ids, legacy, model)
+        _fold_node_params(node_ids, legacy)
         legacy["graph_override"] = {"nodes": node_ids, "edges": _validate_edges(graph, node_ids)}
     elif "edges" in graph:
         raise GraphConfigError("graph.edges requires graph.nodes.")
@@ -597,9 +597,17 @@ def _translate_nodes(
         legacy["vector_db"] = {**legacy.get("vector_db", {}), **vector_db}
 
 
-def to_legacy_dict(new: Dict[str, Any]) -> Dict[str, Any]:
-    """Translate a node-centric config dict into the legacy ``from_dict`` shape."""
-    new = dict(new)
+def build_evaluation_config_kwargs(new: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate a node-centric config dict into ``EvaluationConfig.from_dict`` kwargs.
+
+    Deep-copies ``new`` up front — ``_resolve_dataset_refs``/``_fold_node_params`` mutate
+    node param dicts in place, and a caller may reuse/reread its own dict afterward (a
+    preview re-inspecting the same graph, a webapi route echoing the upload back). This is
+    the single chokepoint that does so; callers don't need their own copy.
+    """
+    import copy
+
+    new = copy.deepcopy(new)
     legacy: Dict[str, Any] = {}
     model: Dict[str, Any] = {}
 
@@ -607,7 +615,7 @@ def to_legacy_dict(new: Dict[str, Any]) -> Dict[str, Any]:
     _translate_runtime(new, legacy)
     _translate_dataset(new, legacy)
     role_by_dataset_id = _translate_datasets_map(new, legacy)
-    _translate_graph(new, legacy, model, role_by_dataset_id)
+    _translate_graph(new, legacy, role_by_dataset_id)
     _translate_nodes(new, legacy, model)
 
     # Escape hatch: any remaining top-level keys are legacy-style and passed through
@@ -620,6 +628,27 @@ def to_legacy_dict(new: Dict[str, Any]) -> Dict[str, Any]:
         else:
             legacy.setdefault(key, value)
     return legacy
+
+
+def resolved_model_config(config: Any, node: Any) -> Any:
+    """The effective ``ModelConfig`` for a graph ``node``: ``config.model`` overlaid with
+    any per-node override params (a branch's own ``model``/``size``/``name``/...).
+
+    Shared by ``pipeline/factory.py`` (validation) and ``evaluation/executor/node_pipeline.py``
+    (per-branch pipeline build) — one implementation of "a node's params win over the flat
+    default" instead of two.
+    """
+    from dataclasses import replace
+
+    from ..pipeline.graph.operators import node_kind
+
+    kind = node_kind(node.stage, node.params or {})
+    node_to_field = _MODEL_NODE_FIELDS.get(kind)
+    params = node.params or {}
+    if not node_to_field:
+        return config.model
+    overrides = {field: params[key] for key, field in node_to_field.items() if key in params}
+    return replace(config.model, **overrides) if overrides else config.model
 
 
 def _build_vdb_to_retrieval() -> Dict[str, Tuple[str, ...]]:
@@ -648,7 +677,7 @@ def legacy_yaml_to_graph_yaml(old: Dict[str, Any]) -> Dict[str, Any]:
     """Reorganize a legacy config dict into the node-centric shape (file migration).
 
     Lossless: keys not explicitly reorganized are left where they are, so the
-    ``to_legacy_dict`` escape hatch round-trips them. The result is verified by
+    ``build_evaluation_config_kwargs`` escape hatch round-trips them. The result is verified by
     comparing the rebuilt ``EvaluationConfig`` to the original in the migration script.
     """
     old = dict(old)

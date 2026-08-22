@@ -7,7 +7,7 @@ configuration or ``EvaluationError`` for failures during execution.
 """
 
 from pathlib import Path
-from typing import Any, Dict, Sequence, Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
@@ -15,10 +15,7 @@ from .config import EvaluationConfig
 from .errors import ConfigurationError, EvaluatorError
 from .config.model_presets import list_presets
 from .evaluation.results import EvaluationResults
-from .services import (
-    run_evaluation as _service_run_evaluation,
-    run_evaluation_matrix as _service_run_evaluation_matrix,
-)
+from .services import run_evaluation as _service_run_evaluation
 
 
 class EvaluationError(EvaluatorError):
@@ -286,12 +283,3 @@ def run_evaluation(config: EvaluationConfig, progress_callback=None) -> Evaluati
         raise EvaluationError(str(e)) from e
 
 
-def run_evaluation_matrix(
-    base_config: EvaluationConfig,
-    test_setups: Sequence[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Run multiple setup variants over one base config/dataset."""
-    try:
-        return _service_run_evaluation_matrix(base_config, test_setups)
-    except RuntimeError as e:
-        raise EvaluationError(str(e)) from e

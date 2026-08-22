@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Mapping
+from typing import Dict, List, Mapping, Optional
 
 from .graph import (
     ARTIFACT_CORPUS,
@@ -53,25 +53,52 @@ class Modality(str, Enum):
     SCORES = "scores"  # per-item metric scores
 
 
+# Human/dev-facing concrete shape per modality (not runtime-enforced) — the default
+# ``dtype`` a registered artifact gets when it doesn't need a more precise override.
+# A dtype is a property of the ARTIFACT (every dataset producing "corpus" produces the
+# same shape via the shared publish helpers in evaluation/handlers/source.py), not of
+# the dataset that maps a column onto it — so this stays a flat, modality-keyed table
+# rather than something DatasetDescriptor.fields carries per-dataset.
+MODALITY_DTYPES: Dict[Modality, str] = {
+    Modality.TEXT: "str",
+    Modality.AUDIO: "AudioRef",
+    Modality.IMAGE: "ImageRef",
+    Modality.VECTOR: "List[float32]",
+    Modality.DOC_SET: "List[CorpusDocument]",
+    Modality.RELEVANCE: "Dict[str, int]",
+    Modality.ANSWERS: "List[str]",
+    Modality.RESULTS: "List[Tuple[str, float]]",
+    Modality.INDEX: "RetrievalPipeline",
+    Modality.SCORES: "float",
+}
+
+
 @dataclass(frozen=True)
 class ArtifactType:
-    """A registered artifact: its ``name``, ``modality``, and whether it is a graph source."""
+    """A registered artifact: its ``name``, ``modality``, whether it is a graph source,
+    and its ``dtype`` — a human/dev-facing concrete shape (e.g. ``"List[CorpusDocument]"``),
+    defaulted from ``modality`` via :data:`MODALITY_DTYPES` when not given explicitly."""
 
     name: str
     modality: Modality
     is_source: bool = False
+    dtype: Optional[str] = None
 
 
 _REGISTRY: Dict[str, ArtifactType] = {}
 
 
 def register_artifact(
-    name: str, modality: Modality, *, is_source: bool = False
+    name: str, modality: Modality, *, is_source: bool = False, dtype: Optional[str] = None
 ) -> ArtifactType:
-    """Register an artifact type. Re-registering the same ``(modality, is_source)`` is a
-    no-op; a conflicting redefinition is an error (typo / collision protection)."""
+    """Register an artifact type. ``dtype`` defaults to the modality's entry in
+    :data:`MODALITY_DTYPES`; pass it explicitly where that coarse default is too generic
+    (e.g. ``corpus`` → ``List[CorpusDocument]`` vs. the DOC_SET default). Re-registering
+    the same ``(modality, is_source, dtype)`` is a no-op; a conflicting redefinition is
+    an error (typo / collision protection)."""
     existing = _REGISTRY.get(name)
-    new = ArtifactType(name=name, modality=modality, is_source=is_source)
+    resolved_dtype = dtype or MODALITY_DTYPES.get(modality)
+    new = ArtifactType(name=name, modality=modality, is_source=is_source, dtype=resolved_dtype)
     if existing is not None and existing != new:
         raise ValueError(
             f"artifact '{name}' already registered as {existing}; cannot redefine to {new}"
@@ -93,6 +120,10 @@ def is_registered(name: str) -> bool:
 
 def artifact_modality(name: str) -> Modality:
     return get_artifact_type(name).modality
+
+
+def artifact_dtype(name: str) -> str:
+    return get_artifact_type(name).dtype
 
 
 def list_artifacts() -> List[ArtifactType]:
@@ -128,7 +159,8 @@ register_artifact(ARTIFACT_CORPUS_VECTORS, Modality.VECTOR)
 register_artifact(ARTIFACT_REFERENCE_TRANSCRIPTION, Modality.TEXT)
 register_artifact(ARTIFACT_EMBEDDING_ALIGNMENT, Modality.SCORES)
 register_artifact(ARTIFACT_VECTOR_INDEX, Modality.INDEX)
-register_artifact(ARTIFACT_RETRIEVED, Modality.RESULTS)
+# Per-query ranked hits, not a single ranked list — override the RESULTS default.
+register_artifact(ARTIFACT_RETRIEVED, Modality.RESULTS, dtype="List[List[Tuple[str, float]]]")
 register_artifact(ARTIFACT_GENERATED_ANSWERS, Modality.ANSWERS)
 register_artifact(ARTIFACT_METRICS, Modality.SCORES)
 # Ground-truth reference transcription/question, published as a keyed artifact (A3/W1) so

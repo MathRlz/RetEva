@@ -105,7 +105,11 @@ const LLM = {endpoint: 'local', model: '',
 // catalogue is in, seed the canvas with the selected mode's starter graph.
 fetch('/api/graph/nodes').then(r => r.json()).then(d => {
   const list = document.getElementById('palette-list'); list.innerHTML = '';
-  d.nodes.forEach(n => { CATALOGUE[n.type] = n; });
+  // Index by both the raw operator name (palette-dropped nodes carry this as .type) and its
+  // default-resolved kind (seeded/preview graphs carry the alias kind instead, e.g.
+  // "dataset_source" for the "source" operator) — one lookup key set shared with Config & Run,
+  // which reads the same node_catalogue()-backed contract straight off the server payload.
+  d.nodes.forEach(n => { CATALOGUE[n.type] = n; if (n.kind) CATALOGUE[n.kind] = n; });
   const tileButton = n => {
     const b = document.createElement('button');
     b.textContent = n.label || n.palette_id || n.type;

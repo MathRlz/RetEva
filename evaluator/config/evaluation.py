@@ -127,6 +127,25 @@ class EvaluationConfig:
     cpu_stage_executor: str = "sync"
     cpu_stage_workers: int = 0  # 0 = auto (os.cpu_count)
 
+    # Memoized resolved DAG (see the ``graph`` property below). ``init=False`` so
+    # ``dataclasses.replace()`` (used throughout to derive a modified copy, e.g.
+    # ``with_auto_devices``) can never carry a stale cached graph forward onto a copy whose
+    # ``graph_override``/nodes might differ — every replace()'d copy starts uncached and
+    # re-resolves lazily on first ``.graph`` access.
+    _graph_cache: Any = field(default=None, repr=False, compare=False, init=False)
+
+    @property
+    def graph(self) -> Any:
+        """The resolved execution DAG (a ``StageGraph``) for this config — memoized on first
+        access so ``factory.py``/``validation.py`` don't each re-derive it. See
+        ``build_graph_for_config``. A branched config's own ``build_branched_graph`` result is
+        NOT cached here — callers that need the pre-CSE branched graph still call it directly."""
+        if self._graph_cache is None:
+            from ..pipeline.graph.modes import build_graph_for_config
+
+            self._graph_cache = build_graph_for_config(self)
+        return self._graph_cache
+
     @property
     def graph_template(self) -> Optional[str]:
         """The pipeline-mode LABEL for this config: derived from the explicit graph's node kinds
@@ -255,10 +274,10 @@ class EvaluationConfig:
         """Load configuration from a node-centric YAML file.
 
         The on-disk schema is the node-centric shape (experiment/dataset/graph/nodes/
-        runtime); ``to_legacy_dict`` translates it before construction. Legacy-shape keys
-        still pass through (the translator is backward-compatible), so this is the single
-        load chokepoint for the CLI, public API, and presets. Raises ConfigurationError
-        if ``validate=True`` (default) and validation fails.
+        runtime); ``build_evaluation_config_kwargs`` translates it before construction.
+        Legacy-shape keys still pass through (the translator is backward-compatible), so
+        this is the single load chokepoint for the CLI, public API, and presets. Raises
+        ConfigurationError if ``validate=True`` (default) and validation fails.
         """
         return _loading.build_from_yaml(cls, yaml_path, validate=validate)
 

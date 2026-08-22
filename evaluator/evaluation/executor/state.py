@@ -170,6 +170,15 @@ class RunState:
     # N dicts on every call). Corpus is global/immutable, so it is _SHARED and built once;
     # the retrieved-payload overlay stays per-call (branch-specific) in _answer_corpus_lookup.
     corpus_lookup_base: Optional[dict] = field(default=None, metadata=_SHARED)
+    # The answer_gen node's resolved config (global ⊕ its own node params), stashed at
+    # generation time so the answer_metrics node — a DIFFERENT node, so `resolved_config()`
+    # can't see the answer_gen node's override — scores with the same effective config that
+    # generated the answers, instead of silently falling back to the flat default.
+    answer_gen_resolved_config: Any = field(default=None, metadata=_SHARED)
+    # Same handoff for query_correction: the metrics node's `_corrected_metrics_enabled` check
+    # runs under a different node, so it can't see a query_correction node's own override
+    # without this stash (set by _stage_query_correction, read back in handlers/metrics.py).
+    query_correction_resolved_config: Any = field(default=None, metadata=_SHARED)
     # Per-item failures dropped during the run (node_id → [query_id…]); surfaced in
     # report.provenance and excluded from the keyed report (drop-and-log, §3 / T1).
     drop_sink: "DropSink" = field(

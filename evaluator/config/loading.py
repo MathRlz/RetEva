@@ -204,9 +204,9 @@ def build_from_yaml(cls, yaml_path: str, validate: bool = True) -> "Any":
     """Load configuration from a node-centric YAML file.
 
     The on-disk schema is the node-centric shape (experiment/dataset/graph/nodes/
-    runtime); ``to_legacy_dict`` translates it before construction. Legacy-shape keys
-    still pass through (the translator is backward-compatible), so this is the single
-    load chokepoint for the CLI, public API, and presets.
+    runtime); ``build_evaluation_config_kwargs`` translates it before construction.
+    Legacy-shape keys still pass through (the translator is backward-compatible), so
+    this is the single load chokepoint for the CLI, public API, and presets.
 
     Args:
         yaml_path: Path to YAML configuration file.
@@ -218,14 +218,14 @@ def build_from_yaml(cls, yaml_path: str, validate: bool = True) -> "Any":
     Raises:
         ConfigurationError: If validate=True and validation fails.
     """
-    from .graph_config import to_legacy_dict
+    from .graph_config import build_evaluation_config_kwargs
 
     with open(yaml_path, "r") as f:
         config_dict = yaml.safe_load(f)
     if config_dict is None:
         raise ConfigurationError("Empty configuration file.")
     return cls.from_dict(
-        to_legacy_dict(_expand_env(config_dict)), validate=validate
+        build_evaluation_config_kwargs(_expand_env(config_dict)), validate=validate
     )
 
 

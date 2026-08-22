@@ -23,7 +23,7 @@ from threading import Lock, Thread
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from evaluator import EvaluationConfig, run_evaluation, run_evaluation_matrix
+from evaluator import EvaluationConfig, run_evaluation
 from evaluator.cli.utils import generate_output_filename
 from evaluator.evaluation.results import EvaluationResults
 from evaluator.logging_config import get_logger
@@ -163,18 +163,14 @@ class JobManager:
         self,
         *,
         evaluation_runner: Callable[..., Any],
-        matrix_runner: Callable[..., Dict[str, Any]],
         max_workers: int = 2,
     ) -> None:
         self._evaluation_runner = evaluation_runner
-        self._matrix_runner = matrix_runner
         # Route over the one execution core. EVALUATOR_JOB_RUNNER selects how a real run
         # executes: "subprocess" (default — CLI subprocess, isolation: a crash = failed
         # job) or "service" (in-process api.run_evaluation — model reuse, no isolation).
         # Injected/custom runners (tests) always run in-process.
-        self._real_runners = (
-            evaluation_runner is run_evaluation and matrix_runner is run_evaluation_matrix
-        )
+        self._real_runners = evaluation_runner is run_evaluation
         route = os.environ.get("EVALUATOR_JOB_RUNNER", "subprocess").strip().lower()
         self._subprocess = self._real_runners and route != "service"
         self._executor = ThreadPoolExecutor(max_workers=max_workers,
@@ -222,19 +218,6 @@ class JobManager:
             inproc=_inproc, subproc=lambda jid: self._run_eval_subprocess(jid, config),
         )
 
-    def submit_matrix(
-        self, config: EvaluationConfig, test_setups: List[Dict[str, Any]],
-        baseline_setup_id: Optional[str] = None,
-    ) -> JobRecord:
-        job_id = str(uuid4())
-        return self._submit(
-            "matrix", job_id=job_id, config_snapshot=config.to_dict(),
-            inproc=lambda: self._matrix_runner(config, test_setups,
-                                               baseline_setup_id=baseline_setup_id),
-            subproc=lambda jid: self._run_matrix_subprocess(jid, config, test_setups,
-                                                            baseline_setup_id),
-        )
-
     def _submit(self, job_type, *, job_id, config_snapshot, inproc, subproc) -> JobRecord:
         job = JobRecord(job_id=job_id, job_type=job_type, config_snapshot=config_snapshot)
         with self._lock:
@@ -279,31 +262,6 @@ class JobManager:
             return result
         finally:
             shutil.rmtree(jobdir, ignore_errors=True)
-
-    def _run_matrix_subprocess(self, job_id, config, test_setups,
-                               baseline_setup_id) -> Dict[str, Any]:
-        """Run each matrix setup as its own CLI subprocess; assemble the comparison."""
-        from evaluator.services.evaluation_service import (
-            _apply_setup_overrides, _build_comparison_bundle,
-        )
-        runs: List[Dict[str, Any]] = []
-        for idx, setup in enumerate(test_setups):
-            setup_id = setup.get("setup_id") or setup.get("name") or f"setup_{idx + 1:03d}"
-            overrides = setup.get("overrides", {}) or {}
-            variant = _apply_setup_overrides(deepcopy(config), overrides)
-            if "experiment_name" not in overrides:
-                variant.experiment_name = f"{config.experiment_name}__{setup_id}"
-            result = self._run_eval_subprocess(job_id, variant)
-            runs.append({"setup_id": setup_id, "result": result})
-            self.push_progress(job_id, f"setup {setup_id} complete", idx + 1, len(test_setups), "")
-
-        comparison = _build_comparison_bundle(runs, baseline_setup_id=baseline_setup_id)
-        return {
-            "base_experiment_name": config.experiment_name,
-            "num_setups": len(test_setups),
-            "runs": runs,
-            "comparison": comparison,
-        }
 
     def _launch_cli(
         self, job_id: str, cfg_path: Path, progress_path: Optional[Path] = None

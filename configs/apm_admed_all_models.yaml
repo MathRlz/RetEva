@@ -118,6 +118,16 @@ graph:
   - {from: retrieval, to: finalize, input: retrieved}
 
 nodes:
+  audio_embedding:
+    model: attention_pool
+    encoder: whisper
+    encoder-size: large
+    dim: 2048
+    embedding_space: jina_v4_space
+    params:
+      pooling: attention
+    model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt
+    device: cuda:0
   text_embedding:
     model: jina_v4
     name: jinaai/jina-embeddings-v4

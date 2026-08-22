@@ -87,10 +87,8 @@ def check_graph_backend_dependencies(config) -> None:
     A per-node ``store`` override can name chromadb/qdrant even when the global
     ``vector_db.type`` doesn't — fail before any model loads, not mid-run.
     """
-    from .graph import build_graph_for_config
-
     try:
-        graph = build_graph_for_config(config)
+        graph = config.graph
     except Exception:
         return  # graph problems surface in their own validation path
     from .graph.operators import node_kind
@@ -147,13 +145,19 @@ class _GraphBuildPlan:
 def _graph_build_plan(graph, mcfg) -> "_GraphBuildPlan":
     """Decide what to build from ``graph``'s nodes (single source of truth).
 
-    A family pipeline is built when a node references its model field (``node_model_field``);
-    retrieval when a ``search`` node exists. The corpus embedder is *not* a distinct model
-    field — it shares the query embedder, or text-embeds the corpus cross-modally — so a text
-    embedder is *also* built when a corpus-embed node is present and a text embedder is
-    configured (the ``audio_emb_retrieval`` cross-modal corpus case). The index dim follows the
-    query embedder the graph actually has: an audio query node → ``audio_emb_dim``, a text query
-    node → the text model's registered dim."""
+    A family's SHARED pipeline is built when a node references its model field
+    (``node_model_field``) AND the flat ``model.<family>_model_type`` default is actually set.
+    The flat default is what that shared pipeline gets built from — a graph may reference the
+    field via a branch-only node that carries its own model entirely in its params (no
+    top-level ``nodes.<role>`` block ever set the default), in which case there's nothing to
+    eagerly build here; the executor resolves that node's own model per-node at run time
+    (``resolved_model_config`` / ``_node_pipeline``) instead. Retrieval is built when a
+    ``search`` node exists. The corpus embedder is *not* a distinct model field — it shares the
+    query embedder, or text-embeds the corpus cross-modally — so a text embedder is *also*
+    built when a corpus-embed node is present and a text embedder is configured (the
+    ``audio_emb_retrieval`` cross-modal corpus case). The index dim follows the query embedder
+    the graph actually has: an audio query node → ``audio_emb_dim``, a text query node → the
+    text model's registered dim."""
     from .graph.registry import node_model_field
 
     fields = set()
@@ -168,11 +172,10 @@ def _graph_build_plan(graph, mcfg) -> "_GraphBuildPlan":
         if n.stage == "embed" and (n.params or {}).get("axis") == "corpus":
             has_corpus_embed = True
 
-    build_audio = "model.audio_emb_model_type" in fields
+    build_audio = "model.audio_emb_model_type" in fields and bool(mcfg.audio_emb_model_type)
     build_text = (
-        "model.text_emb_model_type" in fields
-        or (has_corpus_embed and bool(mcfg.text_emb_model_type))
-    )
+        "model.text_emb_model_type" in fields and bool(mcfg.text_emb_model_type)
+    ) or (has_corpus_embed and bool(mcfg.text_emb_model_type))
 
     if build_audio:
         embedding_dim = mcfg.audio_emb_dim or None
@@ -186,7 +189,7 @@ def _graph_build_plan(graph, mcfg) -> "_GraphBuildPlan":
         embedding_dim = None
 
     return _GraphBuildPlan(
-        build_asr="model.asr_model_type" in fields,
+        build_asr="model.asr_model_type" in fields and bool(mcfg.asr_model_type),
         build_text=build_text,
         build_audio=build_audio,
         build_retrieval=has_search,
@@ -364,9 +367,7 @@ def create_pipeline_from_config(
     # mode string (graph-first Phase 2). The mode still selects the default graph + labels the
     # bundle; the build *decision* is graph-authoritative, so an explicit graph (or one with no
     # ASR node) never builds a model it doesn't use.
-    from .graph.modes import build_graph_for_config
-
-    plan = _graph_build_plan(build_graph_for_config(config), config.model)
+    plan = _graph_build_plan(config.graph, config.model)
     logger.info(
         "pipeline build plan (template=%s): asr=%s text_emb=%s audio_emb=%s retrieval=%s",
         mode, plan.build_asr, plan.build_text, plan.build_audio, plan.build_retrieval,

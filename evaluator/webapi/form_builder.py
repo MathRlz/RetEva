@@ -53,7 +53,12 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     Empty values are dropped."""
     from dataclasses import fields as _dc_fields
 
-    from evaluator.config.graph_config import _FEATURE_NODE_CONFIG, _MODEL_NODE_FIELDS
+    from evaluator.config.graph_config import (
+        _FEATURE_NODE_CONFIG,
+        _MODEL_NODE_FIELDS,
+        resolved_model_config,
+    )
+    from evaluator.pipeline.factory import effective_vector_db_config
     from evaluator.pipeline.graph.operators import (
         node_kind,
         operator_discriminators,
@@ -63,17 +68,23 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     kind = node_kind(node.stage, node.params)
     info: Dict[str, Any] = {}
     if kind in _MODEL_NODE_FIELDS:
+        # config.model overlaid with this node's own params — the resolver factory.py/
+        # node_pipeline.py use, so the panel shows what actually resolves, not just the flat
+        # default (the generic node.params loop below would overlay the same values anyway,
+        # but resolving here keeps this block self-consistent with the rest of the pipeline).
+        mcfg = resolved_model_config(config, node)
         for yaml_key, cfg_field in _MODEL_NODE_FIELDS[kind].items():
-            val = getattr(config.model, cfg_field, None)
+            val = getattr(mcfg, cfg_field, None)
             if val not in (None, "", {}):
                 info[yaml_key] = val
     elif kind == "retrieval":
-        info["k"] = config.vector_db.k
-        info["mode"] = config.vector_db.retrieval_mode
-        if getattr(config.vector_db, "reranker_enabled", False):
+        vdb = effective_vector_db_config(config.vector_db, node.params)
+        info["k"] = vdb.k
+        info["mode"] = vdb.retrieval_mode
+        if getattr(vdb, "reranker_enabled", False):
             # loader-compatible nested form (a bare string round-trips as an unknown key)
             info["reranker"] = {"enabled": True,
-                                "mode": config.vector_db.reranker_mode or "token_overlap"}
+                                "mode": vdb.reranker_mode or "token_overlap"}
     elif kind in _FEATURE_NODE_CONFIG:
         # Rehydrate the capability config the loader folded OFF this node (audit 2026-07 #2):
         # the canvas must show the CONFIGURED values, not the form defaults, or a
@@ -259,10 +270,12 @@ def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
     shape: ``{mode, levels, nodes:[{id, type, params, bindings, …form}]}``) — but with each
     node's *configured* model/dataset/settings folded into its params.
 
-    This is the inverse of the builder's ``exportSpec`` → :func:`graph_config.to_legacy_dict`
-    fold (which lifts graph-node params into ``config.model`` / ``vector_db`` / ``data``): we
-    push the resolved per-node config back onto the node so opening a YAML config shows the real
-    experiment, editable, and re-running it from the canvas reproduces the same config.
+    This is the inverse of the builder's ``exportSpec`` →
+    :func:`graph_config.build_evaluation_config_kwargs` fold (which lifts a node's
+    vector_db/retrieval/feature params up into their sub-configs; a node's own model params
+    stay on the node either way): we push the resolved per-node config back onto the node so
+    opening a YAML config shows the real experiment, editable, and re-running it from the
+    canvas reproduces the same config.
 
     A branched config renders its **base** graph (not the CSE-expanded ``@branch`` DAG) and passes
     the branch definitions through, so the Branches panel re-hydrates — the same shape as a saved
@@ -656,6 +669,7 @@ def node_catalogue() -> Dict[str, Any]:
     ``family`` names the model registry the node's model picker reads (null = model-free);
     ``node_params`` are the node-centric YAML keys its param form offers."""
     from ..pipeline.graph import _NODE_REGISTRY
+    from ..pipeline.graph.operators import node_kind
     from ..pipeline.introspection import is_structural
 
     nodes = []
@@ -666,6 +680,13 @@ def node_catalogue() -> Dict[str, Any]:
         nodes.append(
             {
                 "type": stage,
+                # The default-resolved KIND (e.g. "source" → "dataset_source") — seeded/preview
+                # graphs stamp this on node.type (not the raw operator) so a node form can show
+                # per-instance context (audit 2026-08: builder's CATALOGUE lookup, keyed only by
+                # `stage`, missed those nodes and fell back to an empty spec → a false "no
+                # declared params". Emitting `kind` lets the client index the catalogue under
+                # BOTH names — the single contract preview/Config&Run/builder all now share).
+                "kind": node_kind(stage, {}),
                 "label": display_label(stage, None),
                 "category": _resolve(d.category, {}),
                 "domain": _resolve(d.domain, {}),
