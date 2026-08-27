@@ -1,0 +1,666 @@
+# Full TTS x ASR x text_embedding comparison on pubmed_qa (retrieval-only, no generation).
+#
+# 3 TTS (xtts_v2, m4t, piper) x 3 ASR (whisper, seamless_m4t, wav2vec2) x 3 text_embedding
+# (jina_v4, sonar, labse) = 27 leaf branches, full cartesian product.
+#
+# Only the MEANINGFUL nodes are written here: dataset_source, tts, corpus_embedding,
+# vector_db, asr, text_embedding, retrieval. retrieval_metrics/transcription_metrics/
+# metrics/finalize are STRUCTURAL and get appended automatically per retrieval node
+# (complete_structural_plumbing, one full private chain per variant root — R5/
+# multi-variant) — do not add them by hand here, that produces dangling duplicate nodes
+# the auto-deriver doesn't recognize as already satisfied.
+#
+# Sharing (not duplicated 27x):
+#   - corpus_embedding/vector_db: 3 (one per text_embedding model — the corpus only needs
+#     re-embedding once per embedding space, independent of tts/asr).
+#   - transcription_metrics is NOT shared here (auto-plumbing gives each of the 27
+#     retrieval variants its own private chain, so ASR-quality WER/CER gets recomputed
+#     once per leaf instead of once per tts x asr pair — 27x instead of 9x. Cheap relative
+#     to TTS/ASR/embedding cost; a hand-shared version was tried and produces orphaned
+#     duplicate nodes instead of savings, see above).
+#
+# Pipeline per leaf: dataset_source.query_text -> tts -> asr -> text_embedding -> retrieval,
+# then the auto-appended retrieval_metrics/transcription_metrics -> metrics -> finalize.
+# No answer_gen/answer_judge/query_refine (no generation).
+#
+# COST: 27 x full retrieval + transcription-metrics sweep over the dataset, plus 3x corpus
+# embedding, 9x ASR, 3x TTS. Verified: builds to 181 nodes (73 meaningful + 27x4 auto
+# structural), zero embedding-space mismatches, zero dangling/orphaned nodes, every
+# model-type/size/name resolves cleanly (validate_models + per-node factory dry-check).
+# Fill in dataset.questions/dataset.corpus below before running.
+experiment:
+  name: pubmed_qa_tts_asr_embed_cmp
+  output_dir: evaluation_results
+
+dataset:
+  id: pubmed_qa
+  questions: questions.json
+  corpus: corpus.json
+  trace_limit: 0
+  batch_size: 8
+
+data:
+  num_workers: 0
+
+graph:
+  nodes:
+  - dataset_source
+  - id: tts_xtts
+    type: tts
+    params:
+      provider: xtts_v2
+      language: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_qa_tts_asr_embed_cmp/xtts/audio
+
+  - id: tts_m4t
+    type: tts
+    params:
+      provider: m4t
+      language: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_qa_tts_asr_embed_cmp/m4t/audio
+
+  - id: tts_piper
+    type: tts
+    params:
+      provider: piper
+      voice: en_US-lessac-medium
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_qa_tts_asr_embed_cmp/piper/audio
+
+  - id: corpus_embedding_jina
+    type: corpus_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: vector_db_jina
+    type: vector_db
+    params:
+      store: inmemory
+
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+
+  - id: corpus_embedding_labse
+    type: corpus_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: vector_db_labse
+    type: vector_db
+    params:
+      store: inmemory
+
+  - id: asr_xtts_whisper
+    type: asr
+    params:
+      model: whisper
+      size: large-v2
+      device: "cuda:0"
+
+  - id: asr_xtts_m4t
+    type: asr
+    params:
+      model: seamless_m4t
+      device: "cuda:0"
+
+  - id: asr_xtts_wav2vec2
+    type: asr
+    params:
+      model: wav2vec2
+      name: jonatasgrosman/wav2vec2-large-xlsr-53-english
+      device: "cuda:0"
+
+  - id: asr_m4t_whisper
+    type: asr
+    params:
+      model: whisper
+      size: large-v2
+      device: "cuda:0"
+
+  - id: asr_m4t_m4t
+    type: asr
+    params:
+      model: seamless_m4t
+      device: "cuda:0"
+
+  - id: asr_m4t_wav2vec2
+    type: asr
+    params:
+      model: wav2vec2
+      name: jonatasgrosman/wav2vec2-large-xlsr-53-english
+      device: "cuda:0"
+
+  - id: asr_piper_whisper
+    type: asr
+    params:
+      model: whisper
+      size: large-v2
+      device: "cuda:0"
+
+  - id: asr_piper_m4t
+    type: asr
+    params:
+      model: seamless_m4t
+      device: "cuda:0"
+
+  - id: asr_piper_wav2vec2
+    type: asr
+    params:
+      model: wav2vec2
+      name: jonatasgrosman/wav2vec2-large-xlsr-53-english
+      device: "cuda:0"
+
+  - id: text_embedding_xtts_whisper_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_xtts_whisper_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_whisper_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_xtts_whisper_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_whisper_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_xtts_whisper_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_m4t_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_xtts_m4t_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_m4t_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_xtts_m4t_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_m4t_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_xtts_m4t_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_wav2vec2_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_xtts_wav2vec2_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_wav2vec2_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_xtts_wav2vec2_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_xtts_wav2vec2_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_xtts_wav2vec2_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_whisper_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_m4t_whisper_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_whisper_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_m4t_whisper_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_whisper_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_m4t_whisper_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_m4t_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_m4t_m4t_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_m4t_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_m4t_m4t_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_m4t_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_m4t_m4t_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_wav2vec2_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_m4t_wav2vec2_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_wav2vec2_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_m4t_wav2vec2_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_m4t_wav2vec2_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_m4t_wav2vec2_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_whisper_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_piper_whisper_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_whisper_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_piper_whisper_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_whisper_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_piper_whisper_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_m4t_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_piper_m4t_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_m4t_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_piper_m4t_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_m4t_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_piper_m4t_labse
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_wav2vec2_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      device: "cuda:1"
+
+  - id: retrieval_piper_wav2vec2_jina
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_wav2vec2_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      device: "cuda:1"
+
+  - id: retrieval_piper_wav2vec2_sonar
+    type: retrieval
+    params:
+      k: 10
+
+  - id: text_embedding_piper_wav2vec2_labse
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+
+  - id: retrieval_piper_wav2vec2_labse
+    type: retrieval
+    params:
+      k: 10
+  edges:
+  - {from: dataset_source, to: tts_xtts, input: query_text}
+  - {from: dataset_source, to: tts_m4t, input: query_text}
+  - {from: dataset_source, to: tts_piper, input: query_text}
+  - {from: dataset_source, to: corpus_embedding_jina, input: corpus}
+  - {from: corpus_embedding_jina, to: vector_db_jina, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_labse, input: corpus}
+  - {from: corpus_embedding_labse, to: vector_db_labse, input: corpus_vectors}
+  - {from: tts_xtts, to: asr_xtts_whisper, input: query_audio}
+  - {from: tts_xtts, to: asr_xtts_m4t, input: query_audio}
+  - {from: tts_xtts, to: asr_xtts_wav2vec2, input: query_audio}
+  - {from: tts_m4t, to: asr_m4t_whisper, input: query_audio}
+  - {from: tts_m4t, to: asr_m4t_m4t, input: query_audio}
+  - {from: tts_m4t, to: asr_m4t_wav2vec2, input: query_audio}
+  - {from: tts_piper, to: asr_piper_whisper, input: query_audio}
+  - {from: tts_piper, to: asr_piper_m4t, input: query_audio}
+  - {from: tts_piper, to: asr_piper_wav2vec2, input: query_audio}
+  - {from: asr_xtts_whisper, to: text_embedding_xtts_whisper_jina, input: query_text}
+  - {from: text_embedding_xtts_whisper_jina, output: text_query_vectors, to: retrieval_xtts_whisper_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_xtts_whisper_jina, input: vector_index}
+  - {from: asr_xtts_whisper, to: retrieval_xtts_whisper_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_whisper_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_whisper_jina, input: relevant_docs}
+  - {from: asr_xtts_whisper, to: text_embedding_xtts_whisper_sonar, input: query_text}
+  - {from: text_embedding_xtts_whisper_sonar, output: text_query_vectors, to: retrieval_xtts_whisper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_whisper_sonar, input: vector_index}
+  - {from: asr_xtts_whisper, to: retrieval_xtts_whisper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_whisper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_whisper_sonar, input: relevant_docs}
+  - {from: asr_xtts_whisper, to: text_embedding_xtts_whisper_labse, input: query_text}
+  - {from: text_embedding_xtts_whisper_labse, output: text_query_vectors, to: retrieval_xtts_whisper_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_xtts_whisper_labse, input: vector_index}
+  - {from: asr_xtts_whisper, to: retrieval_xtts_whisper_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_whisper_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_whisper_labse, input: relevant_docs}
+  - {from: asr_xtts_m4t, to: text_embedding_xtts_m4t_jina, input: query_text}
+  - {from: text_embedding_xtts_m4t_jina, output: text_query_vectors, to: retrieval_xtts_m4t_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_xtts_m4t_jina, input: vector_index}
+  - {from: asr_xtts_m4t, to: retrieval_xtts_m4t_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_m4t_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_m4t_jina, input: relevant_docs}
+  - {from: asr_xtts_m4t, to: text_embedding_xtts_m4t_sonar, input: query_text}
+  - {from: text_embedding_xtts_m4t_sonar, output: text_query_vectors, to: retrieval_xtts_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_m4t_sonar, input: vector_index}
+  - {from: asr_xtts_m4t, to: retrieval_xtts_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_m4t_sonar, input: relevant_docs}
+  - {from: asr_xtts_m4t, to: text_embedding_xtts_m4t_labse, input: query_text}
+  - {from: text_embedding_xtts_m4t_labse, output: text_query_vectors, to: retrieval_xtts_m4t_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_xtts_m4t_labse, input: vector_index}
+  - {from: asr_xtts_m4t, to: retrieval_xtts_m4t_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_m4t_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_m4t_labse, input: relevant_docs}
+  - {from: asr_xtts_wav2vec2, to: text_embedding_xtts_wav2vec2_jina, input: query_text}
+  - {from: text_embedding_xtts_wav2vec2_jina, output: text_query_vectors, to: retrieval_xtts_wav2vec2_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_xtts_wav2vec2_jina, input: vector_index}
+  - {from: asr_xtts_wav2vec2, to: retrieval_xtts_wav2vec2_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_jina, input: relevant_docs}
+  - {from: asr_xtts_wav2vec2, to: text_embedding_xtts_wav2vec2_sonar, input: query_text}
+  - {from: text_embedding_xtts_wav2vec2_sonar, output: text_query_vectors, to: retrieval_xtts_wav2vec2_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_wav2vec2_sonar, input: vector_index}
+  - {from: asr_xtts_wav2vec2, to: retrieval_xtts_wav2vec2_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_sonar, input: relevant_docs}
+  - {from: asr_xtts_wav2vec2, to: text_embedding_xtts_wav2vec2_labse, input: query_text}
+  - {from: text_embedding_xtts_wav2vec2_labse, output: text_query_vectors, to: retrieval_xtts_wav2vec2_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_xtts_wav2vec2_labse, input: vector_index}
+  - {from: asr_xtts_wav2vec2, to: retrieval_xtts_wav2vec2_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_labse, input: relevant_docs}
+  - {from: asr_m4t_whisper, to: text_embedding_m4t_whisper_jina, input: query_text}
+  - {from: text_embedding_m4t_whisper_jina, output: text_query_vectors, to: retrieval_m4t_whisper_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_m4t_whisper_jina, input: vector_index}
+  - {from: asr_m4t_whisper, to: retrieval_m4t_whisper_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_whisper_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_whisper_jina, input: relevant_docs}
+  - {from: asr_m4t_whisper, to: text_embedding_m4t_whisper_sonar, input: query_text}
+  - {from: text_embedding_m4t_whisper_sonar, output: text_query_vectors, to: retrieval_m4t_whisper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_whisper_sonar, input: vector_index}
+  - {from: asr_m4t_whisper, to: retrieval_m4t_whisper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_whisper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_whisper_sonar, input: relevant_docs}
+  - {from: asr_m4t_whisper, to: text_embedding_m4t_whisper_labse, input: query_text}
+  - {from: text_embedding_m4t_whisper_labse, output: text_query_vectors, to: retrieval_m4t_whisper_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_m4t_whisper_labse, input: vector_index}
+  - {from: asr_m4t_whisper, to: retrieval_m4t_whisper_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_whisper_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_whisper_labse, input: relevant_docs}
+  - {from: asr_m4t_m4t, to: text_embedding_m4t_m4t_jina, input: query_text}
+  - {from: text_embedding_m4t_m4t_jina, output: text_query_vectors, to: retrieval_m4t_m4t_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_m4t_m4t_jina, input: vector_index}
+  - {from: asr_m4t_m4t, to: retrieval_m4t_m4t_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_m4t_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_m4t_jina, input: relevant_docs}
+  - {from: asr_m4t_m4t, to: text_embedding_m4t_m4t_sonar, input: query_text}
+  - {from: text_embedding_m4t_m4t_sonar, output: text_query_vectors, to: retrieval_m4t_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_m4t_sonar, input: vector_index}
+  - {from: asr_m4t_m4t, to: retrieval_m4t_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_m4t_sonar, input: relevant_docs}
+  - {from: asr_m4t_m4t, to: text_embedding_m4t_m4t_labse, input: query_text}
+  - {from: text_embedding_m4t_m4t_labse, output: text_query_vectors, to: retrieval_m4t_m4t_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_m4t_m4t_labse, input: vector_index}
+  - {from: asr_m4t_m4t, to: retrieval_m4t_m4t_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_m4t_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_m4t_labse, input: relevant_docs}
+  - {from: asr_m4t_wav2vec2, to: text_embedding_m4t_wav2vec2_jina, input: query_text}
+  - {from: text_embedding_m4t_wav2vec2_jina, output: text_query_vectors, to: retrieval_m4t_wav2vec2_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_m4t_wav2vec2_jina, input: vector_index}
+  - {from: asr_m4t_wav2vec2, to: retrieval_m4t_wav2vec2_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_jina, input: relevant_docs}
+  - {from: asr_m4t_wav2vec2, to: text_embedding_m4t_wav2vec2_sonar, input: query_text}
+  - {from: text_embedding_m4t_wav2vec2_sonar, output: text_query_vectors, to: retrieval_m4t_wav2vec2_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_wav2vec2_sonar, input: vector_index}
+  - {from: asr_m4t_wav2vec2, to: retrieval_m4t_wav2vec2_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_sonar, input: relevant_docs}
+  - {from: asr_m4t_wav2vec2, to: text_embedding_m4t_wav2vec2_labse, input: query_text}
+  - {from: text_embedding_m4t_wav2vec2_labse, output: text_query_vectors, to: retrieval_m4t_wav2vec2_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_m4t_wav2vec2_labse, input: vector_index}
+  - {from: asr_m4t_wav2vec2, to: retrieval_m4t_wav2vec2_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_labse, input: relevant_docs}
+  - {from: asr_piper_whisper, to: text_embedding_piper_whisper_jina, input: query_text}
+  - {from: text_embedding_piper_whisper_jina, output: text_query_vectors, to: retrieval_piper_whisper_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_piper_whisper_jina, input: vector_index}
+  - {from: asr_piper_whisper, to: retrieval_piper_whisper_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_whisper_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_whisper_jina, input: relevant_docs}
+  - {from: asr_piper_whisper, to: text_embedding_piper_whisper_sonar, input: query_text}
+  - {from: text_embedding_piper_whisper_sonar, output: text_query_vectors, to: retrieval_piper_whisper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_whisper_sonar, input: vector_index}
+  - {from: asr_piper_whisper, to: retrieval_piper_whisper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_whisper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_whisper_sonar, input: relevant_docs}
+  - {from: asr_piper_whisper, to: text_embedding_piper_whisper_labse, input: query_text}
+  - {from: text_embedding_piper_whisper_labse, output: text_query_vectors, to: retrieval_piper_whisper_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_piper_whisper_labse, input: vector_index}
+  - {from: asr_piper_whisper, to: retrieval_piper_whisper_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_whisper_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_whisper_labse, input: relevant_docs}
+  - {from: asr_piper_m4t, to: text_embedding_piper_m4t_jina, input: query_text}
+  - {from: text_embedding_piper_m4t_jina, output: text_query_vectors, to: retrieval_piper_m4t_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_piper_m4t_jina, input: vector_index}
+  - {from: asr_piper_m4t, to: retrieval_piper_m4t_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_m4t_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_m4t_jina, input: relevant_docs}
+  - {from: asr_piper_m4t, to: text_embedding_piper_m4t_sonar, input: query_text}
+  - {from: text_embedding_piper_m4t_sonar, output: text_query_vectors, to: retrieval_piper_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_m4t_sonar, input: vector_index}
+  - {from: asr_piper_m4t, to: retrieval_piper_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_m4t_sonar, input: relevant_docs}
+  - {from: asr_piper_m4t, to: text_embedding_piper_m4t_labse, input: query_text}
+  - {from: text_embedding_piper_m4t_labse, output: text_query_vectors, to: retrieval_piper_m4t_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_piper_m4t_labse, input: vector_index}
+  - {from: asr_piper_m4t, to: retrieval_piper_m4t_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_m4t_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_m4t_labse, input: relevant_docs}
+  - {from: asr_piper_wav2vec2, to: text_embedding_piper_wav2vec2_jina, input: query_text}
+  - {from: text_embedding_piper_wav2vec2_jina, output: text_query_vectors, to: retrieval_piper_wav2vec2_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_piper_wav2vec2_jina, input: vector_index}
+  - {from: asr_piper_wav2vec2, to: retrieval_piper_wav2vec2_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_jina, input: relevant_docs}
+  - {from: asr_piper_wav2vec2, to: text_embedding_piper_wav2vec2_sonar, input: query_text}
+  - {from: text_embedding_piper_wav2vec2_sonar, output: text_query_vectors, to: retrieval_piper_wav2vec2_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_wav2vec2_sonar, input: vector_index}
+  - {from: asr_piper_wav2vec2, to: retrieval_piper_wav2vec2_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_sonar, input: relevant_docs}
+  - {from: asr_piper_wav2vec2, to: text_embedding_piper_wav2vec2_labse, input: query_text}
+  - {from: text_embedding_piper_wav2vec2_labse, output: text_query_vectors, to: retrieval_piper_wav2vec2_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_piper_wav2vec2_labse, input: vector_index}
+  - {from: asr_piper_wav2vec2, to: retrieval_piper_wav2vec2_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_labse, input: relevant_docs}
+
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

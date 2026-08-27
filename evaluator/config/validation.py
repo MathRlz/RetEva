@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Tuple
 from ..errors import ConfigurationError
 from .base import (
     estimate_model_memory_gb,
-    get_text_embedding_dim,
     DEVICE_PATTERN,
 )
 
@@ -77,7 +76,6 @@ def collect_problems(config: Any) -> Tuple[List[str], List[str]]:
     _validate_template(config, errors)
     _validate_devices(config, errors, warnings, cuda_available, cuda_count)
     _validate_model_types(config, errors)
-    _validate_embedding_dims(config, warnings)
     if cuda_available:
         _validate_gpu_memory(config, warnings, cuda_count)
     _validate_data_params(config, errors, warnings)
@@ -288,20 +286,6 @@ def _validate_model_types(config, errors):
                 f"Available types: {available}. "
                 f"Tip: use one listed type or call EvaluationConfig.from_preset(...)."
             )
-
-
-def _validate_embedding_dims(config, warnings):
-    """Warn when audio/text embedding dimensions disagree."""
-    if config.graph_template != "audio_emb_retrieval":
-        return
-    text_emb_dim = get_text_embedding_dim(config.model.text_emb_model_type)
-    audio_emb_dim = config.model.audio_emb_dim
-    if text_emb_dim is not None and audio_emb_dim != text_emb_dim:
-        warnings.append(
-            f"Embedding dimension mismatch: audio_emb_dim ({audio_emb_dim}) != "
-            f"text embedding dim for '{config.model.text_emb_model_type}' ({text_emb_dim}). "
-            f"Ensure your audio embedding model projects to the correct dimension."
-        )
 
 
 def _validate_gpu_memory(config, warnings, cuda_count):
