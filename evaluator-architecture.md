@@ -77,9 +77,10 @@ committed parity baselines byte-for-byte: `python3 m1c_check.py <config> baselin
    produces; the executable handler is the function. Identity (`id`) is separate from type, so a
    type may appear many times (duplicate/parallel instances).
 3. **Edges are explicit, port-level, and part of the spec** `[impl]` (2026-07-09). Every config
-   edge names both ends:
-   `{from: <node>, output: <artifact>, to: <node>, input: <port>}`; a portless `{from, to}` adds
-   ordering only. Derivation survives solely as an **authoring assistant** (the builder's plumbing
+   edge names both ends: `{from: <node>, to: <node>, input: <port>}`, with
+   `output: <artifact>` added only when the producer's artifact name differs from the port
+   (the OneOf alias chains — `text_query_vectors` → `query_vectors`); omitted, `output`
+   *is* `input`. A portless `{from, to}` adds ordering only. Derivation survives solely as an **authoring assistant** (the builder's plumbing
    derive + `evaluator graph --emit-edges`, which prints a ready-to-paste `edges:` block) — never
    as a load-time fallback. Multiple edges into one input stay legal (fallback producers); the
    runtime read (priority + published-fallback, §3) is unchanged. A multi-name (OneOf) port is
@@ -171,8 +172,11 @@ TTS-bridge datasets where the spoken text *is* the question — conflating them 
 semantic trap, now pinned by `tests/test_typed_port_routing.py` + `tests/test_run_graph_parity.py`.
 
 **Dataset types today** (`datasets/types.py`, `descriptor.py`) — capability flags
-(`requires_audio/text`, `supports_generation`, `evaluation_mode`, `compatible_pipeline_modes` — now
-naming graph templates) drive validation + default metrics:
+(`requires_audio/text`, `supports_generation`, `evaluation_mode`) drive validation; which
+metrics actually compute is decided per-run from the built graph
+(`applicable_metrics(available)`, §7), never guessed from the dataset alone.
+`derived_outputs` (an audio dataset, or `evaluation_mode` containing "retrieval") decides
+whether a self-retrieval `corpus` output is advertised:
 
 | Type (`DatasetType`) | Outputs | Eval mode |
 |------|---------|-----------|
@@ -649,8 +653,10 @@ to match scored artifacts to metrics (`evaluation/metric_registry.py`, `register
 > `reference_text` / `reference_transcription` (§2/§3) were always distinct and unaffected.)
 
 - The report computes **every metric whose inputs are satisfiable** (collect-all is the
-  effective behavior of both report paths); the dataset's `evaluation_mode` set
-  (`METRICS_BY_MODE`) defines which of them surface as the flat headline aliases.
+  effective behavior of both report paths — `applicable_metrics(available)`, checked against
+  the built graph's actual produced artifacts, never a per-dataset guess); a fixed priority
+  list (`evaluation/results.py:HEADLINE_METRICS`) decides which of the computed metrics
+  surface first as the flat headline aliases — keys absent from a given run are just skipped.
 - A top-level **`metrics:` allowlist** (B1) preregisters the panel: when set, the run
   computes EXACTLY those registry metrics — explicit naming bypasses `MetricSpec.opt_in`, a
   name whose inputs the graph doesn't produce is skipped, and an unregistered name is a
@@ -761,19 +767,22 @@ binding-derived, sees every terminal read.
   thesis hypothesis (`configs/e2e_pubmed_qa_3branch.yaml`, real ref/asr/corr report with
   `asr_vs_ref`/`corr_vs_ref` deltas validated on amazing_curie).
 - **Across runs**: per-run aggregates roll up into the leaderboard / comparison surface
-  (`/api/leaderboard`). `[impl]` for storage. Multi-run promotion `[impl]`: declarative
-  **sweeps** (`analysis/sweep.py`, `evaluator sweep` — a base config × axes expands via
-  `GridSearch` to a tagged run-group); the leaderboard carries `experiment_group`/`tags` with a
-  group filter so a sweep's runs query/pivot as one experiment; and the offline `compare`
+  (`/api/leaderboard`). `[impl]` for storage. Multi-run promotion `[impl]`: comparing whole runs
+  (e.g. different LLMs/models/params) is expressed as explicit multi-variant graphs — distinctly
+  named nodes sharing common upstream nodes in one flat `graph.nodes`/`graph.edges` — not a
+  declarative sweep (removed: `analysis/sweep.py`, `analysis/grid_search.py`, `evaluator sweep`
+  implicitly expanded a base config × axes into a tagged run-group; superseded by the explicit
+  multi-variant graph model). The leaderboard carries `experiment_group`/`tags` with a group
+  filter so a run-group's runs query/pivot as one experiment; the offline `compare`
   (`analysis/significance.py:compare_experiments`) applies **BH-FDR** across the metric panel +
   flags **under-powered** comparisons (n < 20). (A second, programmatic multi-run mechanism —
   `services/matrix.py:run_evaluation_matrix`, a list of per-run config overrides sharing one
-  base — predates sweeps and remains the API-side comparison path.) A **cross-run Pareto frontier** over a run group
+  base — remains the API-side comparison path.) A **cross-run Pareto frontier** over a run group
   `[impl]` surfaces the non-dominated trade-off set across objectives (`analysis/pareto.py`
   multi-objective non-domination; `ExperimentStore.group_runs`; `GET /api/leaderboard/pareto` +
-  a server-rendered `/ui/pareto` scatter/table; objectives like `MRR:max,latency_ms:min`). A
-  sweep-submit form + report export to **MLflow/W&B** (`evaluator export -f mlflow|wandb`,
-  `analysis/tracking_export.py`) round out the cross-run surface.
+  a server-rendered `/ui/pareto` scatter/table; objectives like `MRR:max,latency_ms:min`). Report
+  export to **MLflow/W&B** (`evaluator export -f mlflow|wandb`, `analysis/tracking_export.py`)
+  rounds out the cross-run surface.
 
 ### Statistical rigor on the deltas
 
@@ -903,8 +912,8 @@ blackboard `B` is a partial map `(id, name) ↦ value`. `read(v, x)` returns `B[
 newest `p ∈ β(v,x)` that has published `x` — unchanged either way.
 
 **Build** (`build_graph_from_spec`): bind each node's ports from the config's explicit
-`graph.edges` — port-level `{from, output, to, input}` entries define bindings, the
-portless `{from, to}` form adds ordering only; a `graph.nodes` list without `edges:` is a load
+`graph.edges` — port-level `{from, to, input}` entries define bindings (`output` spelled out
+only for a rename), the portless `{from, to}` form adds ordering only; a `graph.nodes` list without `edges:` is a load
 error (generate them with `evaluator graph --emit-edges`). `validate_graph_artifacts` checks
 every required input is satisfiable in topological order (plus that every edge
 names a real node, a real output, and a compatible input port); `topological_levels()` yields
@@ -1102,7 +1111,7 @@ is that the wrapped flow is opaque to the DAG surfaces (diagram, CSE, per-node p
 ## 10. Configuration
 
 The full `EvaluationConfig` (dataclass tree in `config/`) is the experiment. Node-centric YAML
-loads through `config/graph_config.py:to_legacy_dict` — the single chokepoint (CLI/API/presets/
+loads through `config/graph_config.py:build_evaluation_config_kwargs` — the single chokepoint (CLI/API/presets/
 webapi).
 
 ```yaml
@@ -1113,14 +1122,14 @@ datasets:                                   # multi-source; or single `dataset:`
 graph:
   nodes: [dataset_source, corpus_embedding, vector_db, asr, query_correction,  # the explicit spec
           text_embedding, retrieval, answer_gen, answer_metrics, metrics, finalize]
-  edges:                                    # port-level: output → input, per artifact
-    - { from: dataset_source, output: corpus,      to: corpus_embedding, input: corpus }
-    - { from: corpus_embedding, output: corpus_vectors, to: vector_db,   input: corpus_vectors }
-    - { from: asr, output: query_text, to: query_correction, input: query_text }
+  edges:                                    # port-level; `output:` only when it differs
+    - { from: dataset_source, to: corpus_embedding, input: corpus }
+    - { from: corpus_embedding, to: vector_db, input: corpus_vectors }
+    - { from: asr, to: query_correction, input: query_text }
     - { from: query_correction, output: corrected_query_text, to: text_embedding, input: query_text }
-    - { from: asr, output: query_text, to: text_embedding, input: query_text }   # fallback (correction off)
+    - { from: asr, to: text_embedding, input: query_text }   # fallback (correction off)
     - { from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors }
-    - { from: vector_db, output: vector_index, to: retrieval, input: vector_index }
+    - { from: vector_db, to: retrieval, input: vector_index }
     # … (GT side-channels + metric inputs; `evaluator graph --emit-edges` generates the block)
   branches:                                 # expand+CSE (§8); each overrides only diffs
     - { id: ref,  asr: { oracle: true },  query_correction: { enabled: false } }
@@ -1139,7 +1148,7 @@ graph/branch nodes with `params`;
 `parallel_enabled` turns on intra-level branch concurrency (§14). **Unknown/misspelled keys are
 rejected** with a path-named `ConfigurationError` before any heavy work (§14) — with one
 deliberate exception: an unknown **top-level** key is passed through as legacy-style config
-(`graph_config.py:to_legacy_dict` escape hatch, kept for partial migration / power users);
+(`graph_config.py:build_evaluation_config_kwargs` escape hatch, kept for partial migration / power users);
 sub-config keys and `graph:`/`nodes:`/`edges:` content are strictly rejected. Sub-configs
 (`config/*.py`): `data`, `model`, `vector_db`, `cache`, `logging`, `tracking`, `service_runtime`,
 `streaming`, `rag`, `llm_backend`(+`llm_server`), `dataset_sink`, and features (`judge`,
@@ -1201,14 +1210,16 @@ LLM nodes call an OpenAI-compatible endpoint or a local LLM server (`models/llm`
   `offload_policy` (on_finish | never | **`on_finish_soft_cpu`** `[impl]` — instead of freeing a
   model after its last use, park it warm on host RAM in a bounded LRU+TTL pool so a later
   stage/run re-acquires it with a CPU→device move, not a full reload; offload events recorded in
-  `report.provenance.offload`). `devices/capability.py:usable_gpu_indices` filters CUDA
-  devices whose arch is absent from `torch.cuda.get_arch_list()` (AMD iGPUs / unbuilt `sm_XX`).
+  `report.provenance.offload`). Device visibility is torch's: `torch.cuda.device_count()` is the
+  only source of "how many GPUs", and a device that must not be used (an unsupported iGPU on a
+  ROCm box — placing a model there SIGSEGVs) is hidden with `CUDA_VISIBLE_DEVICES` /
+  `HIP_VISIBLE_DEVICES`, not by a repo-side arch filter.
   A configured `device_pool` allocates model families to GPUs via `devices/pool.py:GPUPool`
   (one builder, `pool_from_config`) with exactly two strategies: **manual** when
   `model_device_overrides` maps families to devices, **memory-aware** (most free memory)
   otherwise. TTS runs + offloads before embedders load (no co-resident native runtimes).
-- **CLI** (`cli/main.py`, 13 subcommands): `run`, `graph` (preview / `--emit-edges` /
-  `--emit-metrics`), `presets`, `datasets`, `cache`, `leaderboard`, `sweep`, `compare`,
+- **CLI** (`cli/main.py`, 12 subcommands): `run`, `graph` (preview / `--emit-edges` /
+  `--emit-metrics`), `presets`, `datasets`, `cache`, `leaderboard`, `compare`,
   `export`, `replay`, `branch-report`, `benchmark`, `gpu`.
 - **Model benchmarking** (`benchmarks/`, `evaluator benchmark`): standalone latency/memory
   benchmarking of registered models + retrieval pipelines (`model_benchmark.py` +
@@ -1267,32 +1278,91 @@ spine (embedders, vector_db, retrieval, GT inputs) is all visible + wireable. (T
 `query_traces` bundle whose producer is hidden plumbing, so the simplified view drops its
 `metrics`/`query_traces` ports — `STRUCTURAL_ARTIFACTS` — when nothing rendered produces them.)
 
-**Derive at build (Approach B).** `webapi/form_config.py:graph_spec_to_config_dict` keeps the
-meaningful nodes verbatim (so per-node models survive — the alternative, folding them into shared
-config fields, collapsed the embedding-space-mismatch invariant) and **appends** the structural
-plumbing that `assemble_specs(mode, inferred_features)` would add (`_complete_with_plumbing` +
-`_infer_features`, deduped by `node_kind`). The derive step also **emits the appended nodes'
-edges** via the same authoring wirer the CLI `--emit-edges` generator uses, so the canvas graph runs as the full,
-byte-identical execution DAG. The canvas connections the user draws ARE the meaningful edges —
-export keeps every one of them. The
-read-only preview defaults to the simplified graph with a power-user "View full DAG" toggle.
+**Derive at build (Approach B).** `config/graph_config.py:build_evaluation_config_kwargs`
+(→ `_translate_graph`) keeps the meaningful nodes verbatim (so per-node models survive — the
+alternative, folding them into shared config fields, collapses the embedding-space-mismatch
+invariant) and calls `pipeline/graph/modes.py:complete_structural_plumbing`, which **appends**
+the structural plumbing that `assemble_specs(mode, inferred_features)` would add
+(`_infer_features`, deduped by `node_kind`; mode derived internally via `label_from_graph` with
+a generic fallback for a query-head-less graph). This lives in core, so every explicit-graph
+entry point gets it — CLI YAML, the builder, and Config & Run all share one implementation. A
+graph comparing several paths (multiple ASR models, encoders, retrieval strategies, LLMs —
+several meaningful nodes of a `VARIANT_ROOT_KINDS` kind: `retrieval`, `answer_gen`) gets its own
+private structural chain per variant (`_complete_with_plumbing_per_variant`), never one shared
+chain merging every variant's metrics. The derive step also **emits the appended nodes' edges**
+via the same authoring wirer the CLI `--emit-edges` generator uses, so the canvas graph runs as
+the full, byte-identical execution DAG. The canvas connections the user draws ARE the meaningful
+edges — export keeps every one of them. The read-only preview defaults to the simplified graph
+with a power-user "View full DAG" toggle.
+
+**Node ids are user-editable in the builder, and stay unique.** Drawflow's live connections are
+wired by its own internal numeric id, never by the node's displayed name/id — so
+`builder.html:renameNode` mutates `.name` in place (no edge rewriting needed) after validating
+format + uniqueness against the canvas; `addNode`'s counter-based default id skips any name
+already present. Uniqueness is enforced server-side too
+(`pipeline/graph/wiring.py:bind_explicit_edges`, and `complete_structural_plumbing` itself for a
+collision the derive step would otherwise create — e.g. a node renamed to a reserved structural
+id like `"metrics"`), so a duplicate node id is rejected with a named error regardless of entry
+point, never silently collapsed. Config & Run does not offer rename — renaming there would also
+require rewriting every other node's `bindings` entries referencing the id, with no live graph
+to lean on; a user who wants to rename a node opens it in the builder instead.
 
 **Config & Run** (`/ui/config`, `ui/config.py`). Choose a saved config (`get_preset`) → its pipeline
 preview (`graph_preview`, default-simplified via the `structural` flag) → an **editable per-node
 form** for each meaningful node, seeded from `config_to_canvas_spec` → **Validate** / **Run with
 changes** (`/ui/run-graph` → `graph_spec_to_config_dict`) / **Run preset as-is** / **Open in
-builder**. Editing is param-only here (topology lives in the builder).
+builder**. Editing is param-only here (topology lives in the builder). `graph_preview`
+(`_preview_node`) and `config_to_canvas_spec` (`render_node`) are two separate node-render paths
+that must agree on port shape: both apply `_overlay_routed_aliases`, which surfaces a B2
+*routed* artifact — one fed into a type-open port the node def never statically lists, e.g.
+`dataset_source.reference_text` → an embedder's `query_text` port — onto the port's `names` list.
+That routing lives on the graph instance's `input_aliases`, not the static per-type form, so
+without the overlay a node's `input_ports` would silently omit an alternative Config & Run's
+`buildSpec()` needs to map a binding back to its real port.
 
 **One form renderer.** `static/node_form.js` (`window.NodeForm`) renders a node's full param form
 (model family + size + the model's `Params` schema + advanced fields + the operator's `node_params` +
 dataset picker, with discriminator re-resolution) from a **host adapter**
 (`{params, spec, setParam, setExtraParam, refetch}`). The builder binds a Drawflow host; Config & Run
-binds a plain-object host — one registry-driven renderer, no duplication, no drift.
+binds a plain-object host — one registry-driven renderer, no duplication, no drift. An optional
+`host.renameId` (builder only) renders an inline node-id field after the header.
 
-**Non-blocking validation.** `config/validation.py:collect_problems` returns `(errors, warnings)`
-without raising (the raising `validate` is the run-path wrapper). The Config&Run preview loads even
-for an invalid config (`from_dict(validate=False)`); problems show in a panel the user clears by
-fixing the nodes and re-validating. The run path still hard-validates.
+**Validate shares the exact Export/Run pipeline.** Both `/ui/validate-builder` and
+`/ui/validate-graph` call `webapi/form_config.py:build_validated_run_config` — the same function
+`/api/jobs/from-graph` and `/ui/run-graph` use (structural completion, dataset choice, topology,
+embedding-space check) — then `graph_advice` (embedding warnings + `applicable_metrics` chips +
+GT-missing) on the real built graph it returns. "Valid ✓" means this exact pipeline succeeded,
+not just that the drawn topology is internally consistent, so a passing Validate guarantees
+Export/Run will also succeed; a dataset choice is required for Validate to proceed, since
+whether the graph is truly runnable can't be answered without one. The page's own initial load
+(`/ui/config-preview`) stays lenient (`config/validation.py:collect_problems`,
+`from_dict(validate=False)`), so a work-in-progress config with a problem still renders its
+forms — only the Validate *button*'s re-check is this strict.
+
+### 12.2 The registry ↔ webapi contract
+
+§12.1's derive step reads the node registry generically in some places (add a node, it just
+works) but hand-maintains a lookup table in others (add a node, it silently doesn't) — the
+former is self-updating by construction, the latter needs an explicit invariant + a test pinning
+it, or a new node kind can silently fall through a webapi-side check that was never taught about
+it. Each row below is one such mechanism: what it does, the invariant it must hold, and what
+enforces that invariant. Tests live in `tests/test_webapi_registry_contract.py`, one per row
+(#1/#2 need none — already registry-generic).
+
+| # | Mechanism | Invariant | Enforcement |
+|---|---|---|---|
+| 1 | `form_builder.py:node_catalogue()` — palette/canvas listing | Every registered stage appears, correctly flagged `structural` | Registry-generic by construction; no test needed |
+| 2 | `pipeline/graph/modes.py:complete_structural_plumbing`'s `structural_template` | Derives via `assemble_specs(mode, features)` filtered by `is_structural` | Registry-generic by construction; no test needed |
+| 3 | `_config_run.html:buildSpec()` / `builder.html:exportSpec()` — port/edge reconstruction | Every OneOf-collapsed port (`len(names) > 1`) round-trips to its own label, not the raw bound artifact name | `test_buildspec_resolves_every_multi_producer_port_label` — parametrized over every such port in `node_catalogue()`, not just the one (`retrieval.query_vectors`) that broke |
+| 4 | `form_builder.py:_node_inspect` / `_MODEL_NODE_FIELDS` — canvas inspect-panel model fields | Every kind in `registry.py:model_node_kinds()` resolves non-empty fields, or is on a named exemption | `test_node_inspect_covers_every_model_node_kind` |
+| 5 | `pipeline/graph/modes.py:_infer_features` | Every `FeatureSet` field is either inferred here or on `_INFER_FEATURES_STRUCTURAL_GATING_EXEMPT` / `_INFER_FEATURES_SHAPE_ONLY_EXEMPT` | `test_infer_features_covers_every_feature_flag` |
+| 6 | `pipeline/graph/modes.py:GRAPH_TEMPLATE_SPECS` — named-template reachability | Every non-structural registry kind is reachable from some template's `assemble_specs(name, FeatureSet.maximal())`, or is a documented explicit-graph-only exemption (`augmenter`) | `test_every_meaningful_kind_reachable_from_some_template` |
+| 7 | `pipeline/graph/modes.py:VARIANT_ROOT_KINDS` — multi-variant fork detection | Any non-structural kind whose output artifact is directly consumed by a structural node is in `VARIANT_ROOT_KINDS` (`{retrieval, answer_gen}`) or on a named exemption (`dataset_source`, `rerank`, `asr` — see the test for why each) | `test_variant_root_kinds_guard_no_undeclared_candidate` |
+
+Rows 2, 5, and 7 live in `pipeline/graph/modes.py`, called from
+`config/graph_config.py:build_evaluation_config_kwargs` — the one chokepoint both
+`EvaluationConfig.from_yaml` (CLI) and the webapi builder use — so a hand-authored CLI YAML
+config can omit structural nodes entirely, the same as a webapi canvas graph can.
 
 ---
 
@@ -1317,7 +1387,7 @@ fixing the nodes and re-validating. The run path still hard-validates.
 | Node types + sockets, edge binding (`build_graph_from_spec`; auto-wiring survives as the authoring assistant), validation | `pipeline/graph/` |
 | Node taxonomy (category/domain axes + validation) | `pipeline/graph/taxonomy.py` |
 | Declarative graph-template assembly (`FeatureSet` → node spec list) | `pipeline/graph/assembly.py` |
-| Graph templates (former modes) + spec validation | `pipeline/graph/templates.py`, `graph/modes.py` |
+| Graph templates (former modes) + spec validation — **slated for removal** (§13's open items) | `pipeline/graph/templates.py`, `graph/modes.py` |
 | Handler registry (executable node functions + timing) | `evaluation/stage_registry.py` |
 | Run state + executor (engine, views, parallel, offload, run entry points) | `evaluation/executor/` |
 | Stage handlers (one module per stage family) + shared keying helper (`_common.py:publish_keyed_or_plain`) + retrieval debug logger (`retrieval_debug.py`) | `evaluation/handlers/` |
@@ -1341,8 +1411,9 @@ fixing the nodes and re-validating. The run path still hard-validates.
 | Image modality: `image_embedding` node + ImageEmbedding registry + n-ary fusion | `[planned]` (revisited when a 3rd modality lands, §4/§6) |
 | C7 patient-context grounding — `patient_context` artifact + retrieval-grounded corrector, human-review flagging, introduced-error-weighted safety scoring | ✂ cut from scope (C7-c / C7.3 / C7.4, 2026-08-05; §6) — no dataset carries patient history and C7.7 showed the retrieval task saturated; design archived in `docs/archive/C7_GROUNDED_CORRECTION_PLAN.md` |
 | Streaming 3b remainders: IVF on-disk indexes for huge corpora + a remote HTTP backend | `[planned]` (§9; the windowed driver + `faiss_mmap` are `[impl]`) |
-| Cross-run surface remainder: a sweep-submit web form | `[planned]` (§8) |
+| Cross-run surface remainder: a sweep-submit web form | ✂ cut from scope — `evaluator sweep`/`analysis/sweep.py`/`grid_search.py` removed (2026-08-25); comparing whole runs is expressed as explicit multi-variant graphs instead, so there is no sweep spec left for a submit form to front |
 | Per-node offload of branch models | `⊘ deferred` (memory opt) |
+| Named graph templates (`GRAPH_TEMPLATE_SPECS`, `pipeline/graph/modes.py`) | ✂ **slated for removal** — explicit graphs are the norm and structural plumbing auto-derives for any explicit graph, not just named-template ones, so the 4 named templates aren't required for anything the graph engine itself needs. `label_from_graph`'s mode-LABEL derivation is independent of `GRAPH_TEMPLATE_SPECS` and stays. Blocking the removal: `complete_structural_plumbing`'s mode-fallback needs a non-template-borrowed source for its structural node list, and the builder's "Reload template" seed button needs a replacement |
 
 Completed roadmap rows (T1–T4, explicit edges, grounded correction, streaming 3a, the
 2026-06 operability wave, APM correctness, simplified UI, …) live in
@@ -1363,7 +1434,7 @@ statistical rigor on the deltas (§8), the following operability layer is in pla
 | **Live, machine-readable progress** | Node-lifecycle events stream to a callback + JSONL (`EVALUATOR_PROGRESS_FILE`); the typed `ProgressEvent` dataclass is the stable contract external dashboards consume. Opt-in `EVALUATOR_DUMP_ARTIFACTS=node,…` dumps a node's published ItemSets to JSONL for mid-run inspection (R7). `evaluator replay --query-id q42` re-runs a single item through the full graph (corpus kept whole) with that dump hook + a printed per-node trace — per-item seeding makes the replay reproduce the original run | `evaluation/progress.py` (`ProgressEvent`, `ProgressSink`), `evaluation/artifact_dump.py`, `cli/replay.py` |
 | **Tidy result export** | The nested report flattens to a stable metrics table (`branch,metric,mean,ci,n`) + per-query trace export (CSV/JSONL/Parquet); same shapes via CLI `evaluator export -f metrics-table\|traces` and `POST /api/report/metrics-table` (§8) | `analysis/report_export.py` |
 | **Vector-index integrity** | A reloaded index whose payload sidecar count mismatches the vector count fails loudly at load (`_verify_payload_count`), and a stale per-hit index is dropped+logged at search time (the H3 guard) | `storage/vector_store.py` |
-| **Config validation** | An unknown/misspelled key raises a path-named `ConfigurationError` (`model.asr_modal_type`) before any heavy work — no silent default → wrong experiment | `config/loading.py:_construct_subconfig`, `graph_config.to_legacy_dict` |
+| **Config validation** | An unknown/misspelled key raises a path-named `ConfigurationError` (`model.asr_modal_type`) before any heavy work — no silent default → wrong experiment | `config/loading.py:_construct_subconfig`, `graph_config.build_evaluation_config_kwargs` |
 | **Cache correctness + portability** | Model **version** folded into the cache keys (stale weights under the same name invalidate); paths stored **cache-dir-relative** (shareable across machines/containers); per-stage **hit/miss** in `report.provenance.cache` | `storage/cache_keys.py`, `storage/cache/` (pkg), `utils/model_version.py` |
 | **Intra-level parallel execution** | Independent same-level nodes (the ref/asr/corr branches) run concurrently when `parallel_enabled` — each on a private `_NodeView` whose isolation set derives from the RunState scope markers (§3), serialized per device (no single-GPU contention). The DAG executor is the single in-process parallel path; single-branch stays serial | `evaluation/executor/engine.py:_execute_stage_graph` + `executor/views.py:_NodeView` / `executor/parallel.py` |
 | **Checkpoint / resume** | Crash at node 8/12 does not recompute everything — the resumable state (ctx bus + control attrs) is snapshotted at each **level** boundary (keyed by config+graph) and a matching rerun resumes at the first incomplete level | `evaluation/run_journal.py` |
@@ -1470,8 +1541,8 @@ per-item dict (`audio_array`, `sampling_rate`, `transcription`/`question_text`, 
 `LazyAudioQueryDataset` cover most loaders, so `from_config` is usually just "parse files → adapter."
 
 **The TTS bridge — `supports_generation = True`.** Set this class attribute on a *text* dataset and
-its `compatible_pipeline_modes()` gains the audio modes: the query text is **synthesized to audio at
-run time** (the `tts` node / pre-graph synthesis), so a text-only corpus can be evaluated through the
+it can also run through an audio-modality graph: the query text is **synthesized to audio at run
+time** (the `tts` node / pre-graph synthesis), so a text-only corpus can be evaluated through the
 full `asr → embed → retrieve` audio pipeline. This is what makes a text QA set a spoken-retrieval
 benchmark without any audio assets.
 
@@ -1513,7 +1584,7 @@ descriptor. Select it with `dataset.id: my_text_retrieval` (+ `questions` / `cor
 
 ### 15.3 Build experiments by composing nodes
 
-An experiment **is** its config: a node-centric YAML that mirrors the DAG (§10). The `to_legacy_dict`
+An experiment **is** its config: a node-centric YAML that mirrors the DAG (§10). The `build_evaluation_config_kwargs`
 loader (`config/graph_config.py`) is the one chokepoint that translates it. The
 graph-is-the-spec rule — what a config must and must not contain — is principle §1.7; this
 section is the practice.
@@ -1522,7 +1593,8 @@ section is the practice.
 A model-bearing node's params (or a `nodes.<type>` map) carry its model; a **feature node** carries
 its capability config as params — the loader folds those into the sub-config so the built node stays
 structural, and the node's presence enables the capability. `graph.edges` names every data flow
-at PORT level — `{from, output, to, input}` — and a portless `{from, to}` adds ordering only.
+at PORT level — `{from, to, input}`, plus `output` when the artifact and the port differ — and a
+portless `{from, to}` adds ordering only.
 Write the block by hand, connect ports in the builder, or generate it with
 `evaluator graph --emit-edges <yaml>` — add `--write` to rewrite the file's `edges:` block
 **in place** (text-level and comment-preserving; hand-added ordering-only `{from, to}`
@@ -1655,5 +1727,5 @@ df[df.metric == "recall@5"].set_index("branch")["mean"]
 results.save("results/run.json")
 ```
 
-`quick_evaluate()` / `evaluate_from_preset()` cover the one-liner cases; `evaluator sweep`
-and `evaluator compare` remain the CLI-side multi-run surface (§8).
+`quick_evaluate()` / `evaluate_from_preset()` cover the one-liner cases; `evaluator compare`
+remains the CLI-side multi-run surface (§8).

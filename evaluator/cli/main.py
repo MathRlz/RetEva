@@ -9,6 +9,9 @@ Subcommands (each delegates to the existing implementation; no logic lives here)
 - ``cache``         — ``status`` / ``clear [--type T]`` for the artifact cache
 - ``leaderboard``   — query the leaderboard SQLite (top runs by metric)
 - ``replay``        — re-run one query id through the full graph + per-node trace (cli/replay.py)
+- ``sweep``         — expand a base graph config + axes spec into a multi-variant graph
+  config (cli/sweep_expand.py) — the authoring assistant for hand-duplicating nodes per
+  parameter combination (no ``graph.branches`` any more; see ``config/graph_config.py``)
 - ``compare``       — compare result JSON files, or 2+ variant/run dirs (cli/compare.py)
 - ``export``        — export results to CSV/Excel/LaTeX (cli/export.py)
 - ``branch-report`` — thesis artifacts from a branched run (analysis/branch_report.py)
@@ -34,6 +37,8 @@ commands:
   cache          cache status|clear [--cache-dir DIR] [--type TYPE]
   leaderboard    top runs by metric [--metric M] [--limit N] [--output-dir DIR]
   replay         re-run one query id with a per-node artifact trace (--config --query-id)
+  sweep          expand a base config + axes spec into a multi-variant graph config
+                 (evaluator sweep --base cfg.yaml --axes axes.yaml --out swept.yaml)
   compare        compare result JSON files, or 2+ variant/run dirs (baseline-vs-each)
   export         export results (csv/excel/latex)
   branch-report  thesis artifacts from a branched run's results JSON
@@ -357,6 +362,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             from evaluator.cli.replay import main as replay_main
 
             return replay_main(rest)
+        if command == "sweep":
+            from evaluator.cli.sweep_expand import main as sweep_main
+
+            return sweep_main(rest)
         if command == "compare":
             from evaluator.cli.compare import main as compare_main
 

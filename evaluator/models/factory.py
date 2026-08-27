@@ -201,9 +201,31 @@ def _build_clap_style_audio(
     )
 
 
+def _build_eam_alignment_audio(
+    model_class,
+    *,
+    model_type: str,
+    model_name: Optional[str],
+    size: Optional[str],
+    model_path: Optional[str],
+    emb_dim: int,
+    device: str,
+    **extra,
+):
+    _check_extra_params(model_type, model_class, extra)
+    from evaluator.models.a2e.eam_alignment import EamAlignmentAudioModel
+    name = (EamAlignmentAudioModel.Params.SIZES.get(size) or model_name
+            or "facebook/seamless-m4t-v2-large")
+    return model_class(
+        audio_encoder_name=name,
+        model_path=extra.get("model_path") or model_path,
+    ).to(torch.device(device))
+
+
 register_audio_embedding_builder("attention_pool", _build_attention_pool_audio)
 register_audio_embedding_builder("attention_pool_m4t", _build_attention_pool_audio)
 register_audio_embedding_builder("clap_style", _build_clap_style_audio)
+register_audio_embedding_builder("eam_alignment", _build_eam_alignment_audio)
 
 
 def create_audio_embedding_model(model_type: str, model_name: Optional[str] = None,

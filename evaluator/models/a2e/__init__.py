@@ -10,6 +10,7 @@ from .clap_style import MultimodalClapStyleModel
 from .hubert import HuBERTAudioModel
 from .wavlm import WavLMAudioModel
 from .sonar import SonarSpeechModel
+from .eam_alignment import EamAlignmentAudioModel
 
 __all__ = [
     "AttentionPoolAudioModel",
@@ -20,4 +21,5 @@ __all__ = [
     "HuBERTAudioModel",
     "WavLMAudioModel",
     "SonarSpeechModel",
+    "EamAlignmentAudioModel",
 ]
