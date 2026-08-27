@@ -1,27 +1,35 @@
-"""EAM alignment-pool audio embedding model (``side/eam``'s ``AlignmentModel`` architecture).
+"""EAM alignment-pool model (``side/eam``'s ``AlignmentModel`` architecture).
 
-Wraps a frozen SeamlessM4T-v2 encoder (reusing ``attention_pool.py``'s backend) with the
-self-attention → attention-pool → projection head from ``side/eam/alignment_model``. The
-module shapes and attribute names (``audio_sa``, ``pool``, ``proj``, ``cross_attn``,
-``text_sa``, ``audio_adapter``, ``text_adapter``) mirror ``side/eam`` exactly so a trained
-``AlignmentModel`` state_dict loads with no key remapping. ``cross_attn``/``text_sa``/the
-adapters are training-only in ``side/eam`` (``encode_audio``'s cross-attention branch is
-gated on ``self.training``, always False at inference) — reimplemented here only so a
-full checkpoint has somewhere to load, and loaded best-effort since they never affect
-``encode_audio``'s output.
+``side/eam``'s ``AlignmentModel`` is a genuinely joint audio-text model: ``encode_audio``
+and ``encode_text`` both end in the SAME ``pool``/``proj`` modules, so audio and text land
+in one shared embedding space by construction. This wraps it as one class implementing
+BOTH ``AudioEmbeddingModel`` and ``TextEmbeddingModel`` (mirrors ``clap_style.py``'s
+dual-registration pattern) so it can be used as the audio_embedding node, the
+text_embedding node, or both at once for cross-modal retrieval.
 
-``embedding_dim``/``input_dim`` are read from the checkpoint itself (``proj.net.3.weight``
-and ``audio_sa.attn.in_proj_weight`` shapes) rather than taken as config, so there is
-nothing a user can set inconsistently with the actual trained weights.
+Only ``audio_sa``/``text_sa``/``pool``/``proj`` are built and loaded — ``side/eam``'s
+``cross_attn`` and the optional ``audio_adapter``/``text_adapter`` are training-only
+machinery (``encode_audio``/``forward``'s cross-attention branch is gated on
+``self.training``, and nothing in this codebase ever constructs a non-``None`` adapter —
+grepped ``side/eam`` for every ``AlignmentModel(...)`` call site). At inference there is
+nothing to compute with them, so they're not reimplemented at all; any such keys in a
+checkpoint are simply ignored.
+
+When an audio_embedding node and a text_embedding node both name ``eam_alignment`` with
+the SAME ``model_path``, they get two separate Python wrapper instances (one per family's
+registry/service-provider cache — those caches don't cross-reference each other) but a
+single shared ``_EamAlignmentCore`` (module-level cache keyed on
+``(model_path, audio_encoder_name)``): one loaded encoder pair + one set of
+audio_sa/text_sa/pool/proj weights, not two.
 """
 from dataclasses import dataclass
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from ..base import AudioEmbeddingModel
-from ..registry import register_audio_embedding_model
+from ..base import AudioEmbeddingModel, TextEmbeddingModel
+from ..registry import register_audio_embedding_model, register_text_embedding_model
 from ...logging_config import get_logger
 from .attention_pool import _select_backend, _EncoderBackend
 
@@ -46,7 +54,8 @@ class _AttentionPool(nn.Module):
 
 
 class _SharedProjection(nn.Module):
-    """Linear -> GELU -> Linear -> LayerNorm, matching ``side/eam``'s ``SharedProjection``."""
+    """Linear -> GELU -> Linear -> LayerNorm, matching ``side/eam``'s ``SharedProjection``.
+    The SAME instance projects both audio and text — that's what makes the space joint."""
 
     def __init__(self, dim: int, embedding_dim: int):
         super().__init__()
@@ -62,7 +71,9 @@ class _SharedProjection(nn.Module):
 
 
 class _SelfAttentionBlock(nn.Module):
-    """Self-attention + residual + LayerNorm, matching ``side/eam``'s ``SelfAttentionBlock``."""
+    """Self-attention + residual + LayerNorm, matching ``side/eam``'s ``SelfAttentionBlock``.
+    Real inference-time modules for both modalities: ``audio_sa`` runs in ``encode_audio``,
+    ``text_sa`` runs in ``encode_text`` — neither is training-only."""
 
     def __init__(self, dim: int, num_heads: int, dropout: float):
         super().__init__()
@@ -74,93 +85,85 @@ class _SelfAttentionBlock(nn.Module):
         return self.norm(x + attended)
 
 
-class _CrossAttention(nn.Module):
-    """Cross-attention + residual + LayerNorm, matching ``side/eam``'s ``CrossAttention``.
+class _M4TTextBackend:
+    """SeamlessM4T-v2 TEXT encoder backend — the text counterpart to
+    ``attention_pool.py``'s ``_M4TBackend`` (speech). ``side/eam`` builds this via
+    ``SeamlessM4Tv2ForTextToSpeech(...).get_encoder()`` (see
+    ``side/eam/encoder/sonar_space/SonarSpaceEncoder.py`` — a misleading name, it wraps
+    M4T's own text encoder, not SONAR)."""
 
-    Training-only in ``side/eam`` (gated on ``self.training``) — never exercised by
-    ``encode_audio`` at inference. Reimplemented purely so its checkpoint weights have
-    somewhere to load."""
+    def __init__(self, encoder_name: str):
+        from transformers import SeamlessM4Tv2ForTextToSpeech, AutoProcessor
 
-    def __init__(self, dim: int, num_heads: int, dropout: float):
-        super().__init__()
-        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
-        self.norm = nn.LayerNorm(dim)
+        self.hidden_dim = 1024
+        self.processor = AutoProcessor.from_pretrained(encoder_name)
+        self.encoder = SeamlessM4Tv2ForTextToSpeech.from_pretrained(encoder_name).get_encoder()
+        for param in self.encoder.parameters():
+            param.requires_grad = False
 
-    def forward(self, query: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        attended, _ = self.attn(query, context, context, need_weights=False)
-        return self.norm(query + attended)
+    def preprocess(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
+        inputs = self.processor(text=texts, return_tensors="pt", padding=True, truncation=True)
+        return inputs.input_ids, inputs.attention_mask
 
+    def run_encoder(self, encoder, input_ids, attention_mask):
+        return encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
 
-# Checkpoint-critical vs. training-only key prefixes (see module docstring).
-_STRICT_PREFIXES = ("audio_sa.", "pool.", "proj.")
-_BEST_EFFORT_PREFIXES = ("cross_attn.", "text_sa.", "audio_adapter.", "text_adapter.")
+    def to(self, device):
+        self.encoder.to(device)
+
+    def eval(self):
+        self.encoder.eval()
+
+    def parameters(self):
+        return self.encoder.parameters()
+
 
 _PROJ_LAYERNORM_KEY = "proj.net.3.weight"  # shape (embedding_dim,)
 _AUDIO_SA_INPROJ_KEY = "audio_sa.attn.in_proj_weight"  # shape (3*input_dim, input_dim)
+_TEXT_SA_INPROJ_KEY = "text_sa.attn.in_proj_weight"  # shape (3*input_dim, input_dim)
 
+_STRICT_PREFIXES = ("audio_sa.", "text_sa.", "pool.", "proj.")
 _DEFAULT_NUM_HEADS = 8
 _DEFAULT_DROPOUT = 0.1
 
 
-@register_audio_embedding_model(
-    'eam_alignment',
-    default_name='facebook/seamless-m4t-v2-large',
-    description='Audio-text alignment pooling model (side/eam AlignmentModel architecture)',
-    display_name='EAM alignment pool',
-)
-class EamAlignmentAudioModel(AudioEmbeddingModel):
-    """Audio embedding model using ``side/eam``'s AlignmentModel architecture: a frozen
-    speech encoder -> self-attention -> attention-pool -> shared projection, L2-normalized.
+class _EamAlignmentCore:
+    """The actual weights: two frozen M4T encoders (speech + text) and one set of
+    audio_sa/text_sa/pool/proj heads, loaded once from ``model_path``. Shared (via
+    ``_get_or_build_core``) between an audio_embedding wrapper and a text_embedding
+    wrapper pointed at the same checkpoint, so the same nn.Module instances back both."""
 
-    ``embedding_dim``/``input_dim`` are inferred from ``model_path``'s checkpoint (there is
-    no untrained mode — a checkpoint is required, unlike ``attention_pool`` which can run
-    on a freshly initialized head)."""
-
-    @dataclass
-    class Params:
-        size: str = "v2-large"
-        model_path: Optional[str] = None
-        SIZES: ClassVar[Dict[str, str]] = {
-            "v2-large": "facebook/seamless-m4t-v2-large",
-        }
-        DESCRIPTIONS: ClassVar[Dict[str, str]] = {
-            "model_path": "Path to a trained side/eam AlignmentModel checkpoint (.pt file, required).",
-        }
-
-    def __init__(self,
-                 audio_encoder_name: str = "facebook/seamless-m4t-v2-large",
-                 model_path: Optional[str] = None):
-        if not model_path:
-            raise ValueError(
-                "eam_alignment requires model_path: a trained side/eam AlignmentModel "
-                "checkpoint (embedding_dim/input_dim are read from its weights)."
-            )
-        self.audio_encoder_name = audio_encoder_name
+    def __init__(self, encoder_name: str, model_path: str, num_heads: int = _DEFAULT_NUM_HEADS):
+        self.encoder_name = encoder_name
         self.model_path = model_path
         self.device = torch.device("cpu")
 
-        self.backend: _EncoderBackend = _select_backend(audio_encoder_name)
-        self.hidden_dim = self.backend.hidden_dim
-        self.audio_encoder = self.backend.encoder
-        self.feature_extractor = self.backend.processor
+        self._device_set = False
+        self.audio_backend: _EncoderBackend = _select_backend(encoder_name)
+        self.text_backend = _M4TTextBackend(encoder_name)
+        if self.text_backend.hidden_dim != self.audio_backend.hidden_dim:
+            raise ValueError(
+                f"eam_alignment: audio backend hidden_dim={self.audio_backend.hidden_dim} != "
+                f"text backend hidden_dim={self.text_backend.hidden_dim} for '{encoder_name}' "
+                f"— audio_sa/text_sa/pool/proj require both modalities at the same width."
+            )
+        self.hidden_dim = self.audio_backend.hidden_dim
 
         state_dict = self._read_checkpoint(model_path)
         input_dim, embedding_dim = self._infer_dims(state_dict, model_path)
         if input_dim != self.hidden_dim:
             raise ValueError(
                 f"eam_alignment checkpoint {model_path}: trained input_dim={input_dim} does "
-                f"not match encoder '{audio_encoder_name}' hidden_dim={self.hidden_dim}. "
-                f"Set audio_embedding.model_name to the encoder used in training."
+                f"not match encoder '{encoder_name}' hidden_dim={self.hidden_dim}. Set "
+                f"audio_embedding.model_name/text_embedding.model_name to the encoder used "
+                f"in training."
             )
         self.embedding_dim = embedding_dim
 
-        self.audio_sa = _SelfAttentionBlock(input_dim, _DEFAULT_NUM_HEADS, _DEFAULT_DROPOUT)
+        self.audio_sa = _SelfAttentionBlock(input_dim, num_heads, _DEFAULT_DROPOUT)
+        self.text_sa = _SelfAttentionBlock(input_dim, num_heads, _DEFAULT_DROPOUT)
         self.pool = _AttentionPool(input_dim)
         self.proj = _SharedProjection(input_dim, embedding_dim)
-        # Training-only submodules — present only so the checkpoint has somewhere to load.
-        self.text_sa = _SelfAttentionBlock(input_dim, _DEFAULT_NUM_HEADS, _DEFAULT_DROPOUT)
-        self.cross_attn = _CrossAttention(input_dim, _DEFAULT_NUM_HEADS, _DEFAULT_DROPOUT)
-
         self._load_weights(state_dict, model_path)
 
     @staticmethod
@@ -171,7 +174,7 @@ class EamAlignmentAudioModel(AudioEmbeddingModel):
         return state
 
     @staticmethod
-    def _infer_dims(state_dict: dict, model_path: str) -> (int, int):
+    def _infer_dims(state_dict: dict, model_path: str) -> Tuple[int, int]:
         try:
             input_dim = state_dict[_AUDIO_SA_INPROJ_KEY].shape[1]
             embedding_dim = state_dict[_PROJ_LAYERNORM_KEY].shape[0]
@@ -180,97 +183,198 @@ class EamAlignmentAudioModel(AudioEmbeddingModel):
                 f"eam_alignment checkpoint {model_path} is missing {exc}: not a side/eam "
                 f"AlignmentModel state_dict (expected keys under 'audio_sa.'/'pool.'/'proj.')."
             ) from exc
+        text_sa_shape = state_dict.get(_TEXT_SA_INPROJ_KEY)
+        if text_sa_shape is not None and text_sa_shape.shape[1] != input_dim:
+            raise ValueError(
+                f"eam_alignment checkpoint {model_path}: text_sa input_dim="
+                f"{text_sa_shape.shape[1]} != audio_sa input_dim={input_dim} — inconsistent "
+                f"checkpoint."
+            )
         return int(input_dim), int(embedding_dim)
 
     def _load_weights(self, state_dict: dict, model_path: str) -> None:
-        strict_state, best_effort_state, unexpected = {}, {}, []
+        modules = {
+            "audio_sa": self.audio_sa, "text_sa": self.text_sa,
+            "pool": self.pool, "proj": self.proj,
+        }
+        by_prefix: Dict[str, dict] = {name: {} for name in modules}
+        unexpected = []
         for key, value in state_dict.items():
             if key.startswith(_STRICT_PREFIXES):
-                strict_state[key] = value
-            elif key.startswith(_BEST_EFFORT_PREFIXES):
-                best_effort_state[key] = value
+                name, rest = key.split(".", 1)
+                by_prefix[name][rest] = value
             else:
                 unexpected.append(key)
 
-        modules = {"audio_sa": self.audio_sa, "pool": self.pool, "proj": self.proj}
-        expected = {
-            f"{name}.{k}" for name, mod in modules.items() for k in mod.state_dict()
-        }
-        missing = expected - set(strict_state)
+        expected = {f"{name}.{k}" for name, mod in modules.items() for k in mod.state_dict()}
+        got = {f"{name}.{k}" for name, sub in by_prefix.items() for k in sub}
+        missing = expected - got
         if missing:
             raise ValueError(
                 f"eam_alignment checkpoint {model_path}: missing weights for "
-                f"{sorted(missing)[:6]} ({len(missing)} key(s)) — audio_sa/pool/proj would be "
-                f"left at random init."
+                f"{sorted(missing)[:6]} ({len(missing)} key(s)) — audio_sa/text_sa/pool/proj "
+                f"would be left at random init."
             )
         for name, mod in modules.items():
-            prefix = f"{name}."
-            sub_state = {k[len(prefix):]: v for k, v in strict_state.items() if k.startswith(prefix)}
-            mod.load_state_dict(sub_state, strict=True)
-
-        best_effort_modules = {
-            "text_sa": self.text_sa, "cross_attn": self.cross_attn,
-        }
-        for name, mod in best_effort_modules.items():
-            prefix = f"{name}."
-            sub_state = {k[len(prefix):]: v for k, v in best_effort_state.items() if k.startswith(prefix)}
-            if sub_state:
-                result = mod.load_state_dict(sub_state, strict=False)
-                if result.missing_keys or result.unexpected_keys:
-                    logger.warning(
-                        "eam_alignment checkpoint %s: %s loaded with %d missing, %d unexpected "
-                        "key(s) (training-only submodule, inert at inference)",
-                        model_path, name, len(result.missing_keys), len(result.unexpected_keys),
-                    )
+            mod.load_state_dict(by_prefix[name], strict=True)
         if unexpected:
-            logger.warning(
-                "eam_alignment checkpoint %s: %d unexpected key(s) ignored (e.g. %s)",
+            logger.info(
+                "eam_alignment checkpoint %s: %d non-inference key(s) ignored (e.g. %s) — "
+                "cross_attn/adapters are training-only in side/eam",
                 model_path, len(unexpected), unexpected[:3],
             )
         logger.info(
-            "eam_alignment checkpoint %s: loaded audio_sa/pool/proj (input_dim=%d, "
+            "eam_alignment checkpoint %s: loaded audio_sa/text_sa/pool/proj (input_dim=%d, "
             "embedding_dim=%d)", model_path, self.hidden_dim, self.embedding_dim,
         )
 
     def to(self, device: torch.device):
+        if self._device_set and self.device != device:
+            logger.warning(
+                "eam_alignment core for %s is shared across audio/text embedding roles and "
+                "is moving from %s to %s — both roles must use the same device.",
+                self.model_path, self.device, device,
+            )
+        self._device_set = True
         self.device = device
-        self.backend.to(device)
-        self.audio_encoder = self.backend.encoder
+        self.audio_backend.to(device)
+        self.text_backend.to(device)
         self.audio_sa.to(device)
+        self.text_sa.to(device)
         self.pool.to(device)
         self.proj.to(device)
-        self.text_sa.to(device)
-        self.cross_attn.to(device)
         return self
 
-    def preprocess_audio(self, audio_list: List[torch.Tensor], sampling_rates: List[int]):
-        return self.backend.preprocess(audio_list, sampling_rates)
-
-    def encode_from_features(self, features: torch.Tensor,
-                             attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
+    def encode_audio(self, features: torch.Tensor,
+                     attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         features = features.to(self.device)
-        # attention_mask is intentionally unused: side/eam's AttentionPool never masks
-        # (see _AttentionPool docstring) and audio_sa likewise runs unmasked in side/eam.
         with torch.no_grad():
-            self.backend.eval()
+            self.audio_backend.eval()
             self.audio_sa.eval()
             self.pool.eval()
             self.proj.eval()
-
-            enc_hidden, _ = self.backend.run_encoder(self.audio_encoder, features, attention_mask)
+            # attention_mask intentionally unused: side/eam's AttentionPool/audio_sa never mask.
+            enc_hidden, _ = self.audio_backend.run_encoder(
+                self.audio_backend.encoder, features, attention_mask
+            )
             attended = self.audio_sa(enc_hidden)
             pooled = self.pool(attended)
-            embeddings = self.proj(pooled)
-            embeddings = F.normalize(embeddings, p=2, dim=-1)
-
+            embeddings = F.normalize(self.proj(pooled), p=2, dim=-1)
         torch.cuda.empty_cache()
-        return embeddings.cpu().numpy()
+        return embeddings
+
+    def encode_text(self, texts: List[str]) -> torch.Tensor:
+        with torch.no_grad():
+            self.text_backend.eval()
+            self.text_sa.eval()
+            self.pool.eval()
+            self.proj.eval()
+            input_ids, attention_mask = self.text_backend.preprocess(texts)
+            input_ids = input_ids.to(self.device)
+            attention_mask = attention_mask.to(self.device)
+            hidden = self.text_backend.run_encoder(self.text_backend.encoder, input_ids, attention_mask)
+            attended = self.text_sa(hidden)
+            pooled = self.pool(attended)
+            embeddings = F.normalize(self.proj(pooled), p=2, dim=-1)
+        torch.cuda.empty_cache()
+        return embeddings
+
+
+_CORE_CACHE: Dict[Tuple[str, str], _EamAlignmentCore] = {}
+
+
+def _get_or_build_core(encoder_name: str, model_path: str,
+                       num_heads: int = _DEFAULT_NUM_HEADS) -> _EamAlignmentCore:
+    """Get-or-build the shared core for ``(model_path, encoder_name)``. A second wrapper
+    (whichever family — audio or text — builds second) reuses the already-loaded weights
+    instead of loading the checkpoint + encoders again."""
+    key = (model_path, encoder_name)
+    core = _CORE_CACHE.get(key)
+    if core is None:
+        core = _EamAlignmentCore(encoder_name, model_path, num_heads=num_heads)
+        _CORE_CACHE[key] = core
+    elif num_heads != _DEFAULT_NUM_HEADS:
+        logger.warning(
+            "eam_alignment: core for %s already built with a different num_heads config; "
+            "the requested num_heads=%d is ignored (the two roles share one instance).",
+            model_path, num_heads,
+        )
+    return core
+
+
+@register_audio_embedding_model(
+    'eam_alignment',
+    default_name='facebook/seamless-m4t-v2-large',
+    description='Audio-text alignment pooling model (side/eam AlignmentModel architecture, audio side)',
+    display_name='EAM alignment pool',
+)
+@register_text_embedding_model(
+    'eam_alignment',
+    default_name='facebook/seamless-m4t-v2-large',
+    description='Audio-text alignment pooling model (side/eam AlignmentModel architecture, text side); '
+                'give the same model_path as the eam_alignment audio_embedding node to share one loaded model',
+)
+class EamAlignmentModel(AudioEmbeddingModel, TextEmbeddingModel):
+    """``side/eam``'s AlignmentModel: a frozen speech/text encoder pair -> self-attention ->
+    a SHARED attention-pool + projection head, L2-normalized. Implements both
+    ``AudioEmbeddingModel`` (``encode_audio``) and ``TextEmbeddingModel`` (``encode``) so it
+    can be used as either node kind, or both for cross-modal retrieval into one space.
+
+    ``embedding_dim``/``input_dim`` are inferred from ``model_path``'s checkpoint — there is
+    no untrained mode; a checkpoint is required."""
+
+    @dataclass
+    class Params:
+        size: str = "v2-large"
+        model_path: Optional[str] = None
+        num_heads: int = _DEFAULT_NUM_HEADS
+        SIZES: ClassVar[Dict[str, str]] = {
+            "v2-large": "facebook/seamless-m4t-v2-large",
+        }
+        DESCRIPTIONS: ClassVar[Dict[str, str]] = {
+            "model_path": "Path to a trained side/eam AlignmentModel checkpoint (.pt file, "
+                          "required). Use the SAME path on the eam_alignment audio_embedding "
+                          "and text_embedding nodes to share one loaded model.",
+            "num_heads": "Attention head count the checkpoint was trained with (not "
+                         "recoverable from the checkpoint's tensor shapes — a wrong value "
+                         "loads without error but computes silently-wrong attention).",
+        }
+
+    def __init__(self,
+                 audio_encoder_name: str = "facebook/seamless-m4t-v2-large",
+                 model_path: Optional[str] = None,
+                 num_heads: int = _DEFAULT_NUM_HEADS):
+        if not model_path:
+            raise ValueError(
+                "eam_alignment requires model_path: a trained side/eam AlignmentModel "
+                "checkpoint (embedding_dim/input_dim are read from its weights)."
+            )
+        self.encoder_name = audio_encoder_name
+        self.model_path = model_path
+        self.core = _get_or_build_core(audio_encoder_name, model_path, num_heads=num_heads)
+
+    def to(self, device: torch.device):
+        self.core.to(device)
+        return self
+
+    # --- AudioEmbeddingModel ---
+    def preprocess_audio(self, audio_list: List[torch.Tensor], sampling_rates: List[int]):
+        return self.core.audio_backend.preprocess(audio_list, sampling_rates)
+
+    def encode_from_features(self, features: torch.Tensor,
+                             attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
+        return self.core.encode_audio(features, attention_mask).cpu().numpy()
 
     def encode_audio(self, audio_list: List[torch.Tensor], sampling_rates: List[int],
                      show_progress: bool = False) -> np.ndarray:
         features, attention_mask = self.preprocess_audio(audio_list, sampling_rates)
         return self.encode_from_features(features, attention_mask)
 
+    # --- TextEmbeddingModel ---
+    def encode(self, texts: List[str], show_progress: bool = False,
+              desc: str = "Embedding") -> np.ndarray:
+        return self.core.encode_text(texts).cpu().numpy()
+
     def name(self) -> str:
-        return (f"EamAlignmentAudioModel - encoder:{self.audio_encoder_name}"
-                f" - embedding_dim:{self.embedding_dim} - weights:{self.model_path}")
+        return (f"EamAlignmentModel - encoder:{self.encoder_name}"
+                f" - embedding_dim:{self.core.embedding_dim} - weights:{self.model_path}")

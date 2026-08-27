@@ -143,7 +143,8 @@ def _build_provenance(s: "Any") -> Dict[str, Any]:
         prov["text_emb"] = _clean({
             "type": m.text_emb_model_type, "size": m.text_emb_size,
             "name": m.text_emb_model_name,
-            "adapter": m.text_emb_adapter_path, "embedding_space": m.text_emb_embedding_space,
+            "adapter": m.text_emb_adapter_path, "model_path": m.text_emb_model_path,
+            "embedding_space": m.text_emb_embedding_space,
             "params": dict(m.text_emb_params or {}),
             "resolved": s.text_embedding_pipeline.model.name(),
         })

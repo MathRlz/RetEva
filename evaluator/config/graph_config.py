@@ -52,6 +52,7 @@ _MODEL_NODE_FIELDS = {
         "name": "text_emb_model_name",
         "device": "text_emb_device",
         "adapter": "text_emb_adapter_path",
+        "model_path": "text_emb_model_path",
         "embedding_space": "text_emb_embedding_space",
         "params": "text_emb_params",
         "quantization": "text_emb_quantization",

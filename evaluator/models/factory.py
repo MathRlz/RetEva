@@ -213,12 +213,13 @@ def _build_eam_alignment_audio(
     **extra,
 ):
     _check_extra_params(model_type, model_class, extra)
-    from evaluator.models.a2e.eam_alignment import EamAlignmentAudioModel
-    name = (EamAlignmentAudioModel.Params.SIZES.get(size) or model_name
+    from evaluator.models.a2e.eam_alignment import EamAlignmentModel
+    name = (EamAlignmentModel.Params.SIZES.get(size) or model_name
             or "facebook/seamless-m4t-v2-large")
     return model_class(
         audio_encoder_name=name,
-        model_path=extra.get("model_path") or model_path,
+        model_path=extra.pop("model_path", None) or model_path,
+        **extra,
     ).to(torch.device(device))
 
 

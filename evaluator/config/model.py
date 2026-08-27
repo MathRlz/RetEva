@@ -35,6 +35,8 @@ class ModelConfig:
     text_emb_size: Optional[str] = None
     text_emb_model_name: Optional[str] = None
     text_emb_adapter_path: Optional[str] = None
+    # Path to a trained checkpoint (e.g. eam_alignment) — mirrors audio_emb_model_path.
+    text_emb_model_path: Optional[str] = None
     text_emb_device: str = "cuda:1"
     # Override the embedding-space id (else derived from model type/name). Declare the
     # SAME id on a co-trained audio embedder so cross-modal dense retrieval validates.

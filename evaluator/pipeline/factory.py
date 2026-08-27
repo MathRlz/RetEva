@@ -279,12 +279,15 @@ class _ModelBuilders:
 
     def text_emb(self):
         mcfg = self.mcfg
+        extra = dict(mcfg.text_emb_params)
+        if mcfg.text_emb_model_path:
+            extra.setdefault("model_path", mcfg.text_emb_model_path)
         return self._build(
             "text_embedding", mcfg.text_emb_model_type, mcfg.text_emb_device,
             lambda dev: self.service_provider.get_text_embedding_model(
                 mcfg.text_emb_model_type, mcfg.text_emb_model_name, dev,
                 size=mcfg.text_emb_size, quantization=mcfg.quantization_for("text_emb"),
-                **mcfg.text_emb_params,
+                **extra,
             ),
             lambda dev: create_text_embedding_model(
                 mcfg.text_emb_model_type,
@@ -292,7 +295,7 @@ class _ModelBuilders:
                 device=dev,
                 size=mcfg.text_emb_size,
                 quantization=mcfg.quantization_for("text_emb"),
-                **mcfg.text_emb_params,
+                **extra,
             ),
         )
 
