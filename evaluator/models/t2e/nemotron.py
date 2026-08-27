@@ -18,13 +18,14 @@ class NemotronModel(TextEmbeddingModel):
             "8b": "nvidia/llama-embed-nemotron-8b",
         }
 
-    def __init__(self, model_name: str = "nvidia/llama-embed-nemotron-8b"):
+    def __init__(self, model_name: str = "nvidia/llama-embed-nemotron-8b", device: str = None):
         from sentence_transformers import SentenceTransformer
         attn_implementation = "flash_attention_2"
         self.model_name = model_name
 
         self.model = SentenceTransformer(
             model_name,
+            device=device,
             trust_remote_code=True,
             model_kwargs={
                 "attn_implementation": attn_implementation,

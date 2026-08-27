@@ -128,11 +128,39 @@ def run_graph(
     _dispatch_execution(state, stage_graph, eval_config, features)
 
     _finalize_run(context.cache_manager, context.experiment_id)
+    result = _collect_final_result(state, stage_graph)
+    _cb("done", _total, _total, "Evaluation complete")
+    return result
+
+
+def _collect_final_result(state: "RunState", stage_graph) -> RunResults:
+    """Assemble the run's returned result from every `finalize` node's own published
+    ``run_report`` (R4/multi-variant — each finalize node builds its own report from its own
+    bound producers; see `_stage_finalize`). Exactly one → that report, flat, byte-identical to
+    the pre-R4 single-shared-`state.results` behavior. N > 1 (a multi-variant graph) →
+    ``{"variants": {node_id: report, ...}, "latency": ..., "node_latency": ...}``. Zero (no
+    `finalize` node in the graph, e.g. a structural-only run) → unchanged fallback to the
+    shared `state.results`."""
+    finalize_ids = [n.id for n in stage_graph.nodes if _node_kind(n) == "finalize"]
+    reports = [
+        (nid, state.ctx.get(nid, "run_report"))
+        for nid in finalize_ids
+        if state.ctx.has(nid, "run_report")
+    ]
     # G5: traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
     # the duplicate top-level keys at the output boundary (sinks read them during the run).
-    drop_mirrored_top_level_keys(state.results)
-    _cb("done", _total, _total, "Evaluation complete")
-    return state.results
+    if not reports:
+        drop_mirrored_top_level_keys(state.results)
+        return state.results
+    for _, report in reports:
+        drop_mirrored_top_level_keys(report)
+    if len(reports) == 1:
+        return reports[0][1]
+    return {
+        "variants": dict(reports),
+        "latency": dict(state.stage_times),
+        "node_latency": dict(state.node_times),
+    }
 
 
 def _resolve_mode_and_graph(

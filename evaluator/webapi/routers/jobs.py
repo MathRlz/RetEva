@@ -47,7 +47,7 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
         try:
             # Shared translate + validate path (dataset choice, topology, embedding spaces) — the
             # same `build_validated_run_config` /ui/run-graph uses, so UI and API can't drift.
-            config = build_validated_run_config(
+            config, _graph = build_validated_run_config(
                 payload.spec,
                 experiment_name=payload.experiment_name,
                 auto_devices=payload.auto_devices,

@@ -9,7 +9,7 @@
       {% set cur = (prog.get('current') if prog else 0) or 0 %}
       {% set pct = ((cur / total * 100) | round) if total else 0 %}
       <div class="row">
-        <strong>{{ (prog.get('phase') if prog else '') or 'queued' }}…</strong>
+        <strong>{{ (prog.get('step') if prog else '') or 'queued' }}…</strong>
         {% if total %}<span class="muted">{{ cur }} / {{ total }} ({{ pct }}%)</span>{% endif %}
       </div>
       <div class="progress-track">

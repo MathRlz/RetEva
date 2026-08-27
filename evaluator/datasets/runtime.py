@@ -178,9 +178,12 @@ def validate_dataset_runtime_config(config: Any, *, retrieval_required: bool = F
     """Validate the dataset config via its descriptor (the single source of truth).
 
     Returns the resolved :class:`~evaluator.datasets.descriptor.DatasetDescriptor`.
-    ``retrieval_required`` rejects datasets none of whose compatible pipeline modes
-    retrieve (replaces the retired DatasetRuntimeSpec.supports_corpus check — every
-    retired spec declared corpus support, so default-mode behavior is unchanged).
+    ``retrieval_required`` rejects a dataset that can't back a retrieval corpus — mirrors
+    ``DatasetDescriptor.derived_outputs``'s own retrieval-capability test (an audio dataset
+    qualifies even with ``evaluation_mode="transcription"``: its own transcriptions make a
+    legitimate cross-modal retrieval corpus) — replaces the retired
+    DatasetRuntimeSpec.supports_corpus check (every retired spec declared corpus support, so
+    default-mode behavior is unchanged).
     """
     from .descriptor import resolve_dataset_descriptor
 
@@ -190,11 +193,11 @@ def validate_dataset_runtime_config(config: Any, *, retrieval_required: bool = F
         raise ConfigurationError(
             f"Dataset '{descriptor.id}' configuration invalid: " + "; ".join(errors)
         )
-    if retrieval_required and not any(
-        "retrieval" in str(mode) for mode in descriptor.compatible_pipeline_modes
+    if retrieval_required and not (
+        descriptor.requires_audio or "retrieval" in descriptor.evaluation_mode
     ):
         raise ConfigurationError(
-            f"Dataset '{descriptor.id}' supports no retrieval pipeline mode."
+            f"Dataset '{descriptor.id}' supports no retrieval evaluation mode."
         )
     return descriptor
 

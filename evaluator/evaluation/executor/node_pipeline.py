@@ -56,10 +56,10 @@ def _build_node_pipeline(s: "RunState", stage: str, params: dict):
 
     Honors the FULL model param set (``model_path`` / ``dim`` / ``pooling`` (via
     ``params``) / ``embedding_space`` / ``quantization`` / ``size``) by overlaying the node's
-    params onto a copy of ``config.model`` and building through the **factory branch** of
-    ``_ModelBuilders`` (``service_provider=None``) — the provider's ``get_*`` signatures omit
-    several of these, so a per-node override must build standalone (it builds once per run, so
-    forgoing model-reuse is fine)."""
+    params onto a copy of ``config.model`` and building through ``_ModelBuilders`` — routed via
+    the run's shared ``service_provider`` (same as ``_node_reranking``) so two nodes that resolve
+    to the SAME model (type/name/device/params) share one loaded instance instead of each paying
+    for its own load; a node with a genuinely different override still gets its own cache key."""
     from types import SimpleNamespace
 
     from ...config.graph_config import resolved_model_config
@@ -68,7 +68,8 @@ def _build_node_pipeline(s: "RunState", stage: str, params: dict):
     node = SimpleNamespace(stage=stage, params=params)
     eff_model = resolved_model_config(s.config, node)
     model = getattr(
-        _ModelBuilders(SimpleNamespace(model=eff_model), None, None), _BUILDER_METHOD[stage]
+        _ModelBuilders(SimpleNamespace(model=eff_model), s.service_provider, None),
+        _BUILDER_METHOD[stage],
     )()
     cache = s.cache_manager
     if stage == "asr":

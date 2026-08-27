@@ -6,10 +6,10 @@ Pick the base class that matches your data, set a few class attributes, implemen
 ``@register_eval_dataset(id=...)``. The :class:`DatasetDescriptor` (capabilities +
 validation + loader) is derived from the class — you don't hand-fill it.
 
-TTS bridge: the pipeline modes are audio-first. Set ``supports_generation = True`` on a
-text dataset and it gains the audio pipeline modes — audio is synthesised from the text
-at run time (query audio always; corpus audio for ``audio_emb_retrieval``). This is how a
-text-retrieval dataset becomes an audio-retrieval dataset.
+TTS bridge: set ``supports_generation = True`` on a text dataset to let it run through an
+audio-modality graph too — audio is synthesised from the text at run time (query audio
+always; corpus audio when the graph embeds an audio corpus). This is how a text-retrieval
+dataset becomes an audio-retrieval dataset.
 
 Example::
 
@@ -32,15 +32,10 @@ from typing import Mapping, TYPE_CHECKING, List, Sequence
 
 from ..config.types import DatasetType
 from .core import QueryDataset
-from .descriptor import METRICS_BY_MODE, DatasetDescriptor, register_dataset
+from .descriptor import DatasetDescriptor, register_dataset
 
 if TYPE_CHECKING:
     from ..config.data import DataConfig
-
-# Pipeline modes that consume audio input. Unlocked for text datasets via TTS generation.
-_AUDIO_MODES: Sequence[str] = (
-    "asr_only", "asr_text_retrieval", "audio_text_retrieval", "audio_emb_retrieval",
-)
 
 
 class EvalDataset(QueryDataset):
@@ -60,7 +55,6 @@ class EvalDataset(QueryDataset):
     #: Subject-area tag for the categorized picker (e.g. "medical"); modality is derived
     #: from ``dataset_type``.
     domain: str = "general"
-    native_pipeline_modes: Sequence[str] = ()
     required_data_fields: Sequence[str] = ()
     #: Column schema {name: registered artifact}; empty = per-type default
     #: (descriptor.FIELDS_BY_DATASET_TYPE). Shown on the DAG's dataset node.
@@ -87,18 +81,6 @@ class EvalDataset(QueryDataset):
         return errors
 
     @classmethod
-    def compatible_pipeline_modes(cls) -> Sequence[str]:
-        """Native modes, plus the audio modes when TTS generation is supported."""
-        modes = list(cls.native_pipeline_modes)
-        if cls.supports_generation:
-            modes += [m for m in _AUDIO_MODES if m not in modes]
-        return tuple(modes)
-
-    @classmethod
-    def default_metrics(cls) -> Sequence[str]:
-        return tuple(METRICS_BY_MODE.get(cls.evaluation_mode, ()))
-
-    @classmethod
     def _dataset_id(cls) -> str:
         return getattr(cls, "_registered_id", cls.__name__)
 
@@ -112,12 +94,6 @@ class AudioTranscriptionDataset(EvalDataset):
     requires_audio = True
     requires_text = False
     evaluation_mode = "transcription"
-    # Transcription is the native task, but the audio queries + a corpus derived from the
-    # transcriptions make cross-modal audio retrieval a legitimate experiment too (apm_jina,
-    # clap_admed, *_selfretr_audio_emb/fusion), so the audio-retrieval modes are compatible.
-    native_pipeline_modes = (
-        "asr_only", "asr_text_retrieval", "audio_text_retrieval", "audio_emb_retrieval",
-    )
 
 
 class AudioRetrievalDataset(EvalDataset):
@@ -127,23 +103,19 @@ class AudioRetrievalDataset(EvalDataset):
     requires_audio = True
     requires_text = True
     evaluation_mode = "retrieval"
-    native_pipeline_modes = (
-        "asr_only", "asr_text_retrieval", "audio_text_retrieval", "audio_emb_retrieval",
-    )
 
 
 class TextRetrievalDataset(EvalDataset):
     """Text query against a text corpus.
 
-    The pipeline modes are audio-first, so set ``supports_generation = True`` to run via
-    TTS (this unlocks the audio modes and synthesises audio from the text at run time).
+    Set ``supports_generation = True`` to also let this run through an audio-modality graph
+    via TTS (synthesises audio from the text at run time).
     """
 
     dataset_type = DatasetType.TEXT_QUERY_RETRIEVAL
     requires_audio = False
     requires_text = True
     evaluation_mode = "retrieval"
-    native_pipeline_modes = ()
 
 
 class MultimodalQADataset(TextRetrievalDataset):
@@ -176,8 +148,6 @@ def register_eval_dataset(*, id: str, description: str = ""):
             supports_generation=cls.supports_generation,
             evaluation_mode=cls.evaluation_mode,
             domain=cls.domain,
-            compatible_pipeline_modes=cls.compatible_pipeline_modes(),
-            default_metrics=list(cls.default_metrics()),
             required_data_fields=list(cls.required_data_fields),
             fields=dict(cls.fields),
             embedding_space=cls.embedding_space,

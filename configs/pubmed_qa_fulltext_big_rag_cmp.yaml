@@ -1,19 +1,21 @@
 # RAG retrieval strategy comparison on pubmed_qa_fulltext_big.
 #
-# Five branches, all sharing the same graph topology — only retrieval params differ.
-# corpus_embedding + vector_db + text_embedding run once via CSE; branches diverge at retrieval.
+# One graph: dataset_source/corpus_embedding/vector_db/text_embedding are shared (each has
+# multiple outgoing edges); five distinctly-named retrieval nodes diverge from there, each
+# with its own answer_gen/metrics/judge chain. No graph.branches.
 #
-# Branches:
+# Variants:
 #   dense            — cosine dense retrieval only (labse vectors)
 #   sparse           — BM25 lexical retrieval only
 #   hybrid_linear    — dense + sparse, linear fusion (dense_weight 0.6)
 #   hybrid_rrf       — dense + sparse, reciprocal rank fusion (k=60)
 #   hybrid_rrf_rerank — RRF + token-overlap reranker (top_k 30)
 #
-# Two-hop query rewrite (query_refine node) requires a different graph topology and
-# cannot be expressed as a branch here — see pubmed_qa_rag_fulltext_refine.yaml.
+# Two-hop query rewrite (query_refine node) requires a different graph topology and isn't
+# one of these variants — see pubmed_qa_rag_fulltext_refine.yaml.
 #
-# COST: 5 × full sweep (1209 questions each). Start:
+# COST: 5 × full sweep (1209 questions each) for answer_gen/answer_judge (they always varied
+# per variant since retrieval differs). Start:
 #   OLLAMA_NUM_PARALLEL=4 OLLAMA_CONTEXT_LENGTH=8192 ollama serve
 experiment:
   name: pubmed_qa_fulltext_big_rag_cmp
@@ -29,49 +31,52 @@ dataset:
 data:
   num_workers: 0
 
+vector_db:
+  bm25_k1: 1.5
+  bm25_b: 0.75
+
+nodes:
+  text_embedding:
+    model: labse
+    device: cuda:1
+  vector_db:
+    store: inmemory
+
 graph:
-  branches:
-  - id: dense
-    retrieval:
-      k: 10
-      mode: dense
-  - id: sparse
-    retrieval:
-      k: 10
-      mode: sparse
-  - id: hybrid_linear
-    retrieval:
-      k: 10
-      mode: hybrid
-      fusion:
-        method: linear
-        dense_weight: 0.6
-  - id: hybrid_rrf
-    retrieval:
-      k: 10
-      mode: hybrid
-      fusion:
-        method: rrf
-        rrf_k: 60
-  - id: hybrid_rrf_rerank
-    retrieval:
-      k: 10
-      mode: hybrid
-      fusion:
-        method: rrf
-        rrf_k: 60
-      reranker:
-        mode: token_overlap
-        top_k: 30
   nodes:
   - dataset_source
   - corpus_embedding
   - vector_db
   - text_embedding
-  - retrieval
-  - id: answer_gen
-    type: answer_gen
+  - id: retrieval_dense
+    type: retrieval
+    params: {k: 10, mode: dense}
+  - id: retrieval_sparse
+    type: retrieval
+    params: {k: 10, mode: sparse}
+  - id: retrieval_hybrid_linear
+    type: retrieval
     params:
+      k: 10
+      mode: hybrid
+      fusion: {method: linear, dense_weight: 0.6}
+  - id: retrieval_hybrid_rrf
+    type: retrieval
+    params:
+      k: 10
+      mode: hybrid
+      fusion: {method: rrf, rrf_k: 60}
+  - id: retrieval_hybrid_rrf_rerank
+    type: retrieval
+    params:
+      k: 10
+      mode: hybrid
+      fusion: {method: rrf, rrf_k: 60}
+      reranker: {mode: token_overlap, top_k: 30}
+  - &answer_gen_dense
+    id: answer_gen_dense
+    type: answer_gen
+    params: &answer_gen_params
       method: simple
       max_cases: 0
       system_prompt: |-
@@ -92,81 +97,316 @@ graph:
       context_source: full_text
       context_chunk_chars: 1200
       context_chunks: 4
-  - retrieval_metrics
-  - answer_metrics
-  - metrics
-  - build_query_traces
-  - id: answer_judge
+  - id: answer_gen_sparse
+    type: answer_gen
+    params: *answer_gen_params
+  - id: answer_gen_hybrid_linear
+    type: answer_gen
+    params: *answer_gen_params
+  - id: answer_gen_hybrid_rrf
+    type: answer_gen
+    params: *answer_gen_params
+  - id: answer_gen_hybrid_rrf_rerank
+    type: answer_gen
+    params: *answer_gen_params
+  - id: retrieval_metrics_dense
+    type: retrieval_metrics
+  - id: retrieval_metrics_sparse
+    type: retrieval_metrics
+  - id: retrieval_metrics_hybrid_linear
+    type: retrieval_metrics
+  - id: retrieval_metrics_hybrid_rrf
+    type: retrieval_metrics
+  - id: retrieval_metrics_hybrid_rrf_rerank
+    type: retrieval_metrics
+  - id: answer_metrics_dense
+    type: answer_metrics
+  - id: answer_metrics_sparse
+    type: answer_metrics
+  - id: answer_metrics_hybrid_linear
+    type: answer_metrics
+  - id: answer_metrics_hybrid_rrf
+    type: answer_metrics
+  - id: answer_metrics_hybrid_rrf_rerank
+    type: answer_metrics
+  - id: metrics_dense
+    type: metrics
+  - id: metrics_sparse
+    type: metrics
+  - id: metrics_hybrid_linear
+    type: metrics
+  - id: metrics_hybrid_rrf
+    type: metrics
+  - id: metrics_hybrid_rrf_rerank
+    type: metrics
+  - id: build_query_traces_dense
+    type: build_query_traces
+  - id: build_query_traces_sparse
+    type: build_query_traces
+  - id: build_query_traces_hybrid_linear
+    type: build_query_traces
+  - id: build_query_traces_hybrid_rrf
+    type: build_query_traces
+  - id: build_query_traces_hybrid_rrf_rerank
+    type: build_query_traces
+  - &answer_judge_dense
+    id: answer_judge_dense
     type: answer_judge
-    params:
+    params: &answer_judge_params
       max_cases: 0
       system_prompt: |-
         You are an expert evaluator for a medical question-answering retrieval system. Score each requested aspect from 0.0 (worst) to 1.0 (best). Be strict and consistent. Respond with STRICT JSON only — no prose, no markdown.
-  - finalize
+  - id: answer_judge_sparse
+    type: answer_judge
+    params: *answer_judge_params
+  - id: answer_judge_hybrid_linear
+    type: answer_judge
+    params: *answer_judge_params
+  - id: answer_judge_hybrid_rrf
+    type: answer_judge
+    params: *answer_judge_params
+  - id: answer_judge_hybrid_rrf_rerank
+    type: answer_judge
+    params: *answer_judge_params
+  - id: finalize_dense
+    type: finalize
+  - id: finalize_sparse
+    type: finalize
+  - id: finalize_hybrid_linear
+    type: finalize
+  - id: finalize_hybrid_rrf
+    type: finalize
+  - id: finalize_hybrid_rrf_rerank
+    type: finalize
   edges:
   - {from: dataset_source, to: corpus_embedding, input: corpus}
   - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
   - {from: dataset_source, output: reference_text, to: text_embedding, input: query_text}
-  - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
-  - {from: vector_db, to: retrieval, input: vector_index}
-  - {from: dataset_source, output: reference_text, to: retrieval, input: query_text}
-  - {from: dataset_source, to: retrieval, input: reference_transcription}
-  - {from: dataset_source, to: retrieval, input: relevant_docs}
-  - {from: dataset_source, output: reference_text, to: answer_gen, input: query_text}
-  - {from: retrieval, to: answer_gen, input: retrieved}
-  - {from: dataset_source, to: answer_gen, input: short_answers}
-  - {from: dataset_source, to: answer_gen, input: relevant_docs}
-  - {from: retrieval, to: retrieval_metrics, input: retrieved}
-  - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
-  - {from: answer_gen, to: answer_metrics, input: generated_answers}
-  - {from: retrieval, to: answer_metrics, input: retrieved}
-  - {from: dataset_source, to: answer_metrics, input: relevant_docs}
-  - {from: dataset_source, to: answer_metrics, input: short_answers}
-  - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
-  - {from: answer_metrics, to: metrics, input: answer_scores}
-  - {from: retrieval, to: metrics, input: retrieved}
-  - {from: dataset_source, to: metrics, input: reference_transcription}
-  - {from: dataset_source, to: metrics, input: relevant_docs}
-  - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
-  - {from: retrieval, to: build_query_traces, input: retrieved}
-  - {from: answer_gen, to: build_query_traces, input: generated_answers}
-  - {from: metrics, to: build_query_traces, input: metrics}
-  - {from: dataset_source, to: build_query_traces, input: reference_transcription}
-  - {from: dataset_source, to: build_query_traces, input: relevant_docs}
-  - {from: retrieval_metrics, to: build_query_traces, input: per_query_recall5}
-  - {from: metrics, to: answer_judge, input: metrics}
-  - {from: build_query_traces, to: answer_judge, input: query_traces}
-  - {from: answer_gen, to: answer_judge, input: generated_answers}
-  - {from: retrieval, to: answer_judge, input: retrieved}
-  - {from: dataset_source, to: answer_judge, input: relevant_docs}
-  - {from: retrieval_metrics, to: answer_judge, input: per_query_recall5}
-  - {from: metrics, to: finalize, input: metrics}
-  - {from: build_query_traces, to: finalize, input: query_traces}
-  - {from: answer_judge, to: finalize, input: judge_scores}
-  - {from: answer_judge, to: finalize, input: judge_pass}
-  - {from: answer_gen, to: finalize, input: generated_answers}
-  - {from: retrieval, to: finalize, input: retrieved}
-  - {from: answer_judge, to: finalize, input: judge_aspect_accuracy}
-  - {from: answer_judge, to: finalize, input: judge_aspect_clarity}
-  - {from: answer_judge, to: finalize, input: judge_aspect_completeness}
-  - {from: answer_judge, to: finalize, input: judge_aspect_correctness}
-  - {from: answer_judge, to: finalize, input: judge_aspect_factuality}
-  - {from: answer_judge, to: finalize, input: judge_aspect_faithfulness}
-  - {from: answer_judge, to: finalize, input: judge_aspect_relevance}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval_dense, input: query_vectors}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval_sparse, input: query_vectors}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval_hybrid_linear, input: query_vectors}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval_hybrid_rrf, input: query_vectors}
+  - {from: text_embedding, output: text_query_vectors, to: retrieval_hybrid_rrf_rerank, input: query_vectors}
+  - {from: vector_db, to: retrieval_dense, input: vector_index}
+  - {from: vector_db, to: retrieval_sparse, input: vector_index}
+  - {from: vector_db, to: retrieval_hybrid_linear, input: vector_index}
+  - {from: vector_db, to: retrieval_hybrid_rrf, input: vector_index}
+  - {from: vector_db, to: retrieval_hybrid_rrf_rerank, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_dense, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_sparse, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_hybrid_linear, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_hybrid_rrf, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_hybrid_rrf_rerank, input: query_text}
+  - {from: dataset_source, to: retrieval_dense, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_sparse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_hybrid_linear, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_hybrid_rrf, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_hybrid_rrf_rerank, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_dense, input: relevant_docs}
+  - {from: dataset_source, to: retrieval_sparse, input: relevant_docs}
+  - {from: dataset_source, to: retrieval_hybrid_linear, input: relevant_docs}
+  - {from: dataset_source, to: retrieval_hybrid_rrf, input: relevant_docs}
+  - {from: dataset_source, to: retrieval_hybrid_rrf_rerank, input: relevant_docs}
 
-vector_db:
-  bm25_k1: 1.5
-  bm25_b: 0.75
+  - {from: dataset_source, output: reference_text, to: answer_gen_dense, input: query_text}
+  - {from: retrieval_dense, to: answer_gen_dense, input: retrieved}
+  - {from: dataset_source, to: answer_gen_dense, input: short_answers}
+  - {from: dataset_source, to: answer_gen_dense, input: relevant_docs}
+  - {from: retrieval_dense, to: retrieval_metrics_dense, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_dense, input: relevant_docs}
+  - {from: answer_gen_dense, to: answer_metrics_dense, input: generated_answers}
+  - {from: retrieval_dense, to: answer_metrics_dense, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_dense, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_dense, input: short_answers}
+  - {from: retrieval_metrics_dense, to: metrics_dense, input: retrieval_scores}
+  - {from: answer_metrics_dense, to: metrics_dense, input: answer_scores}
+  - {from: retrieval_dense, to: metrics_dense, input: retrieved}
+  - {from: dataset_source, to: metrics_dense, input: reference_transcription}
+  - {from: dataset_source, to: metrics_dense, input: relevant_docs}
+  - {from: retrieval_metrics_dense, to: metrics_dense, input: per_query_recall5}
+  - {from: retrieval_dense, to: build_query_traces_dense, input: retrieved}
+  - {from: answer_gen_dense, to: build_query_traces_dense, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_dense, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_dense, input: relevant_docs}
+  - {from: retrieval_metrics_dense, to: build_query_traces_dense, input: per_query_recall5}
+  - {from: build_query_traces_dense, to: answer_judge_dense, input: query_traces}
+  - {from: answer_gen_dense, to: answer_judge_dense, input: generated_answers}
+  - {from: retrieval_dense, to: answer_judge_dense, input: retrieved}
+  - {from: dataset_source, to: answer_judge_dense, input: relevant_docs}
+  - {from: retrieval_metrics_dense, to: answer_judge_dense, input: per_query_recall5}
+  - {from: metrics_dense, to: finalize_dense, input: metrics}
+  - {from: build_query_traces_dense, to: finalize_dense, input: query_traces}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_scores}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_pass}
+  - {from: answer_gen_dense, to: finalize_dense, input: generated_answers}
+  - {from: retrieval_dense, to: finalize_dense, input: retrieved}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_aspect_accuracy}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_aspect_clarity}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_aspect_completeness}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_aspect_correctness}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_aspect_factuality}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_aspect_faithfulness}
+  - {from: answer_judge_dense, to: finalize_dense, input: judge_aspect_relevance}
 
-nodes:
-  text_embedding:
-    model: labse
-    device: cuda:1
-  vector_db:
-    store: inmemory
-  retrieval:
-    k: 10
-    mode: dense
+  - {from: dataset_source, output: reference_text, to: answer_gen_sparse, input: query_text}
+  - {from: retrieval_sparse, to: answer_gen_sparse, input: retrieved}
+  - {from: dataset_source, to: answer_gen_sparse, input: short_answers}
+  - {from: dataset_source, to: answer_gen_sparse, input: relevant_docs}
+  - {from: retrieval_sparse, to: retrieval_metrics_sparse, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_sparse, input: relevant_docs}
+  - {from: answer_gen_sparse, to: answer_metrics_sparse, input: generated_answers}
+  - {from: retrieval_sparse, to: answer_metrics_sparse, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_sparse, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_sparse, input: short_answers}
+  - {from: retrieval_metrics_sparse, to: metrics_sparse, input: retrieval_scores}
+  - {from: answer_metrics_sparse, to: metrics_sparse, input: answer_scores}
+  - {from: retrieval_sparse, to: metrics_sparse, input: retrieved}
+  - {from: dataset_source, to: metrics_sparse, input: reference_transcription}
+  - {from: dataset_source, to: metrics_sparse, input: relevant_docs}
+  - {from: retrieval_metrics_sparse, to: metrics_sparse, input: per_query_recall5}
+  - {from: retrieval_sparse, to: build_query_traces_sparse, input: retrieved}
+  - {from: answer_gen_sparse, to: build_query_traces_sparse, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_sparse, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_sparse, input: relevant_docs}
+  - {from: retrieval_metrics_sparse, to: build_query_traces_sparse, input: per_query_recall5}
+  - {from: build_query_traces_sparse, to: answer_judge_sparse, input: query_traces}
+  - {from: answer_gen_sparse, to: answer_judge_sparse, input: generated_answers}
+  - {from: retrieval_sparse, to: answer_judge_sparse, input: retrieved}
+  - {from: dataset_source, to: answer_judge_sparse, input: relevant_docs}
+  - {from: retrieval_metrics_sparse, to: answer_judge_sparse, input: per_query_recall5}
+  - {from: metrics_sparse, to: finalize_sparse, input: metrics}
+  - {from: build_query_traces_sparse, to: finalize_sparse, input: query_traces}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_scores}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_pass}
+  - {from: answer_gen_sparse, to: finalize_sparse, input: generated_answers}
+  - {from: retrieval_sparse, to: finalize_sparse, input: retrieved}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_aspect_accuracy}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_aspect_clarity}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_aspect_completeness}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_aspect_correctness}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_aspect_factuality}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_aspect_faithfulness}
+  - {from: answer_judge_sparse, to: finalize_sparse, input: judge_aspect_relevance}
+
+  - {from: dataset_source, output: reference_text, to: answer_gen_hybrid_linear, input: query_text}
+  - {from: retrieval_hybrid_linear, to: answer_gen_hybrid_linear, input: retrieved}
+  - {from: dataset_source, to: answer_gen_hybrid_linear, input: short_answers}
+  - {from: dataset_source, to: answer_gen_hybrid_linear, input: relevant_docs}
+  - {from: retrieval_hybrid_linear, to: retrieval_metrics_hybrid_linear, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_hybrid_linear, input: relevant_docs}
+  - {from: answer_gen_hybrid_linear, to: answer_metrics_hybrid_linear, input: generated_answers}
+  - {from: retrieval_hybrid_linear, to: answer_metrics_hybrid_linear, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_hybrid_linear, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_hybrid_linear, input: short_answers}
+  - {from: retrieval_metrics_hybrid_linear, to: metrics_hybrid_linear, input: retrieval_scores}
+  - {from: answer_metrics_hybrid_linear, to: metrics_hybrid_linear, input: answer_scores}
+  - {from: retrieval_hybrid_linear, to: metrics_hybrid_linear, input: retrieved}
+  - {from: dataset_source, to: metrics_hybrid_linear, input: reference_transcription}
+  - {from: dataset_source, to: metrics_hybrid_linear, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_linear, to: metrics_hybrid_linear, input: per_query_recall5}
+  - {from: retrieval_hybrid_linear, to: build_query_traces_hybrid_linear, input: retrieved}
+  - {from: answer_gen_hybrid_linear, to: build_query_traces_hybrid_linear, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_hybrid_linear, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_hybrid_linear, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_linear, to: build_query_traces_hybrid_linear, input: per_query_recall5}
+  - {from: build_query_traces_hybrid_linear, to: answer_judge_hybrid_linear, input: query_traces}
+  - {from: answer_gen_hybrid_linear, to: answer_judge_hybrid_linear, input: generated_answers}
+  - {from: retrieval_hybrid_linear, to: answer_judge_hybrid_linear, input: retrieved}
+  - {from: dataset_source, to: answer_judge_hybrid_linear, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_linear, to: answer_judge_hybrid_linear, input: per_query_recall5}
+  - {from: metrics_hybrid_linear, to: finalize_hybrid_linear, input: metrics}
+  - {from: build_query_traces_hybrid_linear, to: finalize_hybrid_linear, input: query_traces}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_scores}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_pass}
+  - {from: answer_gen_hybrid_linear, to: finalize_hybrid_linear, input: generated_answers}
+  - {from: retrieval_hybrid_linear, to: finalize_hybrid_linear, input: retrieved}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_aspect_accuracy}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_aspect_clarity}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_aspect_completeness}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_aspect_correctness}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_aspect_factuality}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_aspect_faithfulness}
+  - {from: answer_judge_hybrid_linear, to: finalize_hybrid_linear, input: judge_aspect_relevance}
+
+  - {from: dataset_source, output: reference_text, to: answer_gen_hybrid_rrf, input: query_text}
+  - {from: retrieval_hybrid_rrf, to: answer_gen_hybrid_rrf, input: retrieved}
+  - {from: dataset_source, to: answer_gen_hybrid_rrf, input: short_answers}
+  - {from: dataset_source, to: answer_gen_hybrid_rrf, input: relevant_docs}
+  - {from: retrieval_hybrid_rrf, to: retrieval_metrics_hybrid_rrf, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_hybrid_rrf, input: relevant_docs}
+  - {from: answer_gen_hybrid_rrf, to: answer_metrics_hybrid_rrf, input: generated_answers}
+  - {from: retrieval_hybrid_rrf, to: answer_metrics_hybrid_rrf, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_hybrid_rrf, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_hybrid_rrf, input: short_answers}
+  - {from: retrieval_metrics_hybrid_rrf, to: metrics_hybrid_rrf, input: retrieval_scores}
+  - {from: answer_metrics_hybrid_rrf, to: metrics_hybrid_rrf, input: answer_scores}
+  - {from: retrieval_hybrid_rrf, to: metrics_hybrid_rrf, input: retrieved}
+  - {from: dataset_source, to: metrics_hybrid_rrf, input: reference_transcription}
+  - {from: dataset_source, to: metrics_hybrid_rrf, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_rrf, to: metrics_hybrid_rrf, input: per_query_recall5}
+  - {from: retrieval_hybrid_rrf, to: build_query_traces_hybrid_rrf, input: retrieved}
+  - {from: answer_gen_hybrid_rrf, to: build_query_traces_hybrid_rrf, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_hybrid_rrf, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_hybrid_rrf, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_rrf, to: build_query_traces_hybrid_rrf, input: per_query_recall5}
+  - {from: build_query_traces_hybrid_rrf, to: answer_judge_hybrid_rrf, input: query_traces}
+  - {from: answer_gen_hybrid_rrf, to: answer_judge_hybrid_rrf, input: generated_answers}
+  - {from: retrieval_hybrid_rrf, to: answer_judge_hybrid_rrf, input: retrieved}
+  - {from: dataset_source, to: answer_judge_hybrid_rrf, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_rrf, to: answer_judge_hybrid_rrf, input: per_query_recall5}
+  - {from: metrics_hybrid_rrf, to: finalize_hybrid_rrf, input: metrics}
+  - {from: build_query_traces_hybrid_rrf, to: finalize_hybrid_rrf, input: query_traces}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_scores}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_pass}
+  - {from: answer_gen_hybrid_rrf, to: finalize_hybrid_rrf, input: generated_answers}
+  - {from: retrieval_hybrid_rrf, to: finalize_hybrid_rrf, input: retrieved}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_aspect_accuracy}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_aspect_clarity}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_aspect_completeness}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_aspect_correctness}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_aspect_factuality}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_aspect_faithfulness}
+  - {from: answer_judge_hybrid_rrf, to: finalize_hybrid_rrf, input: judge_aspect_relevance}
+
+  - {from: dataset_source, output: reference_text, to: answer_gen_hybrid_rrf_rerank, input: query_text}
+  - {from: retrieval_hybrid_rrf_rerank, to: answer_gen_hybrid_rrf_rerank, input: retrieved}
+  - {from: dataset_source, to: answer_gen_hybrid_rrf_rerank, input: short_answers}
+  - {from: dataset_source, to: answer_gen_hybrid_rrf_rerank, input: relevant_docs}
+  - {from: retrieval_hybrid_rrf_rerank, to: retrieval_metrics_hybrid_rrf_rerank, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_hybrid_rrf_rerank, input: relevant_docs}
+  - {from: answer_gen_hybrid_rrf_rerank, to: answer_metrics_hybrid_rrf_rerank, input: generated_answers}
+  - {from: retrieval_hybrid_rrf_rerank, to: answer_metrics_hybrid_rrf_rerank, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_hybrid_rrf_rerank, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_hybrid_rrf_rerank, input: short_answers}
+  - {from: retrieval_metrics_hybrid_rrf_rerank, to: metrics_hybrid_rrf_rerank, input: retrieval_scores}
+  - {from: answer_metrics_hybrid_rrf_rerank, to: metrics_hybrid_rrf_rerank, input: answer_scores}
+  - {from: retrieval_hybrid_rrf_rerank, to: metrics_hybrid_rrf_rerank, input: retrieved}
+  - {from: dataset_source, to: metrics_hybrid_rrf_rerank, input: reference_transcription}
+  - {from: dataset_source, to: metrics_hybrid_rrf_rerank, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_rrf_rerank, to: metrics_hybrid_rrf_rerank, input: per_query_recall5}
+  - {from: retrieval_hybrid_rrf_rerank, to: build_query_traces_hybrid_rrf_rerank, input: retrieved}
+  - {from: answer_gen_hybrid_rrf_rerank, to: build_query_traces_hybrid_rrf_rerank, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_hybrid_rrf_rerank, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_hybrid_rrf_rerank, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_rrf_rerank, to: build_query_traces_hybrid_rrf_rerank, input: per_query_recall5}
+  - {from: build_query_traces_hybrid_rrf_rerank, to: answer_judge_hybrid_rrf_rerank, input: query_traces}
+  - {from: answer_gen_hybrid_rrf_rerank, to: answer_judge_hybrid_rrf_rerank, input: generated_answers}
+  - {from: retrieval_hybrid_rrf_rerank, to: answer_judge_hybrid_rrf_rerank, input: retrieved}
+  - {from: dataset_source, to: answer_judge_hybrid_rrf_rerank, input: relevant_docs}
+  - {from: retrieval_metrics_hybrid_rrf_rerank, to: answer_judge_hybrid_rrf_rerank, input: per_query_recall5}
+  - {from: metrics_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: metrics}
+  - {from: build_query_traces_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: query_traces}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_scores}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_pass}
+  - {from: answer_gen_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: generated_answers}
+  - {from: retrieval_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: retrieved}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_aspect_accuracy}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_aspect_clarity}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_aspect_completeness}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_aspect_correctness}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_aspect_factuality}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_aspect_faithfulness}
+  - {from: answer_judge_hybrid_rrf_rerank, to: finalize_hybrid_rrf_rerank, input: judge_aspect_relevance}
 
 llm:
   model: gemma4:latest

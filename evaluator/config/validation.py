@@ -8,7 +8,6 @@ public signatures; the heavy logic lives here.
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from ..config.types import enum_to_str
 from ..errors import ConfigurationError
 from .base import (
     estimate_model_memory_gb,
@@ -394,36 +393,33 @@ def _validate_data_params(config, errors, warnings):
 
 
 def _validate_dataset_compat(config, warnings):
-    """Warn when the dataset doesn't support the chosen pipeline mode / audio generation.
+    """Warn when the dataset doesn't support audio generation.
 
     The builder & Config&Run shape keeps the dataset under ``data.datasets[role]`` (a 1-entry map
-    for a single-source graph) and the mode in ``graph_override`` rather than ``graph_template`` —
-    so resolve the *real* descriptor from the single map entry and run the mode-independent checks
-    (audio-generation); the mode-compat check needs a known mode, so it runs only for the flat
-    config shape. Genuinely multi-source maps (>1 entry) have no single descriptor — skipped."""
+    for a single-source graph) — resolve the *real* descriptor from the single map entry.
+    Genuinely multi-source maps (>1 entry) have no single descriptor — skipped.
+
+    No "pipeline mode compatibility" check here (dropped): the graph's own nodes/edges are
+    the source of truth for what a run can do — a per-dataset-type hand-maintained
+    "compatible modes" allowlist was a second, independently-drifting classification on top
+    of that, and it went stale (e.g. pubmed_qa's override omitted audio_emb_retrieval even
+    though pubmed_qa_rag_fulltext_apm.yaml runs it correctly via TTS gap-fill), producing
+    false "Results may be incorrect" warnings on working graphs."""
     try:
         from ..datasets.descriptor import get_descriptor, resolve_dataset_descriptor
 
         datasets = getattr(config.data, "datasets", None)
-        mode = enum_to_str(config.graph_template)
         if datasets:
             if len(datasets) > 1:
-                return  # genuinely multi-source: no single descriptor/mode to check against
+                return  # genuinely multi-source: no single descriptor to check against
             entry = next(iter(datasets.values()))
             name = entry.get("dataset_name") if isinstance(entry, dict) \
                 else getattr(entry, "dataset_name", None)
             descriptor = get_descriptor(name) if name else None
-            mode = None  # builder graphs carry the mode in graph_override, not graph_template
         else:
             descriptor = resolve_dataset_descriptor(config.data)
         if descriptor is None:
             return
-        if mode and mode != "None" and not descriptor.supports_pipeline_mode(mode):
-            warnings.append(
-                f"Pipeline mode '{mode}' is not in the compatible modes for dataset "
-                f"'{descriptor.id}': {', '.join(descriptor.compatible_pipeline_modes)}. "
-                f"Results may be incorrect."
-            )
         if config.audio_synthesis.enabled and not descriptor.supports_generation:
             warnings.append(
                 f"audio_synthesis.enabled=True but dataset '{descriptor.id}' does not "

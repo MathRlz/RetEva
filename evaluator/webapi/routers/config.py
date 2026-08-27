@@ -4,15 +4,13 @@ from typing import Any, Callable, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from evaluator.pipeline.graph.templates import GRAPH_TEMPLATES, graph_template
-from evaluator.datasets.descriptor import list_registered_datasets, get_descriptor
+from evaluator.pipeline.graph.templates import graph_template
 from evaluator.services import ModelServiceProvider
 from evaluator.webapi.form_builder import (
     config_to_canvas_spec,
     graph_render_payload,
     prepare_run_config,
     render_node,
-    required_model_fields_for,
 )
 from evaluator.webapi.schemas import (
     ErrorResponse,
@@ -24,44 +22,6 @@ def build_config_router(
     provider_factory: Callable[[], ModelServiceProvider],
 ) -> APIRouter:
     router = APIRouter()
-
-    @router.get("/api/config/schema", summary="Config schema for wizard UI")
-    def config_schema() -> Dict[str, Any]:
-        """Return structured schema: graph templates → required model fields + compatible datasets,
-        datasets → field requirements + default metrics. Used by frontend wizard. (The four former
-        pipeline modes are graph templates now; required fields are graph-derived.)"""
-        modes: Dict[str, Any] = {}
-        for name in sorted(GRAPH_TEMPLATES):
-            fields = required_model_fields_for(name)
-            if not fields:
-                continue
-            compatible_datasets = [
-                ds_id
-                for ds_id in list_registered_datasets()
-                if (desc := get_descriptor(ds_id)) and desc.supports_pipeline_mode(name)
-            ]
-            modes[name] = {
-                "required_model_fields": fields,
-                "compatible_datasets": compatible_datasets,
-            }
-
-        datasets: Dict[str, Any] = {}
-        for ds_id in list_registered_datasets():
-            desc = get_descriptor(ds_id)
-            if desc is None:
-                continue
-            datasets[ds_id] = {
-                "description": desc.description,
-                "requires_audio": desc.requires_audio,
-                "requires_text": desc.requires_text,
-                "supports_generation": desc.supports_generation,
-                "evaluation_mode": desc.evaluation_mode,
-                "compatible_pipeline_modes": list(desc.compatible_pipeline_modes),
-                "required_data_fields": list(desc.required_data_fields),
-                "default_metrics": list(desc.default_metrics),
-            }
-
-        return {"pipeline_modes": modes, "datasets": datasets}
 
     @router.post(
         "/api/config/validate",
@@ -198,19 +158,6 @@ def build_config_router(
         except Exception as exc:  # noqa: BLE001 — surface any build error as 400
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"yaml": _yaml.safe_dump(config, sort_keys=False)}
-
-    @router.post("/api/sweep/preview", summary="Expand a sweep spec to its run group")
-    def sweep_preview_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Expand a sweep spec ``{name, base, axes:[{path, values}]}`` to the combination list
-        it would launch (Roadmap 4a) — no runs started. Returns the grid + its size; a malformed
-        spec is a 400 with the validation error."""
-        from ...analysis.sweep import sweep_preview
-        from ...errors import ConfigurationError
-
-        try:
-            return sweep_preview(payload)
-        except ConfigurationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/api/report/metrics-table", summary="Tidy branch×metric table for a report")
     def report_metrics_table_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:

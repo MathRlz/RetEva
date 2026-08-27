@@ -1,6 +1,8 @@
 """CLI utility functions."""
 
 import os
+import uuid
+from datetime import datetime
 from typing import Optional
 
 
@@ -82,6 +84,12 @@ def generate_model_description(config) -> str:
 def generate_output_filename(config) -> str:
     """Generate output filename based on configuration.
 
+    Includes a stable per-run id (``config.run_id`` if the caller stamped one — e.g. so a
+    parent process can predict the exact filename a child writes; else a fresh
+    timestamp+short-uuid generated here) so two runs of the SAME
+    ``(experiment_name, dataset, model)`` triple never collide/get skipped as "already ran"
+    (they used to produce the identical filename).
+
     Args:
         config: EvaluationConfig object.
 
@@ -89,11 +97,14 @@ def generate_output_filename(config) -> str:
         Sanitized output filename for results JSON.
     """
     model_desc = generate_model_description(config)
+    run_id = getattr(config, "run_id", None) or (
+        f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    )
     # Prefix with experiment name so the same models evaluated under different
     # configurations don't overwrite each other's results.
     exp_name = (config.experiment_name or "evaluation").strip()
     output_filename = (
-        f"results_{exp_name}_{config.data.dataset_name}_{model_desc}.json"
+        f"results_{exp_name}_{config.data.dataset_name}_{model_desc}_{run_id}.json"
     )
     # Sanitize filename
     output_filename = "".join(

@@ -100,8 +100,7 @@
       groups[key].forEach(d => {
         const opt = document.createElement('option');
         opt.value = d.id; opt.textContent = d.id;
-        opt.title = (d.description || '') +
-          (d.compatible_pipeline_modes ? '\nmodes: ' + d.compatible_pipeline_modes.join(', ') : '');
+        opt.title = d.description || '';
         if (d.id === current) opt.selected = true;
         og.appendChild(opt);
       });
@@ -264,6 +263,22 @@
       const h = document.createElement('h4');
       h.innerHTML = `${host.label || host.type} <small>(${host.type || ''})</small>`;
       panel.appendChild(h);
+    }
+    // Opt-in node-id rename (the builder's Drawflow host passes this; Config & Run's
+    // plain-object host doesn't, so its header stays label-only, unchanged).
+    if (host.renameId) {
+      const row = document.createElement('div');
+      row.className = 'node-rename';
+      const input = document.createElement('input');
+      input.type = 'text'; input.value = host.label || ''; input.title = 'node id';
+      const err = document.createElement('span'); err.className = 'error';
+      input.onchange = () => {
+        const r = host.renameId(input.value.trim());
+        err.textContent = (r && r.ok === false) ? (r.error || 'invalid id') : '';
+        if (r && r.ok === false) input.value = host.label || '';  // revert the shown value
+      };
+      row.appendChild(input); row.appendChild(err);
+      panel.appendChild(row);
     }
 
     // show_if: a field may be conditional on another param's value. Controllers re-render the

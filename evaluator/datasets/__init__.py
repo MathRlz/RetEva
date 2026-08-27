@@ -24,7 +24,6 @@ from .loaders import (
 from .profiles import DatasetCapabilityProfile, resolve_dataset_profile, list_known_dataset_names
 from .descriptor import (
     DatasetDescriptor,
-    METRICS_BY_MODE,
     register_dataset,
     get_descriptor,
     list_registered_datasets,
@@ -73,7 +72,6 @@ __all__ = [
     "register_eval_dataset",
     # Unified descriptor registry (new API)
     "DatasetDescriptor",
-    "METRICS_BY_MODE",
     "register_dataset",
     "get_descriptor",
     "list_registered_datasets",

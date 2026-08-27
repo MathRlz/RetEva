@@ -55,9 +55,18 @@
     const nodes = (data.nodes || []).map(n => ({id: n.id, type: n.type, params: n.params}));
     // Reconstruct explicit port edges from bindings so multi-instance graphs (e.g. 6
     // audio_embedding@branch nodes) wire correctly instead of relying on auto-wiring.
+    // A binding's artifact name (b[0]) is the PRODUCER's real output — for a plain 1:1 port
+    // that's also the consumer's port name, but a OneOf-collapsed port (e.g. "query_vectors"
+    // accepting audio/text/fused query vectors) binds under the alternative's own name, which
+    // differs from the port's canonical label. Map it back via the node's input_ports so the
+    // edge names the REAL port, with output: set to the bound artifact.
     const edges = [];
     (data.nodes || []).forEach(n => {
-      (n.bindings || []).forEach(b => edges.push({from: b[1], to: n.id, input: b[0]}));
+      const ports = n.input_ports || [];
+      (n.bindings || []).forEach(([art, prod]) => {
+        const port = ports.find(p => (p.names || []).indexOf(art) >= 0);
+        edges.push({from: prod, output: art, to: n.id, input: port ? port.label : art});
+      });
     });
     return {mode: data.mode, nodes, edges};
   };

@@ -6,7 +6,7 @@ artifacts each window produces (query_text, retrieved, …) accumulate across wi
 finalize nodes (per-item metrics + the report assembler + its bootstrap CIs / BH-FDR) run once
 over the full accumulated set — so a windowed run reproduces the whole-run report exactly.
 
-Three phases, by node taxonomy:
+Three windowed-execution roles, by node taxonomy:
 
 - **prelude** (once, full dataset): the ``source`` node (publishes the whole corpus + per-item
   GT) and the corpus embed/index nodes — window-independent, shared by every window.
@@ -31,15 +31,15 @@ from ...pipeline.graph.registry import node_category, node_domain
 
 # Source kinds publish the whole corpus + per-item GT once (window-independent).
 SOURCE_KINDS = frozenset({"dataset_source", "dataset_union"})
-# Corpus-phase kinds embed/index the whole corpus once.
+# Corpus-role kinds embed/index the whole corpus once.
 CORPUS_KINDS = frozenset({"corpus_embedding", "corpus_merge", "vector_db", "corpus_index"})
 # Run-once prelude = source + corpus.
 PRELUDE_KINDS = SOURCE_KINDS | CORPUS_KINDS
 
 
 @dataclass(frozen=True)
-class PhasePartition:
-    """A graph's node ids split into the three windowed-execution phases."""
+class WindowedNodePartition:
+    """A graph's node ids split into the three windowed-execution roles."""
 
     prelude: Tuple[str, ...]      # run once, before windows (corpus index + whole GT)
     windowed: Tuple[str, ...]     # run per window (asr / embed / retrieve / refine / fusion)
@@ -50,8 +50,8 @@ class PhasePartition:
         return self.prelude + self.windowed + self.finalize
 
 
-def _phase_of(node: Any) -> str:
-    """Which windowed-execution phase a node belongs to (taxonomy-driven)."""
+def _window_role_of(node: Any) -> str:
+    """Which windowed-execution role a node belongs to (taxonomy-driven)."""
     params = getattr(node, "params", None)
     if node_kind(node.stage, params) in PRELUDE_KINDS:
         return "prelude"
@@ -64,13 +64,13 @@ def _phase_of(node: Any) -> str:
     return "windowed"
 
 
-def partition_phases(graph: Any) -> PhasePartition:
-    """Split ``graph``'s nodes into prelude / windowed / finalize phases (each node in exactly
-    one), preserving topological order within each phase (``graph.nodes`` order)."""
+def partition_nodes_for_streaming(graph: Any) -> WindowedNodePartition:
+    """Split ``graph``'s nodes into prelude / windowed / finalize roles (each node in exactly
+    one), preserving topological order within each role (``graph.nodes`` order)."""
     buckets = {"prelude": [], "windowed": [], "finalize": []}
     for node in graph.nodes:
-        buckets[_phase_of(node)].append(node.id)
-    return PhasePartition(
+        buckets[_window_role_of(node)].append(node.id)
+    return WindowedNodePartition(
         tuple(buckets["prelude"]), tuple(buckets["windowed"]), tuple(buckets["finalize"])
     )
 
@@ -118,11 +118,11 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
 
     logger = get_logger(__name__)
     flat = [node for level in stage_graph.topological_levels() for node in level]
-    part = partition_phases(stage_graph)
+    part = partition_nodes_for_streaming(stage_graph)
     prelude, windowed, finalize = set(part.prelude), set(part.windowed), set(part.finalize)
     by_id = {n.id: n for n in flat}
 
-    # Only the bus slots the finalize phase consumes need to survive across windows; every
+    # Only the bus slots the finalize role consumes need to survive across windows; every
     # other windowed slot (e.g. the heavy query vectors) is overwritten each window, so just
     # one window's worth is resident — that is the memory bound. A finalize slot is one a
     # finalize node binds as input: (producer_id, artifact_name).

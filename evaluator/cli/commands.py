@@ -95,31 +95,13 @@ def run_evaluation(args: argparse.Namespace) -> None:
 
 
 def _save_results(results, output_path, config, logger) -> None:
-    """Write results JSON to ``output_path`` and log completion."""
-    logger.info(f"Saving results to {output_path}...")
-    os.makedirs(config.output_dir, exist_ok=True)
-    with open(output_path, "w") as f:
-        json.dump(results, f, indent=4)
+    """Persist the run's outputs (report/resolved-config/run-log/per-variant answers+metrics)
+    to ``config.output_dir`` — the shared implementation (`evaluation/results_io.py`), so the
+    CLI, the webapi/API service, and the webapi subprocess job (via this CLI) all produce the
+    same artifacts."""
+    from ..evaluation.results_io import save_run_artifacts
 
-    # R1: persist the *resolved* config — the executed DAG (graph-first Phase 5) — next to the
-    # report as node-centric YAML, so a reproduction uses the graph that actually ran (no
-    # pipeline_mode, no default model for a node the run never executed).
-    try:
-        import yaml
-
-        from ..config.graph_config import resolved_node_config
-
-        _base = output_path[:-5] if output_path.endswith(".json") else output_path
-        resolved_path = f"{_base}.config_resolved.yaml"
-        with open(resolved_path, "w") as cf:
-            yaml.safe_dump(
-                resolved_node_config(config), cf,
-                sort_keys=False, default_flow_style=False,
-            )
-        logger.info(f"Resolved config saved to: {resolved_path}")
-    except Exception as exc:  # noqa: BLE001 - resolved config is a best-effort sidecar
-        logger.warning("could not write resolved config: %s", exc)
-
+    save_run_artifacts(results, config, logger, output_path=output_path)
     logger.info("=" * 60)
     logger.info("Evaluation Complete!")
     logger.info("=" * 60)

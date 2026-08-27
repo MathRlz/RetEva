@@ -49,6 +49,9 @@
   #param-panel .group { border-top: 1px dashed var(--border-strong); margin-top: 6px; padding-top: 4px; }
   #param-panel .hint { font-size: 11px; color: var(--text-muted); }
   #param-panel .help { color: #6a8bbf; cursor: help; font-size: 11px; }
+  #param-panel .node-rename { margin-bottom: 8px; }
+  #param-panel .node-rename input { width: 220px; }
+  #param-panel .node-rename .error { display: block; font-size: 11px; margin-top: 2px; }
 </style>
 {% endblock %}
 {% block body %}
@@ -218,18 +221,27 @@ function syncCounter(nodes) {
 }
 const nodeHtml = DagView.nodeHtml;
 const portTitles = DagView.portTitles;
-function addNode(spec) {
+function existingNodeNames() {
+  return Object.values((editor.drawflow.drawflow.Home || {}).data || {}).map(n => n.name);
+}
+function addNode(spec, x, y) {
   // presets carry a palette_id (the legacy name) + seed params (the discriminator fields);
   // a plain operator tile drops with empty params. Node ids count per palette identity.
   const base = spec.palette_id || spec.type;
   counter[base] = (counter[base] || 0) + 1;
-  const id = base + (counter[base] > 1 ? '_' + counter[base] : '');
+  let id = base + (counter[base] > 1 ? '_' + counter[base] : '');
+  // A manual rename can leave a name the counter doesn't know about (e.g. renaming "retrieval"
+  // to "retrieval_2" before a second retrieval node is ever dropped) — keep bumping past any
+  // name already on the canvas so ids stay unique even across a rename.
+  const taken = new Set(existingNodeNames());
+  while (taken.has(id)) { counter[base]++; id = base + '_' + counter[base]; }
   const params = {...(spec.params || {})};
   const nIn = DagView.inputPorts(spec).length;
-  const dfId = editor.addNode(id, nIn, spec.outputs.length, 40, 40, spec.type,
+  const dfId = editor.addNode(id, nIn, spec.outputs.length, x ?? 40, y ?? 40, spec.type,
                               {type: spec.type, params, _form: spec},
                               nodeHtml(id, spec, params, [], spec.label));
   portTitles(dfId, spec);
+  return dfId;
 }
 function columnsFromParams(params) {
   // params.fields ({column: artifact}) -> [{name, artifact, type}] for the card;
@@ -417,6 +429,25 @@ function inputEl(type, current, placeholder, onChange) {
   return inp;
 }
 
+// Node ids are user-editable (must stay unique — exportSpec/emit_edges/backend edge validation
+// all key off them) and Drawflow's live connections are wired by its own internal numeric id,
+// not by `.name` — so renaming here needs no edge rewriting, just updating `.name` in place
+// (same direct-internals pattern syncAllVectorDb/copySelectedNode already use).
+function renameNode(dfId, newId) {
+  const node = editor.getNodeFromId(dfId);
+  if (!node) return {ok: false, error: 'node not found'};
+  if (newId === node.name) return {ok: true};
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newId)) {
+    return {ok: false, error: 'letters, digits, underscore only — must start with a letter or _'};
+  }
+  const data = editor.drawflow.drawflow.Home.data;
+  const dup = Object.entries(data).some(([id, n]) => id !== String(dfId) && n.name === newId);
+  if (dup) return {ok: false, error: `"${newId}" is already used by another node`};
+  data[dfId].name = newId;
+  refreshNodeBody(dfId);
+  renderParamPanel(dfId);
+  return {ok: true};
+}
 // The per-node form is rendered by the shared NodeForm module (node_form.js); this wrapper binds
 // it to the selected Drawflow node — param writes flow through setParam/setExtraParam (which update
 // the canvas card), a discriminator change re-resolves via refetchForm.
@@ -427,6 +458,7 @@ function renderParamPanel(dfId) {
     panel,
     type: node.data.type,
     label: node.name,
+    renameId: newId => renameNode(dfId, newId),
     get params() { return editor.getNodeFromId(dfId).data.params || {}; },
     get spec() { return formFor(editor.getNodeFromId(dfId)); },
     setParam: (k, v) => setParam(dfId, k, v),
@@ -435,7 +467,51 @@ function renderParamPanel(dfId) {
   });
 }
 
-editor.on('nodeSelected', renderParamPanel);
+let selectedNodeId = null;
+editor.on('nodeSelected', dfId => { selectedNodeId = dfId; renderParamPanel(dfId); });
+editor.on('nodeUnselected', () => { selectedNodeId = null; });
+
+// ── Copy / paste a node + its incoming edges (Ctrl+C / Ctrl+V) ─────────
+let clipboardNode = null;  // {spec, params, pos, incoming: [{srcId, srcOutput, dstInput}]}
+function copySelectedNode() {
+  if (selectedNodeId == null) return;
+  const node = editor.getNodeFromId(selectedNodeId);
+  if (!node) return;
+  const incoming = [];
+  Object.entries(node.inputs || {}).forEach(([inKey, inp]) => {
+    // Drawflow's input-side connection entries confusingly name the field `input`,
+    // but it holds the SOURCE node's OUTPUT port (e.g. 'output_2') — verified against
+    // the live editor; the naming is mirrored on the output side (exportSpec above
+    // reads `c.output` there for the same reason: it names the OTHER side's port).
+    (inp.connections || []).forEach(c => {
+      incoming.push({srcId: c.node, srcOutput: c.input, dstInput: inKey});
+    });
+  });
+  clipboardNode = {
+    spec: formFor(node),
+    params: JSON.parse(JSON.stringify(node.data.params || {})),
+    pos: {x: node.pos_x || 0, y: node.pos_y || 0},
+    incoming,
+  };
+}
+function pasteClipboardNode() {
+  if (!clipboardNode) return;
+  const spec = {...clipboardNode.spec, params: JSON.parse(JSON.stringify(clipboardNode.params))};
+  const dfId = addNode(spec, clipboardNode.pos.x + 30, clipboardNode.pos.y + 30);
+  clipboardNode.incoming.forEach(({srcId, srcOutput, dstInput}) => {
+    if (!editor.getNodeFromId(srcId)) return;  // source node may be gone since copy
+    try { editor.addConnection(srcId, dfId, srcOutput, dstInput); } catch (e) { /* tolerate */ }
+  });
+  syncAllVectorDb();
+  pokeEdges();
+}
+document.addEventListener('keydown', e => {
+  const tag = ((e.target && e.target.tagName) || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;  // don't hijack typing
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key === 'c' || e.key === 'C') copySelectedNode();
+  else if (e.key === 'v' || e.key === 'V') { e.preventDefault(); pasteClipboardNode(); }
+});
 // Keep edge decorations (label + arrow) in sync with interactive wiring: a drawn edge gains its
 // label, a deleted edge (or a removed node's edges) loses it. dag_view rebuilds from the live
 // connection store, so we just poke its refresh after Drawflow settles the change.

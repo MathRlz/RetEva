@@ -97,6 +97,10 @@ class EvaluationConfig:
     checkpoint_enabled: bool = True
     checkpoint_interval: int = 50
     resume_from_checkpoint: bool = True
+    # Opt-in (off by default — storage cost): additionally persist per-variant intermediate
+    # artifacts (today: retrieved.jsonl) alongside the always-on answers.jsonl/metrics.json —
+    # see evaluation/results_io.py:save_run_artifacts.
+    persist_intermediate_artifacts: bool = False
 
     # Explicit DAG override (config C2): {"nodes": [stage_id, ...], "edges": {to: [from]}}.
     # When set, the executor builds the graph from this spec (via build_graph_from_spec)
@@ -216,6 +220,7 @@ class EvaluationConfig:
             "checkpoint_enabled",
             "checkpoint_interval",
             "resume_from_checkpoint",
+            "persist_intermediate_artifacts",
             "parallel_enabled",
             "cpu_stage_executor",
             "cpu_stage_workers",

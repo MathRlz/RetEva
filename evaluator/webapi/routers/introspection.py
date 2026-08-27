@@ -76,7 +76,6 @@ def _datasets() -> List[Dict[str, Any]]:
                 for name, artifact in (d.fields or {}).items()
             ],
             "required_data_fields": list(d.required_data_fields),
-            "default_metrics": list(d.default_metrics),
             "splits": list(d.splits),
         })
     return out

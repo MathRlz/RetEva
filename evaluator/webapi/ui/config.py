@@ -80,6 +80,13 @@ def _edit_nodes_json(name: str, preview: dict, config=None) -> str:
             # bindings: [[artifact, source_id], …] — used by buildSpec() to reconstruct
             # explicit port edges so the run path wires correctly for multi-instance graphs.
             "bindings": n.get("bindings") or [],
+            # input_ports: [{label, names, ...}, …] — buildSpec() needs this to map a bound
+            # artifact name back to its canonical port label. A OneOf-collapsed port (e.g.
+            # "query_vectors" accepting audio/text/fused query vectors) binds under the
+            # PRODUCER's real artifact name, which differs from the port's own label; without
+            # this, buildSpec() used the artifact name as the port key directly, which only
+            # happened to work for plain 1:1 ports.
+            "input_ports": n.get("input_ports") or [],
             # the form's empty model option names the inherited model — the LOADED config's
             # flat default here, not the dataclass default (audit: no bare "(default)")
             "default_model": default_model_for(n.get("model_field"), config),
@@ -172,31 +179,52 @@ def register_config_routes(
     @router.post("/ui/validate-graph", response_class=HTMLResponse, include_in_schema=False)
     async def ui_validate_graph(request: Request) -> HTMLResponse:
         """Re-validate the user's edited Config & Run graph (non-blocking): returns the problems
-        fragment so they can fix the nodes and validate again before running."""
-        from evaluator import EvaluationConfig
-        from evaluator.config.validation import collect_problems
-        from evaluator.webapi.form_config import graph_spec_to_config_dict
+        fragment so they can fix the nodes and validate again before running. Runs the exact same
+        pipeline ``/api/jobs/from-graph``/``/ui/run-graph`` run — ``build_validated_run_config``
+        (structural completion, dataset choice, topology, embedding-space check) — mirroring the
+        builder's ``/ui/validate-builder`` fix: "Valid ✓" here means the graph will actually build
+        and run, not just that the edited fields alone are internally consistent, and now shows
+        the applicable-metrics chips too (previously absent — this endpoint never analyzed the
+        real graph at all)."""
+        from evaluator.webapi.form_builder import graph_advice
+        from evaluator.webapi.form_config import build_validated_run_config
 
         body = await request.json()
         spec = body.get("spec") or {}
+        errors: list = []
+        warnings: list = []
+        metrics: list = []
+        summary = None
         try:
-            config_dict = graph_spec_to_config_dict(
-                spec, experiment_name=body.get("name") or "webui")
-            config = EvaluationConfig.from_dict(config_dict, validate=False).with_auto_devices()
-            errors, warnings = collect_problems(config)
+            config, graph = build_validated_run_config(
+                spec, experiment_name=body.get("name") or "webui", auto_devices=True
+            )
+            warnings, metrics = graph_advice(graph, config)
+            summary = (f"Valid ✓ — {len(graph.topological_levels())} levels, "
+                       f"{len(graph.nodes)} nodes")
+            if not metrics:
+                warnings.append(
+                    "No metrics will be computed — the graph produces nothing a metric scores."
+                )
         except Exception as exc:  # noqa: BLE001 — a broken graph is itself a problem to show
-            errors, warnings = [str(exc)], []
-        return page(request, "_validation.html", errors=errors, warnings=warnings)
+            errors = [str(exc)]
+        return page(request, "_validation.html",
+                    errors=errors, warnings=warnings, metrics=metrics, summary=summary)
 
     @router.post("/ui/validate-builder", response_class=HTMLResponse, include_in_schema=False)
     async def ui_validate_builder(request: Request) -> HTMLResponse:
         """Validate the builder canvas graph and render the SAME styled ``_validation.html`` the
-        Config & Run flow uses (one validation module, no bespoke builder markup). Builds the
-        topology directly (no run config / dataset needed, so a graph-in-progress validates) and
-        shares ``build_canvas_graph`` + ``graph_advice`` (embedding warnings + applicable metrics
-        + GT-missing) with the form-builder helpers."""
-        from evaluator import EvaluationConfig
-        from evaluator.webapi.form_builder import build_canvas_graph, graph_advice
+        Config & Run flow uses (one validation module, no bespoke builder markup). Runs the exact
+        same pipeline ``/api/jobs/from-graph``/``/ui/run-graph`` run — ``build_validated_run_config``
+        (structural completion, dataset choice, topology, embedding-space check) — so "Valid ✓"
+        here means the graph will actually build and run, not just that the drawn topology alone
+        is internally consistent. That was a real, previously-silent gap: a canvas node renamed to
+        an id a server-derived structural node also needs (e.g. "metrics") passed the OLD
+        topology-only check but broke at Export/Run, since structural completion never ran here.
+        Shares ``graph_advice`` (embedding warnings + applicable metrics + GT-missing) with the
+        form-builder helpers."""
+        from evaluator.webapi.form_builder import graph_advice
+        from evaluator.webapi.form_config import build_validated_run_config
 
         spec = await request.json()  # the raw canvas spec {mode, nodes, edges, branches?}
         errors: list = []
@@ -204,8 +232,10 @@ def register_config_routes(
         metrics: list = []
         summary = None
         try:
-            graph = build_canvas_graph(spec)
-            warnings, metrics = graph_advice(graph, EvaluationConfig())
+            config, graph = build_validated_run_config(
+                spec, experiment_name="validate", auto_devices=False
+            )
+            warnings, metrics = graph_advice(graph, config)
             summary = (f"Valid ✓ — {len(graph.topological_levels())} levels, "
                        f"{len(graph.nodes)} nodes")
             if not metrics:

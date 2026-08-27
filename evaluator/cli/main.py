@@ -9,7 +9,7 @@ Subcommands (each delegates to the existing implementation; no logic lives here)
 - ``cache``         — ``status`` / ``clear [--type T]`` for the artifact cache
 - ``leaderboard``   — query the leaderboard SQLite (top runs by metric)
 - ``replay``        — re-run one query id through the full graph + per-node trace (cli/replay.py)
-- ``compare``       — compare result JSON files (cli/compare.py)
+- ``compare``       — compare result JSON files, or 2+ variant/run dirs (cli/compare.py)
 - ``export``        — export results to CSV/Excel/LaTeX (cli/export.py)
 - ``branch-report`` — thesis artifacts from a branched run (analysis/branch_report.py)
 - ``benchmark``     — model micro-benchmarks (cli/benchmark.py)
@@ -33,9 +33,8 @@ commands:
   datasets       list registered dataset descriptors
   cache          cache status|clear [--cache-dir DIR] [--type TYPE]
   leaderboard    top runs by metric [--metric M] [--limit N] [--output-dir DIR]
-  sweep          expand+run a parameter sweep (evaluator sweep --config sweep.yaml [--run])
   replay         re-run one query id with a per-node artifact trace (--config --query-id)
-  compare        compare result JSON files
+  compare        compare result JSON files, or 2+ variant/run dirs (baseline-vs-each)
   export         export results (csv/excel/latex)
   branch-report  thesis artifacts from a branched run's results JSON
   benchmark      model micro-benchmarks
@@ -248,9 +247,8 @@ def _cmd_datasets(rest: List[str]) -> int:
         desc = get_descriptor(dataset_id)
         if desc is None:
             continue
-        modes = ",".join(desc.compatible_pipeline_modes or [])
         domain = getattr(desc, "domain", "general")
-        print(f"{dataset_id}\t{desc.dataset_type}\t{domain}\t{modes}\t{desc.description}")
+        print(f"{dataset_id}\t{desc.dataset_type}\t{domain}\t{desc.description}")
     return 0
 
 
@@ -336,37 +334,6 @@ def _cmd_leaderboard(rest: List[str]) -> int:
     return 0
 
 
-def _cmd_sweep(rest: List[str]) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(prog="evaluator sweep")
-    parser.add_argument("--config", required=True, help="sweep spec (YAML/JSON)")
-    parser.add_argument(
-        "--run", action="store_true",
-        help="run each expanded config (heavy); default just lists them (dry run)",
-    )
-    args = parser.parse_args(rest)
-
-    from evaluator.analysis.sweep import combo_label, expand_sweep, load_sweep_spec
-
-    spec = load_sweep_spec(args.config)
-    points = expand_sweep(spec)
-    name = spec.get("name", "sweep")
-    print(f"sweep '{name}': {len(points)} configs (experiment_group={name!r})")
-    for combo, cfg in points:
-        print(f"  {combo_label(combo):<44} mode={cfg.graph_template}  → {cfg.experiment_name}")
-    if not args.run:
-        print("\n(dry run — pass --run to execute each via the normal evaluation path)")
-        return 0
-
-    from evaluator.services.evaluation_service import run_evaluation
-
-    for i, (_, cfg) in enumerate(points, 1):
-        print(f"\n=== [{i}/{len(points)}] running {cfg.experiment_name} ===")
-        run_evaluation(cfg)
-    return 0
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help"):
@@ -386,8 +353,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cmd_cache(rest)
         if command == "leaderboard":
             return _cmd_leaderboard(rest)
-        if command == "sweep":
-            return _cmd_sweep(rest)
         if command == "replay":
             from evaluator.cli.replay import main as replay_main
 

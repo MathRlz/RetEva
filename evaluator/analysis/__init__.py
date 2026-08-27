@@ -31,7 +31,12 @@ from .errors import (
     generate_error_report,
 )
 
-from .grid_search import GridSearch
+from .variant_compare import (
+    compare_paths,
+    format_variant_comparison_report,
+    list_variant_dirs,
+    VariantCompareError,
+)
 
 __all__ = [
     # Significance testing
@@ -57,6 +62,9 @@ __all__ = [
     "analyze_retrieval_failures",
     "categorize_errors",
     "generate_error_report",
-    # Grid search
-    "GridSearch",
+    # Unified variant/run comparison
+    "compare_paths",
+    "format_variant_comparison_report",
+    "list_variant_dirs",
+    "VariantCompareError",
 ]

@@ -1,6 +1,6 @@
 {% if jobs %}
 <table>
-  <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Phase</th><th>Submitted</th></tr></thead>
+  <thead><tr><th>Job</th><th>Type</th><th>Status</th><th>Step</th><th>Submitted</th></tr></thead>
   <tbody>
     {% for j in jobs %}
     <tr class="clickable"
@@ -8,7 +8,7 @@
       <td>{{ j.job_id[:8] }}</td>
       <td>{{ j.job_type }}</td>
       <td>{{ j.status }}</td>
-      <td>{{ (j.last_progress or {}).get('phase', '') }}</td>
+      <td>{{ (j.last_progress or {}).get('step', '') }}</td>
       <td class="muted">{{ j.submitted_at }}</td>
     </tr>
     {% endfor %}

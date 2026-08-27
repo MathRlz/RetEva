@@ -33,6 +33,20 @@ def _quantization_into_params(
     return extra_params
 
 
+def _device_into_params(model_class, device: str, extra_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold ``device`` into a model's constructor params when it accepts one, so the
+    underlying weights load directly onto the target device instead of first landing on
+    the process' implicit default CUDA device (index 0) and only then being moved via
+    ``.to()`` — which happens for ``sentence_transformers``-backed wrappers (``device=None``
+    resolves through ``torch.device("cuda")`` with no index) and needlessly touches GPU 0
+    even when every other model in the run lives on a different device."""
+    try:
+        accepts = "device" in inspect.signature(model_class.__init__).parameters
+    except (TypeError, ValueError):
+        accepts = False
+    return {**extra_params, "device": device} if accepts else extra_params
+
+
 def _check_extra_params(model_type: str, model_class, extra_params: Dict[str, Any]) -> None:
     """Fail loud + clear when extra params don't fit the model's constructor.
 
@@ -110,6 +124,7 @@ def create_text_embedding_model(model_type: str, model_name: Optional[str] = Non
     name = text_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
     extra_params = _quantization_into_params(model_type, model_class, quantization, extra_params)
     _check_extra_params(model_type, model_class, extra_params)
+    extra_params = _device_into_params(model_class, device, extra_params)
 
     return model_class(name, **extra_params).to(torch.device(device))
 

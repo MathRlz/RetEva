@@ -158,20 +158,31 @@ def bind_explicit_edges(
     same-artifact producers in ``graph.nodes`` order (the runtime's newest-first read keeps
     its meaning) — so a generated edge set reproduces ``_wire_nodes``'s graph bit-for-bit.
 
-    **Type-open OneOf ports (B2).** A multi-name (OneOf) port additionally accepts any
-    registered artifact of the SAME modality via an explicit edge — the declared chain is a
-    default and a tiebreak, not a closed gate — so e.g. ``optimized_query_text`` can be
-    routed into ``query_correction``'s ``query_text`` port (correction-after-optimization),
-    and a new text-transform stage needs no per-consumer registration edit. A port's bound
+    **Type-open ports (B2).** Any port — a multi-name (OneOf) port or a plain (single-name)
+    one — additionally accepts any registered artifact of the SAME modality via an explicit
+    edge; the declared name(s) are a default and a tiebreak, not a closed gate. So e.g.
+    ``optimized_query_text`` can be routed into ``query_correction``'s ``query_text`` port
+    (correction-after-optimization), and ``dataset_source``'s ``query_text`` can be routed
+    into ``asr``'s plain ``reference_transcription`` port — a new text-transform stage or
+    an unconventional GT source needs no per-consumer registration edit. A port's bound
     candidates are ranked by **derivation**: a candidate produced from another bound
     candidate supersedes it (the most-processed variant, scoped to real producer-ancestor
     chains — global depth would wrongly reorder parallel streams like audio vs text
     vectors); unrelated candidates keep declared-chain order, with routed extras first and
     producer node-list index as the final tiebreak. Canonical-order configs reproduce the
-    declared ranking bit-for-bit (golden-locked). Plain (single-name) ports stay strictly
-    closed: their consumers may read the artifact by literal name (``get_artifact``),
-    which an alias cannot redirect."""
+    declared ranking bit-for-bit (golden-locked). Both port kinds resolve through the same
+    alias candidate list at run time — ``RunState.input``/``get_artifact`` both consult
+    ``input_aliases`` (``state.py:_input_candidates``), so a plain port's literal-name
+    readers transparently pick up a routed extra without a handler code change."""
     items = [_normalize_spec_item(it) for it in node_ids]
+    seen: Dict[str, int] = {}
+    for i, (nid, _, _) in enumerate(items):
+        if nid in seen:
+            raise ValueError(
+                f"duplicate node id {nid!r} in graph.nodes (positions {seen[nid]} and {i}) — "
+                "every node id must be unique."
+            )
+        seen[nid] = i
     index_of = {nid: i for i, (nid, _, _) in enumerate(items)}
     port_edges, ordering = _parse_edges(edges, items, index_of)
     ancestors = _ancestor_sets(items, port_edges)
@@ -193,8 +204,8 @@ def bind_explicit_edges(
         aliases: List[Tuple[str, Tuple[str, ...]]] = []
         for key, names, required in ports:
             incoming = by_consumer.get((nid, key), [])
-            # B2: a OneOf port accepts same-modality routed extras; a plain port stays
-            # strictly closed (its consumer may read by literal name, bypassing aliases).
+            # B2: any port accepts same-modality routed extras — both OneOf and plain
+            # ports resolve through the alias candidate list (see get_artifact/input).
             routed_extras = _routed_extras(nid, key, names, incoming)
             producers_by_name: Dict[str, List[str]] = {}
             for src, out in incoming:
@@ -210,7 +221,11 @@ def bind_explicit_edges(
                     deps.add(src)
                     bindings.append((alt, src))
                 cands.append(alt)
-            if len(names) > 1 and cands:  # extras exist only on OneOf ports
+            if cands and (len(names) > 1 or routed_extras):
+                # A plain port with no routed extras stays alias-free (parity with
+                # `_wire_nodes`'s auto-wiring — `_input_candidates` falls back to `(key,)`
+                # regardless); recorded only when there's a real OneOf chain or a B2 extra
+                # so `get_artifact`/`input` see the routed artifact's real name.
                 aliases.append((key, tuple(cands)))
             if required and not incoming and any(a in produced_anywhere for a in names):
                 raise ValueError(
@@ -333,11 +348,14 @@ def _ancestor_sets(items: list, port_edges: list) -> "Dict[str, frozenset]":
 def _routed_extras(
     nid: str, key: str, names: Tuple[str, ...], incoming: list
 ) -> List[str]:
-    """Same-modality artifacts routed into a OneOf port beyond its declared names (B2).
+    """Same-modality artifacts routed beyond a port's declared names (B2).
 
-    A plain (single-name) port accepts no extras; a mismatched modality is an error.
+    Applies to both OneOf ports (multiple declared names) and plain (single-name) ports:
+    an explicit edge naming a same-modality artifact is accepted and read through the
+    same alias-resolution ``get_artifact``/``input`` share — a mismatched modality is
+    still an error.
     """
-    port_mod = _port_modality(names) if len(names) > 1 else None
+    port_mod = _port_modality(names)
     extras: List[str] = []
     for src, out in incoming:
         if out in names or out in extras:

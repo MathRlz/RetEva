@@ -1,7 +1,7 @@
 """Dataset capability profiles for pipeline planning."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from ..config.types import DatasetType
 from ..logging_config import get_logger
@@ -19,10 +19,6 @@ class DatasetCapabilityProfile:
     requires_text: bool
     supports_generation: bool
     evaluation_mode: str
-    recommended_pipeline_modes: Sequence[str]
-
-    def supports_pipeline_mode(self, mode: str) -> bool:
-        return mode in set(self.recommended_pipeline_modes)
 
 
 # Capability metadata for the built-in datasets lives on their DatasetDescriptors
@@ -39,7 +35,6 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
         requires_text=False,
         supports_generation=False,
         evaluation_mode="transcription",
-        recommended_pipeline_modes=("asr_only", "asr_text_retrieval"),
     ),
     DatasetType.AUDIO_QUERY_RETRIEVAL: DatasetCapabilityProfile(
         name="generic_audio_query_retrieval",
@@ -48,7 +43,6 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
         requires_text=False,
         supports_generation=False,
         evaluation_mode="retrieval",
-        recommended_pipeline_modes=("audio_emb_retrieval", "audio_text_retrieval"),
     ),
     DatasetType.TEXT_QUERY_RETRIEVAL: DatasetCapabilityProfile(
         name="generic_text_query_retrieval",
@@ -57,7 +51,6 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
         requires_text=True,
         supports_generation=False,
         evaluation_mode="retrieval",
-        recommended_pipeline_modes=("asr_text_retrieval", "audio_text_retrieval"),
     ),
     DatasetType.QUESTION_ANSWERING: DatasetCapabilityProfile(
         name="generic_qa",
@@ -66,7 +59,6 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
         requires_text=True,
         supports_generation=True,
         evaluation_mode="qa",
-        recommended_pipeline_modes=("asr_text_retrieval", "audio_text_retrieval"),
     ),
     DatasetType.MULTIMODAL_QA: DatasetCapabilityProfile(
         name="generic_multimodal_qa",
@@ -75,7 +67,6 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
         requires_text=True,
         supports_generation=True,
         evaluation_mode="qa",
-        recommended_pipeline_modes=("asr_text_retrieval", "audio_text_retrieval"),
     ),
     DatasetType.PASSAGE_RANKING: DatasetCapabilityProfile(
         name="generic_passage_ranking",
@@ -84,7 +75,6 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
         requires_text=True,
         supports_generation=False,
         evaluation_mode="ranking",
-        recommended_pipeline_modes=("asr_text_retrieval",),
     ),
 }
 
@@ -98,7 +88,6 @@ def _descriptor_to_profile(desc: Any) -> DatasetCapabilityProfile:
         requires_text=desc.requires_text,
         supports_generation=desc.supports_generation,
         evaluation_mode=desc.evaluation_mode,
-        recommended_pipeline_modes=tuple(desc.compatible_pipeline_modes),
     )
 
 
@@ -137,7 +126,6 @@ def resolve_dataset_profile(
         requires_text=False,
         supports_generation=False,
         evaluation_mode="retrieval",
-        recommended_pipeline_modes=("audio_emb_retrieval", "asr_text_retrieval"),
     )
 
 
@@ -166,8 +154,4 @@ def profile_snapshot(config) -> Dict[str, Any]:
         "requires_text": profile.requires_text,
         "supports_generation": profile.supports_generation,
         "evaluation_mode": profile.evaluation_mode,
-        "recommended_pipeline_modes": list(profile.recommended_pipeline_modes),
-        "pipeline_mode_supported": profile.supports_pipeline_mode(
-            str(config.graph_template)
-        ),
     }

@@ -233,6 +233,22 @@ class RunState:
         bindings = getattr(self.current_node, "bindings", ())
         return [pid for art, pid in bindings if art == name]
 
+    def sibling_artifact(self, bound_name: str, extra_key: str, default: Any = None) -> Any:
+        """Read ``extra_key`` published by the producer bound to this node's ``bound_name``
+        input (R4/multi-variant).
+
+        For data a producer publishes ALONGSIDE its declared artifact, under a key that isn't
+        itself a declared port (e.g. `answer_gen` also publishes the raw `answer_generation`
+        dict next to its declared `generated_answers`) — there is no edge to resolve it through
+        `get_artifact`. This finds the producer via the artifact that IS bound (`bound_name`,
+        an existing edge), then reads `extra_key` straight off that same producer on the bus —
+        so the lookup still lands on the right variant's producer, not a global scan."""
+        producers = self._producers(bound_name)
+        for pid in reversed(producers):
+            if self.ctx.has(pid, extra_key):
+                return self.ctx.get(pid, extra_key)
+        return default
+
     def _record_flow(self, key: str, artifact: str, producer: str, expected) -> None:
         """A3: remember which (artifact, producer) actually served input ``key`` for the
         current node; a winner other than ``expected`` (the newest producer of the
@@ -300,20 +316,27 @@ class RunState:
     def get_artifact(self, name: str, default: Any = _MISSING) -> Any:
         """Read input ``name`` from the latest bound producer that actually published it.
 
-        Resolves newest→oldest so a skipped producer (e.g. fusion bailing to audio-only)
-        falls back to an earlier producer of the same artifact. An ``ItemSet`` is unwrapped
-        to its ``values`` list so legacy (positional) consumers are unchanged (W2 shim).
-        The resolved producer is recorded in ``data_flow`` (A3).
+        Resolves ``name``'s alias candidates the same way :meth:`input` does (B2: a
+        same-modality artifact explicitly routed into this port reads through here too,
+        under whatever real artifact name its producer published — see
+        ``wiring.py:bind_explicit_edges``), then within each candidate resolves
+        newest→oldest so a skipped producer (e.g. fusion bailing to audio-only) falls back
+        to an earlier producer of the same artifact. An ``ItemSet`` is unwrapped to its
+        ``values`` list so legacy (positional) consumers are unchanged (W2 shim). The
+        resolved producer is recorded in ``data_flow`` (A3).
         """
         from ..item_set import ItemSet
 
-        producers = self._producers(name)
-        expected = (name, producers[-1]) if producers else None
-        for producer in reversed(producers):
-            if self.ctx.has(producer, name):
-                self._record_flow(name, name, producer, expected)
-                value = self.ctx.get(producer, name)
-                return value.values if isinstance(value, ItemSet) else value
+        expected = None
+        for cand in self._input_candidates(name):
+            producers = self._producers(cand)
+            if expected is None and producers:
+                expected = (cand, producers[-1])
+            for producer in reversed(producers):
+                if self.ctx.has(producer, cand):
+                    self._record_flow(name, cand, producer, expected)
+                    value = self.ctx.get(producer, cand)
+                    return value.values if isinstance(value, ItemSet) else value
         if default is RunState._MISSING:
             raise KeyError(f"no published producer for input '{name}'")
         return default
@@ -322,12 +345,14 @@ class RunState:
         """Read input ``name`` only if a bound producer published a true keyed ``ItemSet``
         (M1d-2): the per-item identity source. Never wraps a plain publish positionally —
         index ids join nothing, so a keyed consumer would silently get an empty join;
-        ``default`` is returned instead."""
+        ``default`` is returned instead. Resolves alias candidates like :meth:`get_artifact`
+        (B2 — a routed extra reads through here under its real artifact name)."""
         from ..item_set import ItemSet
 
-        for producer in reversed(self._producers(name)):
-            if self.ctx.has(producer, name):
-                value = self.ctx.get(producer, name)
-                if isinstance(value, ItemSet):
-                    return value
+        for cand in self._input_candidates(name):
+            for producer in reversed(self._producers(cand)):
+                if self.ctx.has(producer, cand):
+                    value = self.ctx.get(producer, cand)
+                    if isinstance(value, ItemSet):
+                        return value
         return default

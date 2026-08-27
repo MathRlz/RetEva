@@ -573,16 +573,20 @@ _MEASURE = {
                # reply's `Short Answer:` line (decision accuracy)
                "optional": (ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS,
                             ARTIFACT_SHORT_ANSWERS)},
-    "judge": {"inputs": (ARTIFACT_METRICS,),
+    "judge": {"inputs": (ARTIFACT_QUERY_TRACES,),
+              # query_traces is the real dependency (built from generated answers + retrieved +
+              # relevant docs + expected answers). It rides the artifact bus (put_artifact), not
+              # `s.results`, so it survives the `metrics`/report node's `s.results = results`
+              # rebuild regardless of node order — no ordering edge to `metrics` needed.
               # every aspect artifact is advertised (publish is config-conditional) so the
               # finalize sink can BIND them — an unpublished optional is a no-op read
               "outputs": (ARTIFACT_JUDGE_SCORES, ARTIFACT_JUDGE_PASS) + _JUDGE_ASPECT_OUT,
-              "optional": (ARTIFACT_QUERY_TRACES, ARTIFACT_GENERATED_ANSWERS,
+              "optional": (ARTIFACT_GENERATED_ANSWERS,
                            ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS,
                            "per_query_recall5")},
     "trace": {"inputs": (), "outputs": (ARTIFACT_QUERY_TRACES,),
               "optional": (ARTIFACT_RETRIEVED, ARTIFACT_GENERATED_ANSWERS,
-                           ARTIFACT_METRICS, ARTIFACT_REFERENCE_TRANSCRIPTION,
+                           ARTIFACT_REFERENCE_TRANSCRIPTION,
                            ARTIFACT_RELEVANT_DOCS,
                            "per_query_wer", "per_query_cer", "per_query_recall5")},
     "report": {"inputs": (), "outputs": (ARTIFACT_METRICS,),

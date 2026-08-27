@@ -293,6 +293,9 @@ def run_evaluation(
             config=config,
             metadata=metadata,
         )
+        from ..evaluation.results_io import save_run_artifacts
+
+        save_run_artifacts(metrics, config, get_logger(__name__))
         store = ExperimentStore(
             db_path=str(Path(config.output_dir) / "leaderboard.sqlite")
         )

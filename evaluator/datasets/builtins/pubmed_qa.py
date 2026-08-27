@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Sequence, TYPE_CHECKING
+from typing import List, TYPE_CHECKING
 
 from ...errors import ConfigurationError
 from ..types import MultimodalQADataset, register_eval_dataset
@@ -25,10 +25,6 @@ class PubMedQABuiltinDataset(MultimodalQADataset):
     # Declared for discoverability (builder picker / API); validate() remains the
     # authority — prepared_dataset_dir is an accepted alternative to the pair.
     required_data_fields = ("questions_path", "corpus_path")
-
-    @classmethod
-    def compatible_pipeline_modes(cls) -> Sequence[str]:
-        return ("asr_text_retrieval", "audio_text_retrieval")
 
     @classmethod
     def validate(cls, data: "DataConfig") -> List[str]:

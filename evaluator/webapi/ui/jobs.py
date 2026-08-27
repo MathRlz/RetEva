@@ -83,7 +83,7 @@ def register_jobs_routes(router: APIRouter, page, jobs: JobManager) -> None:
         try:
             # shared translate+validate path with /api/jobs/from-graph (dataset choice, topology,
             # embedding-space check) so a Config&Run edit can't bypass what the API run enforces.
-            config = build_validated_run_config(
+            config, _graph = build_validated_run_config(
                 spec, experiment_name=body.get("name") or "webui_edited", auto_devices=True
             )
         except Exception as exc:  # noqa: BLE001 — surface a bad edit/graph inline

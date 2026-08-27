@@ -71,10 +71,13 @@ _MODEL_NODE_FIELDS = {
     },
 }
 
-# A feature node's non-structural params fold into its capability sub-config (the same
-# top-level key the old ``features:`` block populated), so the built StageNode stays structural
-# (== the mode+features build) while the run reads the full config off the sub-config object.
-# Per-node resolution (evaluation/node_config.py) still lets a node param win at run time.
+# A feature node's params fold into its capability sub-config (the same top-level key the
+# old ``features:`` block populated) as the flat DEFAULT — the node-context-free call sites'
+# fallback — but stay ON the node too (mirroring _MODEL_NODE_FIELDS/vector_db below), since
+# ``evaluation/node_config.py:resolve_node_config`` reads a node's own ``params`` at RUN TIME
+# to differentiate same-kind nodes: two `tts`/`answer_gen`/... nodes in one graph (comparing
+# TTS engines, different judge prompts, ...) each need their own params to survive, not just
+# whichever one folded into the shared default last.
 _FEATURE_NODE_CONFIG = {
     "tts": "audio_synthesis",
     "answer_judge": "judge",
@@ -84,8 +87,6 @@ _FEATURE_NODE_CONFIG = {
     "multi_query_retrieval": "query_optimization",
     "fusion": "embedding_fusion",  # embedding-level only; result_fusion is hybrid rank-fusion (vdb)
 }
-# Structural params kept ON a feature node (they pick the variant, not the model config).
-_FEATURE_NODE_KEEP = {"multi_query_retrieval": {"method"}}
 
 # dataset.<key> → DataConfig field.
 _DATASET_FIELDS = {
@@ -262,8 +263,15 @@ def _validate_graph_block(graph: Dict[str, Any]) -> None:
             "Every capability is a node; the run label is derived from the graph."
         )
     # Reject unknown graph keys (T2): the graph block is parsed selectively, so a typo
-    # (e.g. `branchess:`) would otherwise be silently dropped → a quietly wrong experiment.
-    _GRAPH_KEYS = {"nodes", "edges", "branches"}
+    # would otherwise be silently dropped → a quietly wrong experiment.
+    #
+    # No graph.branches (removed): a config describes ALL its nodes and the edges between
+    # them, explicitly, in one place — comparing N variants of a node (different models,
+    # different retrieval strategies, ...) is just N distinctly-named node entries in
+    # graph.nodes, wired from whatever they share (dataset_source, corpus_embedding, ...)
+    # via ordinary edges. That was already how the graph engine works; graph.branches was a
+    # second, separately-namespaced (`<id>@<branch>`) way to say the same thing.
+    _GRAPH_KEYS = {"nodes", "edges"}
     _unknown_graph = set(graph) - _GRAPH_KEYS
     if _unknown_graph:
         raise GraphConfigError(
@@ -378,15 +386,14 @@ def _fold_node_params(node_ids: list, legacy: Dict[str, Any]) -> None:
             item["params"] = {**selectors, **keep}
         elif kind in _FEATURE_NODE_CONFIG:
             # A feature node carries its capability config as params; fold them into the
-            # sub-config block so the built node stays structural (parity with mode+features).
-            # Node params WIN over the presence-derived enabled:True and any top-level block
-            # (the graph is the spec) — so an explicit `enabled: false` on the node holds.
-            on_node = _FEATURE_NODE_KEEP.get(kind, set())
-            keep = {k: v for k, v in fields.items() if k in on_node}
-            fold = {k: v for k, v in fields.items() if k not in on_node}
+            # sub-config block AS THE FLAT DEFAULT (parity with mode+features) — node params
+            # WIN over the presence-derived enabled:True and any top-level block (the graph
+            # is the spec) — so an explicit `enabled: false` on the node holds. Also keep
+            # them ON the node (parity with _MODEL_NODE_FIELDS/vector_db above) so two
+            # same-kind feature nodes stay genuinely distinct at run time.
             cap = _FEATURE_NODE_CONFIG[kind]
-            legacy[cap] = {**(legacy.get(cap) or {}), **fold}
-            item["params"] = {**selectors, **keep}
+            legacy[cap] = {**(legacy.get(cap) or {}), **fields}
+            item["params"] = {**selectors, **fields}
     if graph_vdb:
         legacy["vector_db"] = {**legacy.get("vector_db", {}), **graph_vdb}
 
@@ -432,36 +439,19 @@ def _validate_edges(graph: Dict[str, Any], node_ids: list) -> list:
     return edge_list
 
 
-def _validate_branches(graph: Dict[str, Any], legacy: Dict[str, Any]) -> None:
-    """graph.branches: a variant set expanded + CSE-collapsed into one branched DAG (W6/A8).
-
-    Each entry is {id, <node_type>: <model-str | params>}. Stored on graph_override so the
-    build path (build_graph_for_config / _build_run_graph) calls build_branched_graph.
-    """
-    if "branches" not in graph:
-        return
-    if "nodes" not in graph:
-        raise GraphConfigError("graph.branches requires graph.nodes (the base to branch over).")
-    branches = graph["branches"]
-    if not isinstance(branches, list) or not all(
-        isinstance(b, dict) and "id" in b for b in branches
-    ):
-        raise GraphConfigError(
-            "graph.branches must be a list of {id, <node>: <override>} dicts."
-        )
-    legacy.setdefault("graph_override", {"nodes": [], "edges": []})[
-        "branches"
-    ] = branches
-
-
 def _translate_graph(
     new: Dict[str, Any],
     legacy: Dict[str, Any],
     role_by_dataset_id: Dict[str, str],
 ) -> None:
-    """graph → explicit node/edge/branch override (a config is an explicit graph; C2)."""
+    """graph → explicit node/edge override (a config is an explicit graph; C2). No
+    graph.branches — a config describes every node and edge explicitly in one place; see
+    _validate_graph_block's docstring comment."""
     graph = new.pop("graph", None) or {}
     _validate_graph_block(graph)
+    from ..pipeline.graph.modes import complete_structural_plumbing
+
+    complete_structural_plumbing(graph)
     if "nodes" in graph:
         node_ids = graph["nodes"]
         # Items are a node-type string OR a dict {id, type, params} for a distinct
@@ -480,7 +470,6 @@ def _translate_graph(
         legacy["graph_override"] = {"nodes": node_ids, "edges": _validate_edges(graph, node_ids)}
     elif "edges" in graph:
         raise GraphConfigError("graph.edges requires graph.nodes.")
-    _validate_branches(graph, legacy)
 
 
 # dataset_source node params that are NOT data settings (kept on the node).
@@ -834,29 +823,11 @@ def resolved_node_config(config: Any) -> Dict[str, Any]:
 
     # Preview-only display schema injected by _attach_dataset_fields — derived on every load,
     # never persisted. Everything else in n.params is structural and must survive (a hybrid
-    # graph's dense/sparse arms, result_fusion's hybrid flag, a branch's oracle) — the per-kind
-    # blob alone gave every same-kind instance identical params and broke the round-trip.
+    # graph's dense/sparse arms, result_fusion's hybrid flag) — the per-kind blob alone gave
+    # every same-kind instance identical params and broke the round-trip.
     _transient = {"fields", "extra_outputs", "suppress_outputs", "embedding_space"}
 
-    # A BRANCHED graph's expanded DAG cannot round-trip through plain auto-wiring (each branch
-    # was wired in isolation; a reload would cross-bind the @branch instances). Serialize the
-    # pre-expansion spec instead — expansion + CSE are deterministic, so reload rebuilds the
-    # identical graph; the resolved model/vdb params live in the sections/per-kind blocks.
     override = getattr(config, "graph_override", None) or {}
-    if override.get("branches"):
-        raw_edges = override.get("edges") or []
-        edge_list = (
-            list(raw_edges) if isinstance(raw_edges, (list, tuple))
-            else [{"from": src, "to": dst} for dst, srcs in raw_edges.items() for src in srcs]
-        )
-        ncfg["graph"] = {
-            "nodes": list(override.get("nodes") or []),
-            "branches": list(override["branches"]),
-            **({"edges": edge_list} if edge_list else {}),
-        }
-        ncfg["nodes"] = {k: v for k, v in per_kind.items() if v}  # per-kind resolved models
-        return ncfg
-
     from ..pipeline.graph.wiring import _has_port_edges
 
     graph = build_graph_for_config(config)

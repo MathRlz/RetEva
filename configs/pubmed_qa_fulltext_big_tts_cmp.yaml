@@ -1,9 +1,10 @@
 # Two-hop RAG on spoken questions — TTS engine comparison on pubmed_qa_fulltext_big.
 #
-# Four branches, one per TTS provider; everything downstream (ASR, retrieval, generation,
-# judging) runs per-branch. corpus_embedding + vector_db run once via CSE.
+# One graph: dataset_source/corpus_embedding/vector_db are shared (each has multiple
+# outgoing edges); four distinctly-named tts nodes diverge from there, each with its own
+# asr/retrieval/query_refine/generation/judging chain. No graph.branches.
 #
-# Branches:
+# Variants:
 #   mms      — Meta MMS (facebook/mms-tts-eng), fast HF transformer
 #   piper    — Piper (en_US-lessac-medium), fast local ONNX
 #   xtts_v2  — Coqui XTTS-v2, multilingual neural (requires `pip install TTS`)
@@ -25,56 +26,121 @@ dataset:
 data:
   num_workers: 0
 
+query_optimization:
+  enabled: true
+
+nodes:
+  asr:
+    model: whisper
+    size: large
+    device: cuda:1
+  text_embedding:
+    model: jina_v4
+    name: jinaai/jina-embeddings-v4
+    device: cuda:2
+  vector_db:
+    store: inmemory
+
 graph:
-  branches:
-  - id: mms
-    tts:
+  nodes:
+  - dataset_source
+  - corpus_embedding
+  - vector_db
+  - id: tts_mms
+    type: tts
+    params:
       provider: mms
       voice: en
       sample_rate: 16000
       seed: 42
       output_dir: evaluation_results/pubmed_fulltext_big_tts_cmp/mms/audio
-  - id: piper
-    tts:
+  - id: tts_piper
+    type: tts
+    params:
       provider: piper
       voice: en_US-lessac-medium
       sample_rate: 16000
       seed: 42
       output_dir: evaluation_results/pubmed_fulltext_big_tts_cmp/piper/audio
-  - id: xtts_v2
-    tts:
+  - id: tts_xtts_v2
+    type: tts
+    params:
       provider: xtts_v2
       language: en
       sample_rate: 16000
       seed: 42
       output_dir: evaluation_results/pubmed_fulltext_big_tts_cmp/xtts_v2/audio
-  - id: m4t
-    tts:
+  - id: tts_m4t
+    type: tts
+    params:
       provider: m4t
       language: en
       sample_rate: 16000
       seed: 42
       output_dir: evaluation_results/pubmed_fulltext_big_tts_cmp/m4t/audio
-  nodes:
-  - dataset_source
-  - tts
-  - corpus_embedding
-  - vector_db
-  - asr
-  - text_embedding
-  - retrieval
-  - id: query_refine
+  - id: asr_mms
+    type: asr
+  - id: asr_piper
+    type: asr
+  - id: asr_xtts_v2
+    type: asr
+  - id: asr_m4t
+    type: asr
+  - id: text_embedding_mms
+    type: text_embedding
+  - id: text_embedding_piper
+    type: text_embedding
+  - id: text_embedding_xtts_v2
+    type: text_embedding
+  - id: text_embedding_m4t
+    type: text_embedding
+  - id: retrieval_mms
+    type: retrieval
+    params: {k: 10}
+  - id: retrieval_piper
+    type: retrieval
+    params: {k: 10}
+  - id: retrieval_xtts_v2
+    type: retrieval
+    params: {k: 10}
+  - id: retrieval_m4t
+    type: retrieval
+    params: {k: 10}
+  - &query_refine_mms
+    id: query_refine_mms
     type: query_refine
-    params:
+    params: &query_refine_params
       method: rewrite_with_context
       context_top_k: 3
-  - id: text_embedding_refined
+  - id: query_refine_piper
+    type: query_refine
+    params: *query_refine_params
+  - id: query_refine_xtts_v2
+    type: query_refine
+    params: *query_refine_params
+  - id: query_refine_m4t
+    type: query_refine
+    params: *query_refine_params
+  - id: text_embedding_refined_mms
     type: text_embedding
-  - id: retrieval_refined
+  - id: text_embedding_refined_piper
+    type: text_embedding
+  - id: text_embedding_refined_xtts_v2
+    type: text_embedding
+  - id: text_embedding_refined_m4t
+    type: text_embedding
+  - id: retrieval_refined_mms
     type: retrieval
-  - id: answer_gen
+  - id: retrieval_refined_piper
+    type: retrieval
+  - id: retrieval_refined_xtts_v2
+    type: retrieval
+  - id: retrieval_refined_m4t
+    type: retrieval
+  - &answer_gen_mms
+    id: answer_gen_mms
     type: answer_gen
-    params:
+    params: &answer_gen_params
       method: simple
       max_cases: 0
       system_prompt: |-
@@ -95,105 +161,346 @@ graph:
       context_source: full_text
       context_chunk_chars: 1200
       context_chunks: 4
-  - transcription_metrics
-  - retrieval_metrics
-  - answer_metrics
-  - metrics
-  - build_query_traces
-  - id: answer_judge
+  - id: answer_gen_piper
+    type: answer_gen
+    params: *answer_gen_params
+  - id: answer_gen_xtts_v2
+    type: answer_gen
+    params: *answer_gen_params
+  - id: answer_gen_m4t
+    type: answer_gen
+    params: *answer_gen_params
+  - id: transcription_metrics_mms
+    type: transcription_metrics
+  - id: transcription_metrics_piper
+    type: transcription_metrics
+  - id: transcription_metrics_xtts_v2
+    type: transcription_metrics
+  - id: transcription_metrics_m4t
+    type: transcription_metrics
+  - id: retrieval_metrics_mms
+    type: retrieval_metrics
+  - id: retrieval_metrics_piper
+    type: retrieval_metrics
+  - id: retrieval_metrics_xtts_v2
+    type: retrieval_metrics
+  - id: retrieval_metrics_m4t
+    type: retrieval_metrics
+  - id: answer_metrics_mms
+    type: answer_metrics
+  - id: answer_metrics_piper
+    type: answer_metrics
+  - id: answer_metrics_xtts_v2
+    type: answer_metrics
+  - id: answer_metrics_m4t
+    type: answer_metrics
+  - id: metrics_mms
+    type: metrics
+  - id: metrics_piper
+    type: metrics
+  - id: metrics_xtts_v2
+    type: metrics
+  - id: metrics_m4t
+    type: metrics
+  - id: build_query_traces_mms
+    type: build_query_traces
+  - id: build_query_traces_piper
+    type: build_query_traces
+  - id: build_query_traces_xtts_v2
+    type: build_query_traces
+  - id: build_query_traces_m4t
+    type: build_query_traces
+  - &answer_judge_mms
+    id: answer_judge_mms
     type: answer_judge
-    params:
+    params: &answer_judge_params
       max_cases: 0
       system_prompt: |-
         You are an expert evaluator for a medical question-answering retrieval system. Score each requested aspect from 0.0 (worst) to 1.0 (best). Be strict and consistent. Respond with STRICT JSON only — no prose, no markdown.
-  - finalize
+  - id: answer_judge_piper
+    type: answer_judge
+    params: *answer_judge_params
+  - id: answer_judge_xtts_v2
+    type: answer_judge
+    params: *answer_judge_params
+  - id: answer_judge_m4t
+    type: answer_judge
+    params: *answer_judge_params
+  - id: finalize_mms
+    type: finalize
+  - id: finalize_piper
+    type: finalize
+  - id: finalize_xtts_v2
+    type: finalize
+  - id: finalize_m4t
+    type: finalize
   edges:
   - {from: dataset_source, to: corpus_embedding, input: corpus}
   - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
-  - {from: dataset_source, to: tts, input: query_text}
-  - {from: dataset_source, to: asr, input: query_audio}
-  - {from: tts, to: asr, input: query_audio}
-  - {from: dataset_source, to: asr, input: reference_transcription}
-  - {from: asr, to: text_embedding, input: query_text}
-  - {from: text_embedding, output: text_query_vectors, to: retrieval, input: query_vectors}
-  - {from: vector_db, to: retrieval, input: vector_index}
-  - {from: asr, to: retrieval, input: query_text}
-  - {from: dataset_source, to: retrieval, input: reference_transcription}
-  - {from: dataset_source, to: retrieval, input: relevant_docs}
-  - {from: asr, to: query_refine, input: query_text}
-  - {from: retrieval, to: query_refine, input: retrieved}
-  - {from: query_refine, output: refined_query_text, to: text_embedding_refined, input: query_text}
-  - {from: text_embedding_refined, output: text_query_vectors, to: retrieval_refined, input: query_vectors}
-  - {from: vector_db, to: retrieval_refined, input: vector_index}
-  - {from: query_refine, output: refined_query_text, to: retrieval_refined, input: query_text}
-  - {from: dataset_source, to: retrieval_refined, input: reference_transcription}
-  - {from: dataset_source, to: retrieval_refined, input: relevant_docs}
-  - {from: asr, to: answer_gen, input: query_text}
-  - {from: retrieval_refined, to: answer_gen, input: retrieved}
-  - {from: dataset_source, to: answer_gen, input: short_answers}
-  - {from: dataset_source, to: answer_gen, input: relevant_docs}
-  - {from: asr, to: transcription_metrics, input: query_text}
-  - {from: dataset_source, to: transcription_metrics, input: reference_transcription}
-  - {from: retrieval_refined, to: retrieval_metrics, input: retrieved}
-  - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
-  - {from: answer_gen, to: answer_metrics, input: generated_answers}
-  - {from: retrieval_refined, to: answer_metrics, input: retrieved}
-  - {from: dataset_source, to: answer_metrics, input: relevant_docs}
-  - {from: dataset_source, to: answer_metrics, input: short_answers}
-  - {from: transcription_metrics, to: metrics, input: transcription_scores}
-  - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
-  - {from: answer_metrics, to: metrics, input: answer_scores}
-  - {from: retrieval_refined, to: metrics, input: retrieved}
-  - {from: asr, to: metrics, input: query_text}
-  - {from: dataset_source, to: metrics, input: reference_transcription}
-  - {from: dataset_source, to: metrics, input: relevant_docs}
-  - {from: transcription_metrics, to: metrics, input: per_query_wer}
-  - {from: transcription_metrics, to: metrics, input: per_query_cer}
-  - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
-  - {from: retrieval_refined, to: build_query_traces, input: retrieved}
-  - {from: answer_gen, to: build_query_traces, input: generated_answers}
-  - {from: metrics, to: build_query_traces, input: metrics}
-  - {from: dataset_source, to: build_query_traces, input: reference_transcription}
-  - {from: dataset_source, to: build_query_traces, input: relevant_docs}
-  - {from: transcription_metrics, to: build_query_traces, input: per_query_wer}
-  - {from: transcription_metrics, to: build_query_traces, input: per_query_cer}
-  - {from: retrieval_metrics, to: build_query_traces, input: per_query_recall5}
-  - {from: metrics, to: answer_judge, input: metrics}
-  - {from: build_query_traces, to: answer_judge, input: query_traces}
-  - {from: answer_gen, to: answer_judge, input: generated_answers}
-  - {from: retrieval_refined, to: answer_judge, input: retrieved}
-  - {from: dataset_source, to: answer_judge, input: relevant_docs}
-  - {from: retrieval_metrics, to: answer_judge, input: per_query_recall5}
-  - {from: metrics, to: finalize, input: metrics}
-  - {from: build_query_traces, to: finalize, input: query_traces}
-  - {from: answer_judge, to: finalize, input: judge_scores}
-  - {from: answer_judge, to: finalize, input: judge_pass}
-  - {from: answer_gen, to: finalize, input: generated_answers}
-  - {from: retrieval_refined, to: finalize, input: retrieved}
-  - {from: answer_judge, to: finalize, input: judge_aspect_accuracy}
-  - {from: answer_judge, to: finalize, input: judge_aspect_clarity}
-  - {from: answer_judge, to: finalize, input: judge_aspect_completeness}
-  - {from: answer_judge, to: finalize, input: judge_aspect_correctness}
-  - {from: answer_judge, to: finalize, input: judge_aspect_factuality}
-  - {from: answer_judge, to: finalize, input: judge_aspect_faithfulness}
-  - {from: answer_judge, to: finalize, input: judge_aspect_relevance}
+  - {from: dataset_source, to: tts_mms, input: query_text}
+  - {from: dataset_source, to: tts_piper, input: query_text}
+  - {from: dataset_source, to: tts_xtts_v2, input: query_text}
+  - {from: dataset_source, to: tts_m4t, input: query_text}
+  - {from: dataset_source, to: asr_mms, input: query_audio}
+  - {from: dataset_source, to: asr_piper, input: query_audio}
+  - {from: dataset_source, to: asr_xtts_v2, input: query_audio}
+  - {from: dataset_source, to: asr_m4t, input: query_audio}
+  - {from: tts_mms, to: asr_mms, input: query_audio}
+  - {from: tts_piper, to: asr_piper, input: query_audio}
+  - {from: tts_xtts_v2, to: asr_xtts_v2, input: query_audio}
+  - {from: tts_m4t, to: asr_m4t, input: query_audio}
+  - {from: dataset_source, to: asr_mms, input: reference_transcription}
+  - {from: dataset_source, to: asr_piper, input: reference_transcription}
+  - {from: dataset_source, to: asr_xtts_v2, input: reference_transcription}
+  - {from: dataset_source, to: asr_m4t, input: reference_transcription}
 
-nodes:
-  asr:
-    model: whisper
-    size: large
-    device: cuda:1
-  text_embedding:
-    model: jina_v4
-    name: jinaai/jina-embeddings-v4
-    device: cuda:2
-  vector_db:
-    store: inmemory
-  retrieval:
-    k: 10
+  - {from: asr_mms, to: text_embedding_mms, input: query_text}
+  - {from: text_embedding_mms, output: text_query_vectors, to: retrieval_mms, input: query_vectors}
+  - {from: vector_db, to: retrieval_mms, input: vector_index}
+  - {from: asr_mms, to: retrieval_mms, input: query_text}
+  - {from: dataset_source, to: retrieval_mms, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_mms, input: relevant_docs}
+  - {from: asr_mms, to: query_refine_mms, input: query_text}
+  - {from: retrieval_mms, to: query_refine_mms, input: retrieved}
+  - {from: query_refine_mms, output: refined_query_text, to: text_embedding_refined_mms, input: query_text}
+  - {from: text_embedding_refined_mms, output: text_query_vectors, to: retrieval_refined_mms, input: query_vectors}
+  - {from: vector_db, to: retrieval_refined_mms, input: vector_index}
+  - {from: query_refine_mms, output: refined_query_text, to: retrieval_refined_mms, input: query_text}
+  - {from: dataset_source, to: retrieval_refined_mms, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_refined_mms, input: relevant_docs}
+  - {from: asr_mms, to: answer_gen_mms, input: query_text}
+  - {from: retrieval_refined_mms, to: answer_gen_mms, input: retrieved}
+  - {from: dataset_source, to: answer_gen_mms, input: short_answers}
+  - {from: dataset_source, to: answer_gen_mms, input: relevant_docs}
+  - {from: asr_mms, to: transcription_metrics_mms, input: query_text}
+  - {from: dataset_source, to: transcription_metrics_mms, input: reference_transcription}
+  - {from: retrieval_refined_mms, to: retrieval_metrics_mms, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_mms, input: relevant_docs}
+  - {from: answer_gen_mms, to: answer_metrics_mms, input: generated_answers}
+  - {from: retrieval_refined_mms, to: answer_metrics_mms, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_mms, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_mms, input: short_answers}
+  - {from: transcription_metrics_mms, to: metrics_mms, input: transcription_scores}
+  - {from: retrieval_metrics_mms, to: metrics_mms, input: retrieval_scores}
+  - {from: answer_metrics_mms, to: metrics_mms, input: answer_scores}
+  - {from: retrieval_refined_mms, to: metrics_mms, input: retrieved}
+  - {from: asr_mms, to: metrics_mms, input: query_text}
+  - {from: dataset_source, to: metrics_mms, input: reference_transcription}
+  - {from: dataset_source, to: metrics_mms, input: relevant_docs}
+  - {from: transcription_metrics_mms, to: metrics_mms, input: per_query_wer}
+  - {from: transcription_metrics_mms, to: metrics_mms, input: per_query_cer}
+  - {from: retrieval_metrics_mms, to: metrics_mms, input: per_query_recall5}
+  - {from: retrieval_refined_mms, to: build_query_traces_mms, input: retrieved}
+  - {from: answer_gen_mms, to: build_query_traces_mms, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_mms, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_mms, input: relevant_docs}
+  - {from: transcription_metrics_mms, to: build_query_traces_mms, input: per_query_wer}
+  - {from: transcription_metrics_mms, to: build_query_traces_mms, input: per_query_cer}
+  - {from: retrieval_metrics_mms, to: build_query_traces_mms, input: per_query_recall5}
+  - {from: build_query_traces_mms, to: answer_judge_mms, input: query_traces}
+  - {from: answer_gen_mms, to: answer_judge_mms, input: generated_answers}
+  - {from: retrieval_refined_mms, to: answer_judge_mms, input: retrieved}
+  - {from: dataset_source, to: answer_judge_mms, input: relevant_docs}
+  - {from: retrieval_metrics_mms, to: answer_judge_mms, input: per_query_recall5}
+  - {from: metrics_mms, to: finalize_mms, input: metrics}
+  - {from: build_query_traces_mms, to: finalize_mms, input: query_traces}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_scores}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_pass}
+  - {from: answer_gen_mms, to: finalize_mms, input: generated_answers}
+  - {from: retrieval_refined_mms, to: finalize_mms, input: retrieved}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_aspect_accuracy}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_aspect_clarity}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_aspect_completeness}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_aspect_correctness}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_aspect_factuality}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_aspect_faithfulness}
+  - {from: answer_judge_mms, to: finalize_mms, input: judge_aspect_relevance}
 
-query_optimization:
-  enabled: true
+  - {from: asr_piper, to: text_embedding_piper, input: query_text}
+  - {from: text_embedding_piper, output: text_query_vectors, to: retrieval_piper, input: query_vectors}
+  - {from: vector_db, to: retrieval_piper, input: vector_index}
+  - {from: asr_piper, to: retrieval_piper, input: query_text}
+  - {from: dataset_source, to: retrieval_piper, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper, input: relevant_docs}
+  - {from: asr_piper, to: query_refine_piper, input: query_text}
+  - {from: retrieval_piper, to: query_refine_piper, input: retrieved}
+  - {from: query_refine_piper, output: refined_query_text, to: text_embedding_refined_piper, input: query_text}
+  - {from: text_embedding_refined_piper, output: text_query_vectors, to: retrieval_refined_piper, input: query_vectors}
+  - {from: vector_db, to: retrieval_refined_piper, input: vector_index}
+  - {from: query_refine_piper, output: refined_query_text, to: retrieval_refined_piper, input: query_text}
+  - {from: dataset_source, to: retrieval_refined_piper, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_refined_piper, input: relevant_docs}
+  - {from: asr_piper, to: answer_gen_piper, input: query_text}
+  - {from: retrieval_refined_piper, to: answer_gen_piper, input: retrieved}
+  - {from: dataset_source, to: answer_gen_piper, input: short_answers}
+  - {from: dataset_source, to: answer_gen_piper, input: relevant_docs}
+  - {from: asr_piper, to: transcription_metrics_piper, input: query_text}
+  - {from: dataset_source, to: transcription_metrics_piper, input: reference_transcription}
+  - {from: retrieval_refined_piper, to: retrieval_metrics_piper, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_piper, input: relevant_docs}
+  - {from: answer_gen_piper, to: answer_metrics_piper, input: generated_answers}
+  - {from: retrieval_refined_piper, to: answer_metrics_piper, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_piper, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_piper, input: short_answers}
+  - {from: transcription_metrics_piper, to: metrics_piper, input: transcription_scores}
+  - {from: retrieval_metrics_piper, to: metrics_piper, input: retrieval_scores}
+  - {from: answer_metrics_piper, to: metrics_piper, input: answer_scores}
+  - {from: retrieval_refined_piper, to: metrics_piper, input: retrieved}
+  - {from: asr_piper, to: metrics_piper, input: query_text}
+  - {from: dataset_source, to: metrics_piper, input: reference_transcription}
+  - {from: dataset_source, to: metrics_piper, input: relevant_docs}
+  - {from: transcription_metrics_piper, to: metrics_piper, input: per_query_wer}
+  - {from: transcription_metrics_piper, to: metrics_piper, input: per_query_cer}
+  - {from: retrieval_metrics_piper, to: metrics_piper, input: per_query_recall5}
+  - {from: retrieval_refined_piper, to: build_query_traces_piper, input: retrieved}
+  - {from: answer_gen_piper, to: build_query_traces_piper, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_piper, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_piper, input: relevant_docs}
+  - {from: transcription_metrics_piper, to: build_query_traces_piper, input: per_query_wer}
+  - {from: transcription_metrics_piper, to: build_query_traces_piper, input: per_query_cer}
+  - {from: retrieval_metrics_piper, to: build_query_traces_piper, input: per_query_recall5}
+  - {from: build_query_traces_piper, to: answer_judge_piper, input: query_traces}
+  - {from: answer_gen_piper, to: answer_judge_piper, input: generated_answers}
+  - {from: retrieval_refined_piper, to: answer_judge_piper, input: retrieved}
+  - {from: dataset_source, to: answer_judge_piper, input: relevant_docs}
+  - {from: retrieval_metrics_piper, to: answer_judge_piper, input: per_query_recall5}
+  - {from: metrics_piper, to: finalize_piper, input: metrics}
+  - {from: build_query_traces_piper, to: finalize_piper, input: query_traces}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_scores}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_pass}
+  - {from: answer_gen_piper, to: finalize_piper, input: generated_answers}
+  - {from: retrieval_refined_piper, to: finalize_piper, input: retrieved}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_aspect_accuracy}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_aspect_clarity}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_aspect_completeness}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_aspect_correctness}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_aspect_factuality}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_aspect_faithfulness}
+  - {from: answer_judge_piper, to: finalize_piper, input: judge_aspect_relevance}
+
+  - {from: asr_xtts_v2, to: text_embedding_xtts_v2, input: query_text}
+  - {from: text_embedding_xtts_v2, output: text_query_vectors, to: retrieval_xtts_v2, input: query_vectors}
+  - {from: vector_db, to: retrieval_xtts_v2, input: vector_index}
+  - {from: asr_xtts_v2, to: retrieval_xtts_v2, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_v2, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_v2, input: relevant_docs}
+  - {from: asr_xtts_v2, to: query_refine_xtts_v2, input: query_text}
+  - {from: retrieval_xtts_v2, to: query_refine_xtts_v2, input: retrieved}
+  - {from: query_refine_xtts_v2, output: refined_query_text, to: text_embedding_refined_xtts_v2, input: query_text}
+  - {from: text_embedding_refined_xtts_v2, output: text_query_vectors, to: retrieval_refined_xtts_v2, input: query_vectors}
+  - {from: vector_db, to: retrieval_refined_xtts_v2, input: vector_index}
+  - {from: query_refine_xtts_v2, output: refined_query_text, to: retrieval_refined_xtts_v2, input: query_text}
+  - {from: dataset_source, to: retrieval_refined_xtts_v2, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_refined_xtts_v2, input: relevant_docs}
+  - {from: asr_xtts_v2, to: answer_gen_xtts_v2, input: query_text}
+  - {from: retrieval_refined_xtts_v2, to: answer_gen_xtts_v2, input: retrieved}
+  - {from: dataset_source, to: answer_gen_xtts_v2, input: short_answers}
+  - {from: dataset_source, to: answer_gen_xtts_v2, input: relevant_docs}
+  - {from: asr_xtts_v2, to: transcription_metrics_xtts_v2, input: query_text}
+  - {from: dataset_source, to: transcription_metrics_xtts_v2, input: reference_transcription}
+  - {from: retrieval_refined_xtts_v2, to: retrieval_metrics_xtts_v2, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_xtts_v2, input: relevant_docs}
+  - {from: answer_gen_xtts_v2, to: answer_metrics_xtts_v2, input: generated_answers}
+  - {from: retrieval_refined_xtts_v2, to: answer_metrics_xtts_v2, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_xtts_v2, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_xtts_v2, input: short_answers}
+  - {from: transcription_metrics_xtts_v2, to: metrics_xtts_v2, input: transcription_scores}
+  - {from: retrieval_metrics_xtts_v2, to: metrics_xtts_v2, input: retrieval_scores}
+  - {from: answer_metrics_xtts_v2, to: metrics_xtts_v2, input: answer_scores}
+  - {from: retrieval_refined_xtts_v2, to: metrics_xtts_v2, input: retrieved}
+  - {from: asr_xtts_v2, to: metrics_xtts_v2, input: query_text}
+  - {from: dataset_source, to: metrics_xtts_v2, input: reference_transcription}
+  - {from: dataset_source, to: metrics_xtts_v2, input: relevant_docs}
+  - {from: transcription_metrics_xtts_v2, to: metrics_xtts_v2, input: per_query_wer}
+  - {from: transcription_metrics_xtts_v2, to: metrics_xtts_v2, input: per_query_cer}
+  - {from: retrieval_metrics_xtts_v2, to: metrics_xtts_v2, input: per_query_recall5}
+  - {from: retrieval_refined_xtts_v2, to: build_query_traces_xtts_v2, input: retrieved}
+  - {from: answer_gen_xtts_v2, to: build_query_traces_xtts_v2, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_xtts_v2, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_xtts_v2, input: relevant_docs}
+  - {from: transcription_metrics_xtts_v2, to: build_query_traces_xtts_v2, input: per_query_wer}
+  - {from: transcription_metrics_xtts_v2, to: build_query_traces_xtts_v2, input: per_query_cer}
+  - {from: retrieval_metrics_xtts_v2, to: build_query_traces_xtts_v2, input: per_query_recall5}
+  - {from: build_query_traces_xtts_v2, to: answer_judge_xtts_v2, input: query_traces}
+  - {from: answer_gen_xtts_v2, to: answer_judge_xtts_v2, input: generated_answers}
+  - {from: retrieval_refined_xtts_v2, to: answer_judge_xtts_v2, input: retrieved}
+  - {from: dataset_source, to: answer_judge_xtts_v2, input: relevant_docs}
+  - {from: retrieval_metrics_xtts_v2, to: answer_judge_xtts_v2, input: per_query_recall5}
+  - {from: metrics_xtts_v2, to: finalize_xtts_v2, input: metrics}
+  - {from: build_query_traces_xtts_v2, to: finalize_xtts_v2, input: query_traces}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_scores}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_pass}
+  - {from: answer_gen_xtts_v2, to: finalize_xtts_v2, input: generated_answers}
+  - {from: retrieval_refined_xtts_v2, to: finalize_xtts_v2, input: retrieved}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_aspect_accuracy}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_aspect_clarity}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_aspect_completeness}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_aspect_correctness}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_aspect_factuality}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_aspect_faithfulness}
+  - {from: answer_judge_xtts_v2, to: finalize_xtts_v2, input: judge_aspect_relevance}
+
+  - {from: asr_m4t, to: text_embedding_m4t, input: query_text}
+  - {from: text_embedding_m4t, output: text_query_vectors, to: retrieval_m4t, input: query_vectors}
+  - {from: vector_db, to: retrieval_m4t, input: vector_index}
+  - {from: asr_m4t, to: retrieval_m4t, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t, input: relevant_docs}
+  - {from: asr_m4t, to: query_refine_m4t, input: query_text}
+  - {from: retrieval_m4t, to: query_refine_m4t, input: retrieved}
+  - {from: query_refine_m4t, output: refined_query_text, to: text_embedding_refined_m4t, input: query_text}
+  - {from: text_embedding_refined_m4t, output: text_query_vectors, to: retrieval_refined_m4t, input: query_vectors}
+  - {from: vector_db, to: retrieval_refined_m4t, input: vector_index}
+  - {from: query_refine_m4t, output: refined_query_text, to: retrieval_refined_m4t, input: query_text}
+  - {from: dataset_source, to: retrieval_refined_m4t, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_refined_m4t, input: relevant_docs}
+  - {from: asr_m4t, to: answer_gen_m4t, input: query_text}
+  - {from: retrieval_refined_m4t, to: answer_gen_m4t, input: retrieved}
+  - {from: dataset_source, to: answer_gen_m4t, input: short_answers}
+  - {from: dataset_source, to: answer_gen_m4t, input: relevant_docs}
+  - {from: asr_m4t, to: transcription_metrics_m4t, input: query_text}
+  - {from: dataset_source, to: transcription_metrics_m4t, input: reference_transcription}
+  - {from: retrieval_refined_m4t, to: retrieval_metrics_m4t, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_m4t, input: relevant_docs}
+  - {from: answer_gen_m4t, to: answer_metrics_m4t, input: generated_answers}
+  - {from: retrieval_refined_m4t, to: answer_metrics_m4t, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_m4t, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_m4t, input: short_answers}
+  - {from: transcription_metrics_m4t, to: metrics_m4t, input: transcription_scores}
+  - {from: retrieval_metrics_m4t, to: metrics_m4t, input: retrieval_scores}
+  - {from: answer_metrics_m4t, to: metrics_m4t, input: answer_scores}
+  - {from: retrieval_refined_m4t, to: metrics_m4t, input: retrieved}
+  - {from: asr_m4t, to: metrics_m4t, input: query_text}
+  - {from: dataset_source, to: metrics_m4t, input: reference_transcription}
+  - {from: dataset_source, to: metrics_m4t, input: relevant_docs}
+  - {from: transcription_metrics_m4t, to: metrics_m4t, input: per_query_wer}
+  - {from: transcription_metrics_m4t, to: metrics_m4t, input: per_query_cer}
+  - {from: retrieval_metrics_m4t, to: metrics_m4t, input: per_query_recall5}
+  - {from: retrieval_refined_m4t, to: build_query_traces_m4t, input: retrieved}
+  - {from: answer_gen_m4t, to: build_query_traces_m4t, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_m4t, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_m4t, input: relevant_docs}
+  - {from: transcription_metrics_m4t, to: build_query_traces_m4t, input: per_query_wer}
+  - {from: transcription_metrics_m4t, to: build_query_traces_m4t, input: per_query_cer}
+  - {from: retrieval_metrics_m4t, to: build_query_traces_m4t, input: per_query_recall5}
+  - {from: build_query_traces_m4t, to: answer_judge_m4t, input: query_traces}
+  - {from: answer_gen_m4t, to: answer_judge_m4t, input: generated_answers}
+  - {from: retrieval_refined_m4t, to: answer_judge_m4t, input: retrieved}
+  - {from: dataset_source, to: answer_judge_m4t, input: relevant_docs}
+  - {from: retrieval_metrics_m4t, to: answer_judge_m4t, input: per_query_recall5}
+  - {from: metrics_m4t, to: finalize_m4t, input: metrics}
+  - {from: build_query_traces_m4t, to: finalize_m4t, input: query_traces}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_scores}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_pass}
+  - {from: answer_gen_m4t, to: finalize_m4t, input: generated_answers}
+  - {from: retrieval_refined_m4t, to: finalize_m4t, input: retrieved}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_aspect_accuracy}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_aspect_clarity}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_aspect_completeness}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_aspect_correctness}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_aspect_factuality}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_aspect_faithfulness}
+  - {from: answer_judge_m4t, to: finalize_m4t, input: judge_aspect_relevance}
 
 llm:
   model: gemma4:latest

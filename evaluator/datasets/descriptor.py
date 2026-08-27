@@ -31,17 +31,6 @@ def resolve_split(data: "DataConfig", default: Optional[str] = None) -> Optional
     )
 
 
-# ── Default metric sets per evaluation mode ───────────────────────────
-
-METRICS_BY_MODE: Dict[str, Sequence[str]] = {
-    "transcription": ("wer", "cer"),
-    "retrieval":     ("mrr", "ndcg", "precision", "recall"),
-    "qa_retrieval":  ("wer", "cer", "mrr", "ndcg", "precision", "recall"),
-    "qa":            ("mrr", "ndcg", "llm_judge"),
-    "ranking":       ("ndcg", "precision"),
-}
-
-
 # ── Default column schema per dataset type ────────────────────────────
 # Column name → registered artifact (§2 "field → registered artifact"). A descriptor
 # may declare its own `fields`; these defaults keep builtins terse. The dataset_source
@@ -95,11 +84,12 @@ class DatasetDescriptor:
         requires_audio: Samples must have audio.
         requires_text: Samples must have text queries / corpus.
         supports_generation: TTS can synthesise audio from text queries.
-        evaluation_mode: Key into METRICS_BY_MODE ("transcription" | "retrieval" |
-            "qa_retrieval" | "qa" | "ranking").
-        compatible_pipeline_modes: Pipeline modes valid for this dataset.
-        default_metrics: Metrics to compute; auto-filled from evaluation_mode
-            when left empty.
+        evaluation_mode: Coarse task-shape grouping ("transcription" | "retrieval" |
+            "qa_retrieval" | "qa" | "ranking") — drives retrieval-capability checks
+            (``derived_outputs``, ``validate_dataset_runtime_config``). Which metrics actually
+            compute is decided per-run from the real built graph
+            (``evaluation.metric_registry.applicable_metrics``), not from this dataset alone —
+            a bare descriptor has no graph to derive metric-input artifacts from.
         required_data_fields: DataConfig attribute names that must be non-empty.
         fields: Column schema — ``{column_name: registered_artifact_name}``. The
             dataset_source node advertises these columns (name + modality) on the
@@ -117,8 +107,6 @@ class DatasetDescriptor:
     requires_text: bool
     supports_generation: bool
     evaluation_mode: str
-    compatible_pipeline_modes: Sequence[str]
-    default_metrics: Sequence[str] = field(default_factory=list)
     required_data_fields: Sequence[str] = field(default_factory=list)
     fields: Mapping[str, str] = field(default_factory=dict)
     #: Free-form subject-area tag for grouping the dataset picker (e.g. "medical",
@@ -141,8 +129,6 @@ class DatasetDescriptor:
     def __post_init__(self) -> None:
         if self.splits and not self.default_split:
             self.default_split = str(self.splits[0])
-        if not self.default_metrics:
-            self.default_metrics = list(METRICS_BY_MODE.get(self.evaluation_mode, ()))
         if not self.fields:
             self.fields = dict(FIELDS_BY_DATASET_TYPE.get(self.dataset_type, {}))
         if self.fields:
@@ -158,16 +144,15 @@ class DatasetDescriptor:
         """Artifacts the runtime source publishes that aren't literal columns: a self-retrieval
         ``corpus`` for retrieval-capable datasets that declare no corpus column (their corpus is
         derived from their own items). Advertised on the DAG so ``corpus_embedding`` wires — in
-        both the preview and the builder picker (keeping the two surfaces identical)."""
-        if "corpus" not in self.fields.values() and any(
-            "retrieval" in str(m) for m in self.compatible_pipeline_modes
+        both the preview and the builder picker (keeping the two surfaces identical). An audio
+        dataset always qualifies even when its native ``evaluation_mode`` is "transcription" —
+        its own transcriptions still make a legitimate cross-modal retrieval corpus (the point
+        of ``AudioTranscriptionDataset``'s corpus-derived-from-transcriptions design)."""
+        if "corpus" not in self.fields.values() and (
+            self.requires_audio or "retrieval" in self.evaluation_mode
         ):
             return ("corpus",)
         return ()
-
-    def supports_pipeline_mode(self, mode: str) -> bool:
-        """Return True when *mode* is listed in compatible_pipeline_modes."""
-        return mode in set(self.compatible_pipeline_modes)
 
     def validate_data_config(self, data: "DataConfig") -> List[str]:
         """Return validation error strings (empty list = valid).

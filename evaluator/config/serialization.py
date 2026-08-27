@@ -179,6 +179,7 @@ def to_nested_dict(config: Any) -> Dict[str, Any]:
         "checkpoint_interval": config.checkpoint_interval,
         "resume_from_checkpoint": config.resume_from_checkpoint,
         "parallel_enabled": config.parallel_enabled,
+        "persist_intermediate_artifacts": config.persist_intermediate_artifacts,
     }
     from .evaluation import _FEATURE_SUBCONFIGS
 

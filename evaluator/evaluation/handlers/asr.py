@@ -17,7 +17,7 @@ from ..executor.node_pipeline import _node_pipeline
 logger = get_logger(__name__)
 
 
-def _run_asr_phase(
+def _run_asr_step(
     dataset,
     asr_pipeline,
     with_relevance,
@@ -61,7 +61,7 @@ def _run_asr_phase(
         resume_from_checkpoint=resume_from_checkpoint,
         warmup_batch_sizing=warmup_batch_sizing,
     )
-    logger.info(f"ASR Phase complete: {len(hypotheses)} transcriptions")
+    logger.info(f"ASR step complete: {len(hypotheses)} transcriptions")
     # Snapshot raw ASR output — WER/CER must compare against this, not any
     # query-optimized version that may expand the text significantly.
     asr_hyps_for_wer = list(hypotheses)
@@ -87,10 +87,10 @@ def _stage_asr(s: RunState) -> None:
     params = s.node_params
     oracle = bool(s.oracle_mode or params.get("oracle"))
     s.cb(
-        "phase_1_asr",
+        "step_1_asr",
         0,
         s.total,
-        "Phase 1: Oracle bypass" if oracle else "Phase 1: ASR transcription",
+        "Step 1: Oracle bypass" if oracle else "Step 1: ASR transcription",
     )
     # Bus-first audio (P4): a republished query_audio ref set (augment_audio /
     # union) wraps the dataset in a ref-decoding view; matching refs pass through.
@@ -104,7 +104,7 @@ def _stage_asr(s: RunState) -> None:
             asr_hypotheses_for_wer,
             relevance,
             query_ids,
-        ) = _run_asr_phase(
+        ) = _run_asr_step(
             audio_dataset,
             s.asr_pipeline,
             retrieval_ran(s),  # asr_text_retrieval (retrieval ran) → build IR relevance
@@ -135,7 +135,7 @@ def _stage_asr(s: RunState) -> None:
     # dataset_source.
     publish_keyed_or_plain(s, "query_text", hypotheses, query_ids)  # feeds embedding (R4d)
     s.cb(
-        "phase_1_asr",
+        "step_1_asr",
         s.total,
         s.total,
         "Oracle bypass complete" if s.oracle_mode else "ASR transcription complete",

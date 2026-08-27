@@ -33,11 +33,9 @@ def build_datasets_router() -> APIRouter:
             "requires_text": desc.requires_text,
             "supports_generation": desc.supports_generation,
             "evaluation_mode": desc.evaluation_mode,
-            "compatible_pipeline_modes": list(desc.compatible_pipeline_modes),
             "required_data_fields": list(desc.required_data_fields),
             "splits": list(desc.splits),
             "default_split": desc.default_split,
-            "default_metrics": list(desc.default_metrics),
             # Column schema (§2): what the dataset node shows on the DAG.
             "fields": [
                 {
@@ -87,16 +85,12 @@ def build_datasets_router() -> APIRouter:
                 "requires_audio": d.requires_audio,
                 "requires_text": d.requires_text,
                 "supports_generation": d.supports_generation,
-                "compatible_pipeline_modes": list(d.compatible_pipeline_modes),
             })
         return {
             "known_datasets": ids,  # back-compat (bare ids)
             "datasets": datasets,   # rich entries for the grouped picker
             "dataset_type_defaults": {
-                str(dt): {
-                    "evaluation_mode": p.evaluation_mode,
-                    "recommended_pipeline_modes": list(p.recommended_pipeline_modes),
-                }
+                str(dt): {"evaluation_mode": p.evaluation_mode}
                 for dt, p in _DATASET_TYPE_DEFAULTS.items()
             },
         }

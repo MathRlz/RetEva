@@ -228,7 +228,7 @@ def _stage_query_optimization(s: "RunState") -> None:
         if items is not None
         else [str(i) for i in range(len(texts))]
     )
-    s.cb("phase_1_5_query_opt", 0, s.total, f"Phase 1.5: Query optimization ({cfg.method})")
+    s.cb("step_1_5_query_opt", 0, s.total, f"Step 1.5: Query optimization ({cfg.method})")
     # rewrite/HyDE are I/O-bound LLM calls (thread is the right backend); the per-item unit falls
     # back to the original query on failure.
     from ..executor.cpu_parallel import run_per_item

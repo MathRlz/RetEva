@@ -1,5 +1,9 @@
-# APM self-retrieval — all 6 models in one branched run (2 encoders × 3 pooling strategies).
-# Shared prefix (corpus_embedding + vector_db) runs once via CSE; branches diverge at audio_embedding.
+# APM self-retrieval — all 6 models in one flat run (2 encoders × 3 pooling strategies).
+#
+# One graph: a single dataset_source/corpus_embedding/vector_db feeds six distinctly-named
+# audio_embedding variants, each with its own retrieval + metrics chain. No graph.branches —
+# the shared nodes (dataset_source, corpus_embedding, vector_db) just have multiple outgoing
+# edges, same as any other fan-out in the graph.
 experiment:
   name: apm_admed_all_models
   output_dir: evaluation_results
@@ -15,73 +19,6 @@ data:
   test_size: 0.3
 
 graph:
-  branches:
-  - id: whisper_attention
-    audio_embedding:
-      model: attention_pool
-      encoder: whisper
-      encoder-size: large
-      dim: 2048
-      embedding_space: jina_v4_space
-      params:
-        pooling: attention
-      model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt
-      device: cuda:0
-  - id: whisper_whiten
-    audio_embedding:
-      model: attention_pool
-      encoder: whisper
-      encoder-size: large
-      dim: 2048
-      embedding_space: jina_v4_space
-      params:
-        pooling: mean_whiten
-      model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice_whitened_none.pt
-      device: cuda:0
-  - id: whisper_abtt
-    audio_embedding:
-      model: attention_pool
-      encoder: whisper
-      encoder-size: large
-      dim: 2048
-      embedding_space: jina_v4_space
-      params:
-        pooling: mean_abtt
-      model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice_abtt_none.pt
-      device: cuda:0
-  - id: m4t_attention
-    audio_embedding:
-      model: attention_pool
-      encoder: m4t
-      encoder-size: v2-large
-      dim: 2048
-      embedding_space: jina_v4_space
-      params:
-        pooling: attention
-      model_path: ${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt
-      device: cuda:0
-  - id: m4t_whiten
-    audio_embedding:
-      model: attention_pool
-      encoder: m4t
-      encoder-size: v2-large
-      dim: 2048
-      embedding_space: jina_v4_space
-      params:
-        pooling: mean_whiten
-      model_path: ${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_whitened_none.pt
-      device: cuda:0
-  - id: m4t_abtt
-    audio_embedding:
-      model: attention_pool
-      encoder: m4t
-      encoder-size: v2-large
-      dim: 2048
-      embedding_space: jina_v4_space
-      params:
-        pooling: mean_abtt
-      model_path: ${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_abtt_none.pt
-      device: cuda:0
   nodes:
   - dataset_source
   - id: corpus_embedding
@@ -92,51 +29,225 @@ graph:
       embedding_space: jina_v4_space
       device: cuda:1
   - vector_db
-  - audio_embedding
-  - retrieval
-  - retrieval_metrics
-  - metrics
-  - finalize
+  - id: audio_embedding_whisper_attention
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: whisper
+      encoder-size: large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt
+      device: cuda:0
+  - id: audio_embedding_whisper_whiten
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: whisper
+      encoder-size: large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: mean_whiten}
+      model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice_whitened_none.pt
+      device: cuda:0
+  - id: audio_embedding_whisper_abtt
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: whisper
+      encoder-size: large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: mean_abtt}
+      model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice_abtt_none.pt
+      device: cuda:0
+  - id: audio_embedding_m4t_attention
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: m4t
+      encoder-size: v2-large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: ${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt
+      device: cuda:0
+  - id: audio_embedding_m4t_whiten
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: m4t
+      encoder-size: v2-large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: mean_whiten}
+      model_path: ${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_whitened_none.pt
+      device: cuda:0
+  - id: audio_embedding_m4t_abtt
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: m4t
+      encoder-size: v2-large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: mean_abtt}
+      model_path: ${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_abtt_none.pt
+      device: cuda:0
+  - id: retrieval_whisper_attention
+    type: retrieval
+  - id: retrieval_whisper_whiten
+    type: retrieval
+  - id: retrieval_whisper_abtt
+    type: retrieval
+  - id: retrieval_m4t_attention
+    type: retrieval
+  - id: retrieval_m4t_whiten
+    type: retrieval
+  - id: retrieval_m4t_abtt
+    type: retrieval
+  - id: retrieval_metrics_whisper_attention
+    type: retrieval_metrics
+  - id: retrieval_metrics_whisper_whiten
+    type: retrieval_metrics
+  - id: retrieval_metrics_whisper_abtt
+    type: retrieval_metrics
+  - id: retrieval_metrics_m4t_attention
+    type: retrieval_metrics
+  - id: retrieval_metrics_m4t_whiten
+    type: retrieval_metrics
+  - id: retrieval_metrics_m4t_abtt
+    type: retrieval_metrics
+  - id: metrics_whisper_attention
+    type: metrics
+  - id: metrics_whisper_whiten
+    type: metrics
+  - id: metrics_whisper_abtt
+    type: metrics
+  - id: metrics_m4t_attention
+    type: metrics
+  - id: metrics_m4t_whiten
+    type: metrics
+  - id: metrics_m4t_abtt
+    type: metrics
+  - id: finalize_whisper_attention
+    type: finalize
+  - id: finalize_whisper_whiten
+    type: finalize
+  - id: finalize_whisper_abtt
+    type: finalize
+  - id: finalize_m4t_attention
+    type: finalize
+  - id: finalize_m4t_whiten
+    type: finalize
+  - id: finalize_m4t_abtt
+    type: finalize
   edges:
   - {from: dataset_source, to: corpus_embedding, input: corpus}
   - {from: corpus_embedding, to: vector_db, input: corpus_vectors}
-  - {from: dataset_source, to: audio_embedding, input: query_audio}
-  - {from: audio_embedding, output: audio_query_vectors, to: retrieval, input: query_vectors}
-  - {from: vector_db, to: retrieval, input: vector_index}
-  - {from: dataset_source, to: retrieval, input: query_text}
-  - {from: dataset_source, to: retrieval, input: reference_transcription}
-  - {from: dataset_source, to: retrieval, input: relevant_docs}
-  - {from: retrieval, to: retrieval_metrics, input: retrieved}
-  - {from: dataset_source, to: retrieval_metrics, input: relevant_docs}
-  - {from: retrieval_metrics, to: metrics, input: retrieval_scores}
-  - {from: retrieval, to: metrics, input: retrieved}
-  - {from: dataset_source, to: metrics, input: query_text}
-  - {from: dataset_source, to: metrics, input: reference_transcription}
-  - {from: dataset_source, to: metrics, input: relevant_docs}
-  - {from: retrieval_metrics, to: metrics, input: per_query_recall5}
-  - {from: metrics, to: finalize, input: metrics}
-  - {from: retrieval, to: finalize, input: retrieved}
+  - {from: dataset_source, to: audio_embedding_whisper_attention, input: query_audio}
+  - {from: dataset_source, to: audio_embedding_whisper_whiten, input: query_audio}
+  - {from: dataset_source, to: audio_embedding_whisper_abtt, input: query_audio}
+  - {from: dataset_source, to: audio_embedding_m4t_attention, input: query_audio}
+  - {from: dataset_source, to: audio_embedding_m4t_whiten, input: query_audio}
+  - {from: dataset_source, to: audio_embedding_m4t_abtt, input: query_audio}
 
-nodes:
-  audio_embedding:
-    model: attention_pool
-    encoder: whisper
-    encoder-size: large
-    dim: 2048
-    embedding_space: jina_v4_space
-    params:
-      pooling: attention
-    model_path: ${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt
-    device: cuda:0
-  text_embedding:
-    model: jina_v4
-    name: jinaai/jina-embeddings-v4
-    embedding_space: jina_v4_space
-    device: cuda:1
-  vector_db:
-    store: inmemory
-  retrieval:
-    k: 10
+  - {from: audio_embedding_whisper_attention, output: audio_query_vectors, to: retrieval_whisper_attention, input: query_vectors}
+  - {from: vector_db, to: retrieval_whisper_attention, input: vector_index}
+  - {from: dataset_source, to: retrieval_whisper_attention, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_attention, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_attention, input: relevant_docs}
+  - {from: retrieval_whisper_attention, to: retrieval_metrics_whisper_attention, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_whisper_attention, input: relevant_docs}
+  - {from: retrieval_metrics_whisper_attention, to: metrics_whisper_attention, input: retrieval_scores}
+  - {from: retrieval_whisper_attention, to: metrics_whisper_attention, input: retrieved}
+  - {from: dataset_source, to: metrics_whisper_attention, input: query_text}
+  - {from: dataset_source, to: metrics_whisper_attention, input: reference_transcription}
+  - {from: dataset_source, to: metrics_whisper_attention, input: relevant_docs}
+  - {from: retrieval_metrics_whisper_attention, to: metrics_whisper_attention, input: per_query_recall5}
+  - {from: metrics_whisper_attention, to: finalize_whisper_attention, input: metrics}
+  - {from: retrieval_whisper_attention, to: finalize_whisper_attention, input: retrieved}
+
+  - {from: audio_embedding_whisper_whiten, output: audio_query_vectors, to: retrieval_whisper_whiten, input: query_vectors}
+  - {from: vector_db, to: retrieval_whisper_whiten, input: vector_index}
+  - {from: dataset_source, to: retrieval_whisper_whiten, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_whiten, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_whiten, input: relevant_docs}
+  - {from: retrieval_whisper_whiten, to: retrieval_metrics_whisper_whiten, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_whisper_whiten, input: relevant_docs}
+  - {from: retrieval_metrics_whisper_whiten, to: metrics_whisper_whiten, input: retrieval_scores}
+  - {from: retrieval_whisper_whiten, to: metrics_whisper_whiten, input: retrieved}
+  - {from: dataset_source, to: metrics_whisper_whiten, input: query_text}
+  - {from: dataset_source, to: metrics_whisper_whiten, input: reference_transcription}
+  - {from: dataset_source, to: metrics_whisper_whiten, input: relevant_docs}
+  - {from: retrieval_metrics_whisper_whiten, to: metrics_whisper_whiten, input: per_query_recall5}
+  - {from: metrics_whisper_whiten, to: finalize_whisper_whiten, input: metrics}
+  - {from: retrieval_whisper_whiten, to: finalize_whisper_whiten, input: retrieved}
+
+  - {from: audio_embedding_whisper_abtt, output: audio_query_vectors, to: retrieval_whisper_abtt, input: query_vectors}
+  - {from: vector_db, to: retrieval_whisper_abtt, input: vector_index}
+  - {from: dataset_source, to: retrieval_whisper_abtt, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_abtt, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_abtt, input: relevant_docs}
+  - {from: retrieval_whisper_abtt, to: retrieval_metrics_whisper_abtt, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_whisper_abtt, input: relevant_docs}
+  - {from: retrieval_metrics_whisper_abtt, to: metrics_whisper_abtt, input: retrieval_scores}
+  - {from: retrieval_whisper_abtt, to: metrics_whisper_abtt, input: retrieved}
+  - {from: dataset_source, to: metrics_whisper_abtt, input: query_text}
+  - {from: dataset_source, to: metrics_whisper_abtt, input: reference_transcription}
+  - {from: dataset_source, to: metrics_whisper_abtt, input: relevant_docs}
+  - {from: retrieval_metrics_whisper_abtt, to: metrics_whisper_abtt, input: per_query_recall5}
+  - {from: metrics_whisper_abtt, to: finalize_whisper_abtt, input: metrics}
+  - {from: retrieval_whisper_abtt, to: finalize_whisper_abtt, input: retrieved}
+
+  - {from: audio_embedding_m4t_attention, output: audio_query_vectors, to: retrieval_m4t_attention, input: query_vectors}
+  - {from: vector_db, to: retrieval_m4t_attention, input: vector_index}
+  - {from: dataset_source, to: retrieval_m4t_attention, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_attention, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_attention, input: relevant_docs}
+  - {from: retrieval_m4t_attention, to: retrieval_metrics_m4t_attention, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_m4t_attention, input: relevant_docs}
+  - {from: retrieval_metrics_m4t_attention, to: metrics_m4t_attention, input: retrieval_scores}
+  - {from: retrieval_m4t_attention, to: metrics_m4t_attention, input: retrieved}
+  - {from: dataset_source, to: metrics_m4t_attention, input: query_text}
+  - {from: dataset_source, to: metrics_m4t_attention, input: reference_transcription}
+  - {from: dataset_source, to: metrics_m4t_attention, input: relevant_docs}
+  - {from: retrieval_metrics_m4t_attention, to: metrics_m4t_attention, input: per_query_recall5}
+  - {from: metrics_m4t_attention, to: finalize_m4t_attention, input: metrics}
+  - {from: retrieval_m4t_attention, to: finalize_m4t_attention, input: retrieved}
+
+  - {from: audio_embedding_m4t_whiten, output: audio_query_vectors, to: retrieval_m4t_whiten, input: query_vectors}
+  - {from: vector_db, to: retrieval_m4t_whiten, input: vector_index}
+  - {from: dataset_source, to: retrieval_m4t_whiten, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_whiten, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_whiten, input: relevant_docs}
+  - {from: retrieval_m4t_whiten, to: retrieval_metrics_m4t_whiten, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_m4t_whiten, input: relevant_docs}
+  - {from: retrieval_metrics_m4t_whiten, to: metrics_m4t_whiten, input: retrieval_scores}
+  - {from: retrieval_m4t_whiten, to: metrics_m4t_whiten, input: retrieved}
+  - {from: dataset_source, to: metrics_m4t_whiten, input: query_text}
+  - {from: dataset_source, to: metrics_m4t_whiten, input: reference_transcription}
+  - {from: dataset_source, to: metrics_m4t_whiten, input: relevant_docs}
+  - {from: retrieval_metrics_m4t_whiten, to: metrics_m4t_whiten, input: per_query_recall5}
+  - {from: metrics_m4t_whiten, to: finalize_m4t_whiten, input: metrics}
+  - {from: retrieval_m4t_whiten, to: finalize_m4t_whiten, input: retrieved}
+
+  - {from: audio_embedding_m4t_abtt, output: audio_query_vectors, to: retrieval_m4t_abtt, input: query_vectors}
+  - {from: vector_db, to: retrieval_m4t_abtt, input: vector_index}
+  - {from: dataset_source, to: retrieval_m4t_abtt, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_abtt, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_abtt, input: relevant_docs}
+  - {from: retrieval_m4t_abtt, to: retrieval_metrics_m4t_abtt, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_m4t_abtt, input: relevant_docs}
+  - {from: retrieval_metrics_m4t_abtt, to: metrics_m4t_abtt, input: retrieval_scores}
+  - {from: retrieval_m4t_abtt, to: metrics_m4t_abtt, input: retrieved}
+  - {from: dataset_source, to: metrics_m4t_abtt, input: query_text}
+  - {from: dataset_source, to: metrics_m4t_abtt, input: reference_transcription}
+  - {from: dataset_source, to: metrics_m4t_abtt, input: relevant_docs}
+  - {from: retrieval_metrics_m4t_abtt, to: metrics_m4t_abtt, input: per_query_recall5}
+  - {from: metrics_m4t_abtt, to: finalize_m4t_abtt, input: metrics}
+  - {from: retrieval_m4t_abtt, to: finalize_m4t_abtt, input: retrieved}
 
 runtime:
   cache:

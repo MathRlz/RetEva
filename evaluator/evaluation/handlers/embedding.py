@@ -54,7 +54,7 @@ def _embed_all_audio(dataset, audio_embedding_pipeline, batch_size, num_workers)
         num_workers=num_workers,
         collate_fn=collate_fn,
     )
-    with TimingContext("Audio Embedding Phase", logger):
+    with TimingContext("Audio embedding step", logger):
         from ...utils.progress import progress_iter
 
         for batch in progress_iter(dataloader, "Audio embedding", unit="batch", min_items=1):
@@ -102,7 +102,7 @@ def _stage_embed(s: RunState) -> None:
 
 def _stage_audio_embedding(s: RunState) -> None:
     """Embed all audio; becomes the retrieval input unless fusion overrides it."""
-    s.cb("phase_1_audio", 0, s.total, "Phase 1: Audio embedding")
+    s.cb("step_1_audio", 0, s.total, "Step 1: Audio embedding")
     params = s.node_params
     # Bus-first audio (P4): republished refs wrap the dataset in a decoding view.
     from ..audio_refs import resolve_audio_dataset
@@ -115,8 +115,8 @@ def _stage_audio_embedding(s: RunState) -> None:
     # Pure transform (Phase 3): publishes only the audio query vectors. GT
     # (reference_transcription / relevant_docs) comes from dataset_source.
     _publish_query_vectors(s, emb, qids, name="audio_query_vectors")
-    logger.info("Audio Embedding Phase complete: %d audio embeddings", len(emb))
-    s.cb("phase_1_audio", s.total, s.total, "Audio embedding complete")
+    logger.info("Audio embedding step complete: %d audio embeddings", len(emb))
+    s.cb("step_1_audio", s.total, s.total, "Audio embedding complete")
     _log_embedding_stats(emb, "Audio embedding")
 
 
@@ -129,7 +129,7 @@ def _stage_text_embedding(s: RunState) -> None:
     audio + text vector streams downstream."""
     if s.text_embedding_pipeline is None:
         return
-    s.cb("phase_2_embedding", 0, s.total, "Phase 2: Text embedding")
+    s.cb("step_2_embedding", 0, s.total, "Step 2: Text embedding")
     query_text = s.input("query_text")
     if not query_text:
         # No text query in this run (e.g. an audio_text fusion over a pure-audio dataset with no
@@ -145,7 +145,7 @@ def _stage_text_embedding(s: RunState) -> None:
         list(keyed.ids) if keyed is not None else [str(i) for i in range(len(query_text))]
     )
     sentinel = object()
-    with TimingContext("Embedding Phase", logger), _node_pipeline(
+    with TimingContext("Text embedding step", logger), _node_pipeline(
         s, "text_embedding", params
     ):
         # Per-item isolation (T1): a single un-embeddable query drops out instead of
@@ -169,8 +169,8 @@ def _stage_text_embedding(s: RunState) -> None:
     embeddings = np.array(embs)
     # Distinct stream (no query_vectors mutation): retrieval/fusion read it by name.
     _publish_query_vectors(s, embeddings, ids, name="text_query_vectors")
-    logger.info("Text Embedding Phase complete: %d embeddings", len(embeddings))
-    s.cb("phase_2_embedding", s.total, s.total, "Text embedding complete")
+    logger.info("Text embedding step complete: %d embeddings", len(embeddings))
+    s.cb("step_2_embedding", s.total, s.total, "Text embedding complete")
     if s.cache_manager and s.experiment_id:
         s.cache_manager.set_checkpoint(
             f"{s.experiment_id}_phased",

@@ -149,7 +149,7 @@ def _stage_retrieval(s: RunState) -> None:
         )
     if isinstance(query_vectors, list) and len(query_vectors) > 0:
         query_vectors = np.array(query_vectors)
-    s.cb("phase_3_retrieval", 0, s.total, "Phase 3: Retrieval")
+    s.cb("step_3_retrieval", 0, s.total, "Step 3: Retrieval")
     # The vector_index artifact is the indexed retrieval pipeline (published by
     # vector_db); fall back to the shared pipeline for direct callers (R4a).
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
@@ -169,7 +169,7 @@ def _stage_retrieval(s: RunState) -> None:
     # monolithic in-pipeline hybrid fuse. Absent ⇒ the pipeline's configured mode.
     rmode = params.get("mode")
     node_id = getattr(s.current_node, "id", "retrieval")
-    with TimingContext("Retrieval Phase", logger):
+    with TimingContext("Retrieval step", logger):
         qtexts = _retrieval_query_texts(s, rp)
         nq = len(query_vectors)
         # Per-item identity rides the keyed query_vectors ItemSet (M1d-2).
@@ -227,7 +227,7 @@ def _stage_retrieval(s: RunState) -> None:
                 ids,
                 rp=rp,
             )
-    s.cb("phase_3_retrieval", s.total, s.total, "Retrieval complete")
+    s.cb("step_3_retrieval", s.total, s.total, "Retrieval complete")
 
 
 def _refine_inputs(s: RunState):
@@ -263,14 +263,14 @@ def _stage_rerank(s: RunState) -> None:
     """Rerank node: reorder candidates (cross-encoder / token-overlap). Keeps the larger
     fetch_k pool when an MMR node follows (it re-selects k diverse from the pool), else
     truncates to k. Republishes ``retrieved`` for the next refine node / metrics."""
-    s.cb("phase_3_5_rerank", 0, s.total, "Phase 3.5: Rerank")
-    with TimingContext("Rerank Phase", logger):
+    s.cb("step_3_5_rerank", 0, s.total, "Step 3.5: Rerank")
+    with TimingContext("Rerank step", logger):
         candidates, ids, rp, k = _refine_inputs(s)
         target = rp._fetch_k(k) if s.mmr_in_graph else k
         with _node_reranking(rp, s.node_params, s.service_provider):
             refined = rp.rerank_only(candidates, _retrieval_query_texts(s, rp), target)
         _publish_retrieved(s, refined, ids)
-    s.cb("phase_3_5_rerank", s.total, s.total, "Rerank complete")
+    s.cb("step_3_5_rerank", s.total, s.total, "Rerank complete")
 
 
 def _stage_mmr(s: RunState) -> None:

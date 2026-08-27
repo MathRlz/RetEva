@@ -11,15 +11,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .assembly import FeatureSet, assemble_specs
-from .branches import build_branched_graph
 from .registry import (
     ARTIFACT_REFERENCE_TEXT,
     ARTIFACT_REFERENCE_TRANSCRIPTION,
     StageGraph,
+    is_structural,
     node_model_field,
     validate_graph_artifacts,
 )
-from .wiring import _normalize_spec_item, _wire_nodes, build_graph_from_spec
+from .wiring import (
+    _has_port_edges,
+    _normalize_spec_item,
+    _wire_nodes,
+    build_graph_from_spec,
+    emit_edges,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -245,36 +251,30 @@ def _wire_mode_graph(
     attach_fields: bool,
 ) -> StageGraph:
     """Shared assembly tail for both graph builders: an explicit ``graph_override`` if given,
-    else ``assemble_specs(mode, features)``; branch-expand or wire. ``attach_fields`` injects the
-    dataset column schema into ``dataset_source`` nodes for the config/preview path (so the DAG
+    else ``assemble_specs(mode, features)``; wire it. ``attach_fields`` injects the dataset
+    column schema into ``dataset_source`` nodes for the config/preview path (so the DAG
     display shows real columns) but NOT for the run. With explicit PORT-LEVEL edges (E4) the
     attach is display-only and happens POST-wiring — the edges define the bindings for preview
     and run alike, so the two builders produce ONE graph; on the legacy auto-wire path the attach
     still narrows wiring (the historical preview/run divergence). A mode-less explicit DAG labels
-    "custom"."""
+    "custom".
+
+    No graph.branches: comparing N variants of a node is just N distinctly-named entries in
+    the one node list, wired from whatever they share via ordinary edges — nothing to expand
+    or CSE-collapse, the graph already says exactly what runs."""
     from .wiring import _has_port_edges
 
     override = graph_override or {}
-    branches = override.get("branches")
     if override.get("nodes"):
         nodes = override["nodes"]
         edges = override.get("edges")
         if _has_port_edges(edges):
             # Explicit wiring: bindings come from the edges; preview == run. Wire the RAW
             # nodes (no suppress/narrow interference), then attach the display schema.
-            if branches:
-                graph = build_branched_graph(
-                    nodes, branches, mode=mode or "custom", edges=edges
-                )
-            else:
-                graph = build_graph_from_spec(nodes, mode=mode or "custom", edges=edges)
+            graph = build_graph_from_spec(nodes, mode=mode or "custom", edges=edges)
             return _attach_display_fields(graph, config) if attach_fields else graph
         if attach_fields:
             nodes = _attach_dataset_fields(nodes, config)
-        if branches:
-            return build_branched_graph(
-                nodes, branches, mode=mode or "custom", edges=edges
-            )
         return build_graph_from_spec(nodes, mode=mode or "custom", edges=edges)
     if mode is None:
         raise ValueError(
@@ -283,8 +283,7 @@ def _wire_mode_graph(
     base = assemble_specs(mode, features)
     if attach_fields:
         base = _attach_dataset_fields(base, config)
-    if branches:
-        return build_branched_graph(base, branches, mode=mode)
+    return build_graph_from_spec(base, mode=mode)
     return build_graph_from_spec(base, mode=mode)
 
 
@@ -328,6 +327,432 @@ def label_from_graph(graph_override: Optional[dict]) -> Optional[str]:
     if "asr" in kinds:
         return "asr_text_retrieval" if "retrieval" in kinds else "asr_only"
     return None
+
+
+# ---------------------------------------------------------------------------------------------
+# Structural-plumbing auto-derivation for an EXPLICIT graph (Approach B: UI-graph ↔
+# execution-DAG split, evaluator-architecture.md §12.1/§12.2). A config/canvas author writes
+# only the *meaningful* nodes; the metric-comparison/report/trace/finalize plumbing
+# (`is_structural`) is derived here — for every explicit-graph entry point (CLI YAML via
+# `config/graph_config.py:build_evaluation_config_kwargs`, and the webapi builder/Config&Run,
+# which both funnel through that same function). One implementation, not two staying in sync.
+# ---------------------------------------------------------------------------------------------
+
+def _spec_type(spec: Any) -> str:
+    """A graph-spec item is a node-type string OR a ``{id, type, params}`` dict."""
+    return spec if isinstance(spec, str) else spec.get("type")
+
+
+def _spec_params(spec: Any) -> dict:
+    return {} if isinstance(spec, str) else (spec.get("params") or {})
+
+
+def _spec_id(spec: Any) -> str:
+    """A node-list entry's id — the explicit ``id``, else its type (bare-string specs and
+    dict specs with no id both use the type as their id, matching how the executor names
+    them)."""
+    return spec if isinstance(spec, str) else (spec.get("id") or _spec_type(spec))
+
+
+def _edge_key(e: Dict[str, Any]) -> tuple:
+    """``output`` may be omitted when it equals ``input`` — compare on the resolved pair so
+    the short and long spellings of one edge dedup against each other."""
+    return (e.get("from"), e.get("output", e.get("input")), e.get("to"), e.get("input"))
+
+
+#: FeatureSet fields deliberately NOT set by `_infer_features` — grouped by why, so
+#: `tests/test_webapi_registry_contract.py::test_infer_features_covers_every_feature_flag`
+#: can check every field is either inferred below or accounted for here, instead of a new
+#: FeatureSet flag silently going ungoverned (drifting whichever way its dataclass default
+#: happens to point, with no plumbing decision ever made for it).
+_INFER_FEATURES_STRUCTURAL_GATING_EXEMPT = frozenset({
+    "sink_enabled",   # sinks ARE structural/derived, never drawn on the canvas at all
+    "trace_enabled",  # traces ride the judge — `judge_enabled` (inferred) already covers it
+})
+#: Meaningful-*shape* flags `assemble_specs` also reads, but which only reshape nodes ALREADY
+#: kept by another inferred flag (they never add/remove a structural node on their own) — no
+#: separate re-inference needed. If one of these ever starts gating a structural node's
+#: presence/absence, move it out of this set and add its inference above.
+_INFER_FEATURES_SHAPE_ONLY_EXEMPT = frozenset({
+    "hybrid_retrieval", "rag_rounds", "refine_method", "refine_context_top_k", "refine_ops",
+})
+
+
+def _infer_features(nodes: list) -> Any:
+    """Derive a ``FeatureSet`` from which meaningful nodes are present — drives which
+    *structural* plumbing (which metric comparisons, traces, …) `complete_structural_plumbing`
+    appends.
+
+    Only flags reachable from a meaningful node are inferred; every other ``FeatureSet`` field
+    must be on one of the two exemption sets above (checked by a contract test) — never silently
+    ungoverned. A future structural node gated on a NEW flag must be added here."""
+    from .operators import node_kind
+
+    by_kind: Dict[str, dict] = {}
+    for n in nodes:
+        by_kind.setdefault(node_kind(_spec_type(n), _spec_params(n)), _spec_params(n))
+    has = by_kind.__contains__
+    return FeatureSet(
+        correction_enabled=has("query_correction"),
+        query_opt_enabled=has("query_optimization") or has("multi_query_retrieval"),
+        query_opt_method=(by_kind.get("query_optimization", {}).get("method")
+                          or by_kind.get("multi_query_retrieval", {}).get("method") or "rewrite"),
+        rerank_enabled=has("rerank"),
+        mmr_enabled=has("mmr"),
+        threshold_enabled=has("threshold"),
+        answer_gen_enabled=has("answer_gen"),
+        judge_enabled=has("answer_judge"),  # assemble_specs adds build_query_traces for the judge
+        embedding_fusion_enabled=has("fusion") or has("result_fusion"),
+        result_fusion_enabled=has("result_fusion"),
+        audio_synthesis_enabled=has("tts"),
+    )
+
+
+def _topo_sort_nodes(nodes: list, edges: list) -> list:
+    """Stable topological sort of ``nodes`` by ``edges``' from→to precedence (the graph loader
+    requires a producer to be listed before its consumer in ``graph.nodes``). Kahn's algorithm
+    with ties broken by original position, so a graph with no ordering problem keeps its
+    authored order untouched — this only moves what actually needs moving (e.g. a `metrics`/
+    `build_query_traces` node appended after `complete_structural_plumbing` can land after a
+    meaningful node that consumes it, like `answer_judge`, which the loader rejects)."""
+    import heapq
+
+    index = {_spec_id(n): i for i, n in enumerate(nodes)}
+    deps: Dict[str, set] = {nid: set() for nid in index}
+    for e in edges:
+        f, t = e.get("from"), e.get("to")
+        if f in index and t in index and f != t:
+            deps[t].add(f)
+
+    ready = [(i, nid) for nid, i in index.items() if not deps[nid]]
+    heapq.heapify(ready)
+    placed: List[str] = []
+    remaining = set(index)
+    while ready:
+        _, nid = heapq.heappop(ready)
+        if nid not in remaining:
+            continue
+        remaining.discard(nid)
+        placed.append(nid)
+        for other in remaining:
+            deps[other].discard(nid)
+        for other in list(remaining):
+            if not deps[other]:
+                heapq.heappush(ready, (index[other], other))
+    # A cycle (shouldn't happen for a valid DAG) leaves leftovers — keep their relative order,
+    # appended at the end, rather than dropping them.
+    placed.extend(sorted(remaining, key=index.get))
+
+    by_id = {_spec_id(n): n for n in nodes}
+    return [by_id[nid] for nid in placed]
+
+
+#: node_kind()s that can each anchor their own per-variant structural chain (metrics/finalize/
+#: traces) when more than one is present in an explicit graph — the R5 multi-variant fix. Kept
+#: as an explicit, named, tested set rather than one hardcoded kind check: promoting a new kind
+#: to "variant root" is a conscious decision (comparing N of them needs its own chain, the exact
+#: bug class R5 fixed for `retrieval`), not something that should silently start/stop working as
+#: the registry changes. `retrieval`: the original case (N ASR/encoder/retrieval-strategy
+#: variants). `answer_gen`: comparing N LLMs on one shared retrieval (not yet exercised by a real
+#: config, but the documented design decision — see evaluator-architecture.md/TODO.md — for how
+#: LLM comparison is modeled: two independent `answer_gen` nodes, not a param list on one node).
+#: `tests/test_webapi_registry_contract.py::test_variant_root_kinds_guard_...` fails loudly if a
+#: new registry kind looks like a plausible third root (its output consumed by a structural node)
+#: and isn't accounted for here or on that test's exemption list — see that test before editing.
+VARIANT_ROOT_KINDS = frozenset({"retrieval", "answer_gen"})
+
+
+def _terminal_variant_ids(variant_ids: List[str], edges: list) -> List[str]:
+    """``variant_ids`` (nodes of a :data:`VARIANT_ROOT_KINDS` kind) with no OTHER variant-root
+    node reachable downstream of them — the "final hop" candidates for their own structural
+    chain. An upstream hop that feeds INTO another variant-root node (query-refine's 2-hop
+    retrieval pipeline) is an earlier stage of the SAME pipeline, not an independent variant;
+    only the terminal hop's results ever reach a judge/metrics node."""
+    forward: Dict[str, set] = {}
+    for e in edges:
+        f, t = e.get("from"), e.get("to")
+        if f and t:
+            forward.setdefault(f, set()).add(t)
+    variant_set = set(variant_ids)
+    terminal = []
+    for rid in variant_ids:
+        stack, seen = list(forward.get(rid, ())), set()
+        reaches_another = False
+        while stack and not reaches_another:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            if cur in variant_set:
+                reaches_another = True
+                break
+            stack.extend(forward.get(cur, ()))
+        if not reaches_another:
+            terminal.append(rid)
+    return terminal
+
+
+def _variant_roots_diverge(variant_ids: List[str], edges: list) -> bool:
+    """Whether ``variant_ids`` are genuinely independent comparisons (their downstream
+    reachable sets never overlap) rather than parallel sources that CONVERGE back into one
+    combined pipeline (e.g. `hybrid_retrieval.yaml`'s `retrieval` + `retrieval_sparse`, both
+    feeding one shared `result_fusion` before a single `metrics`/`finalize`). Two terminal
+    variant-root candidates can both be "terminal" per `_terminal_variant_ids` (neither reaches
+    the OTHER root) while still sharing everything downstream of a fusion/combine node — that's
+    ONE variant with two sources, not two variants to compare separately, and must get the
+    single shared structural chain, not a per-root suffixed one."""
+    if len(variant_ids) < 2:
+        return True
+    forward: Dict[str, set] = {}
+    for e in edges:
+        f, t = e.get("from"), e.get("to")
+        if f and t:
+            forward.setdefault(f, set()).add(t)
+    reach: Dict[str, set] = {}
+    for rid in variant_ids:
+        stack, seen = [rid], set()
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            reach.setdefault(cur, set()).add(rid)
+            stack.extend(forward.get(cur, ()))
+    return all(len(rids) <= 1 for rids in reach.values())
+
+
+def complete_structural_plumbing(graph: Dict[str, Any]) -> None:
+    """Approach B (UI-graph ↔ execution-DAG split): a config/canvas author writes only the
+    *meaningful* operations; here we append the *structural* plumbing the template would derive
+    (the metric comparisons + report + traces + finalize) so an explicit graph runs as the full
+    DAG. On the explicit-wiring path the appended nodes' edges are derived here via the
+    authoring wirer (E5); on the legacy path they carry no edges and auto-wire. The caller's
+    meaningful nodes (incl. per-node models) are untouched, so edit-time checks stay exact.
+    No-op on the template-only path (no explicit nodes): `assemble_specs` already adds the
+    plumbing there.
+
+    Mutates ``graph`` (the RAW pre-translation ``{"nodes": [...], "edges": [...]}`` dict) — must
+    be called before edge validation, since a meaningful node's own binding can name a
+    structural producer (e.g. `answer_judge` → `build_query_traces`) that doesn't exist in the
+    submitted graph yet. The plumbing template's mode is derived internally (via
+    `label_from_graph`, with a generic fallback for a pure-text-retrieval graph that has no
+    asr/audio query head) — callers never need to compute or pass one.
+
+    R5/multi-variant: a graph comparing several paths (multiple ASR models, audio encoders,
+    retrieval strategies, LLMs, ...) has several meaningful nodes of a :data:`VARIANT_ROOT_KINDS`
+    kind. Appending only ONE shared structural chain (the pre-fix behavior) let `emit_edges` bind
+    every variant's measured output into that single chain — silently merging all variants'
+    metrics into one. Each variant-root node gets its own chain instead, suffixed by its id and
+    wired only to what's exclusively downstream of it (`_complete_with_plumbing_per_variant`)."""
+    override = graph
+    if not (isinstance(override, dict) and override.get("nodes")):
+        return
+    from .operators import node_kind
+
+    # Reject a duplicate id in the CALLER'S OWN node list immediately — the same guard
+    # `wiring.py:bind_explicit_edges` applies later is too late here: this function's own
+    # id-keyed logic (the per-variant suffix computation, `emit_edges`'s auto-wiring) can
+    # mis-derive a confusing, unrelated-looking downstream error (e.g. a bogus "duplicate edge"
+    # from processing the same id twice) instead of naming the real cause.
+    seen_ids: Dict[str, int] = {}
+    for i, n in enumerate(override["nodes"]):
+        nid = _spec_id(n)
+        if nid in seen_ids:
+            raise ValueError(
+                f"duplicate node id {nid!r} in graph.nodes (positions {seen_ids[nid]} and {i}) "
+                "— every node id must be unique."
+            )
+        seen_ids[nid] = i
+
+    mode = label_from_graph(override)
+    if mode is None:
+        # label_from_graph only recognizes an asr/audio_embedding query head — a pure TEXT
+        # retrieval graph (text_embedding + retrieval, no ASR/audio node at all — a real shape,
+        # e.g. configs/pubmed_qa_rag_fulltext.yaml) has neither, so it returns None and plumbing
+        # completion would silently no-op (no metrics/finalize at all). The structural chain
+        # (retrieval_metrics/metrics/build_query_traces/finalize) doesn't depend on the query
+        # head's modality, so "asr_text_retrieval"'s template is a safe, generic stand-in here —
+        # used ONLY to pick the structural template, not as the graph's real mode label
+        # (computed independently downstream, stays "custom").
+        kinds = {node_kind(_spec_type(n), _spec_params(n)) for n in override.get("nodes") or []}
+        if "retrieval" in kinds:
+            mode = "asr_text_retrieval"
+    if mode is None:
+        return
+
+    nodes = override["nodes"]
+    edges = override.get("edges") or []
+    port_edges = _has_port_edges(edges)
+    kinds_present = {node_kind(_spec_type(n), _spec_params(n)) for n in nodes}
+    structural_template = [
+        spec for spec in assemble_specs(mode, _infer_features(nodes))
+        if is_structural(_spec_type(spec), _spec_params(spec))
+        # `transcription_metrics` (an ASR-specific measure) declares no formal input port — it
+        # can't be filtered by input-satisfiability like `answer_metrics`/
+        # `embedding_alignment_metrics` are (via `_infer_features`/assemble_specs' own gating).
+        # It's unconditionally part of every asr-inclusive mode's template, which is correct for
+        # a REAL asr_text_retrieval/asr_only graph but wrong when that mode was only borrowed
+        # above as a generic stand-in for a graph with no asr node at all (pure text retrieval).
+        and not (node_kind(_spec_type(spec), _spec_params(spec)) == "transcription_metrics"
+                 and "asr" not in kinds_present)
+    ]
+    raw_variant_ids = [
+        _spec_id(n) for n in nodes
+        if node_kind(_spec_type(n), _spec_params(n)) in VARIANT_ROOT_KINDS
+    ]
+    # A variant-root node feeding INTO another variant-root node (query-refine's 2-hop pipeline:
+    # retrieval -> query_refine -> retrieval_refined) is an earlier stage of ONE pipeline, not
+    # a sibling variant to compare — only the terminal hop's chain matters (the original hop's
+    # results never reach the judge/metrics directly). Only nodes with no OTHER variant-root node
+    # downstream of them are candidates for their own chain.
+    variant_ids = _terminal_variant_ids(raw_variant_ids, edges)
+
+    if len(variant_ids) > 1 and port_edges and _variant_roots_diverge(variant_ids, edges):
+        override["edges"] = list(edges) + _complete_with_plumbing_per_variant(
+            nodes, edges, structural_template, variant_ids
+        )
+    else:
+        # Single variant-root node (the common case) or a legacy non-port-edge graph: one shared
+        # structural chain, exactly as before.
+        have = {node_kind(_spec_type(n), _spec_params(n)) for n in nodes}
+        by_id = {_spec_id(n): n for n in nodes}
+        appended = []
+        for spec in structural_template:
+            k = node_kind(_spec_type(spec), _spec_params(spec))
+            if k in have:
+                continue
+            candidate_id = _spec_id(spec)
+            clash = by_id.get(candidate_id)
+            if clash is not None:
+                # A meaningful node (typically user-renamed) already occupies the id a
+                # structural node needs — e.g. a `retrieval` node renamed to "metrics"
+                # collides with the auto-derived report node of that same name. Silently
+                # appending anyway would leave two nodes sharing one id; `_topo_sort_nodes`'s
+                # own id-keyed dicts would then silently collapse one of them (dropping its
+                # edges onto the wrong node) instead of erroring here where the cause is clear.
+                raise ValueError(
+                    f"cannot auto-derive the structural node {candidate_id!r} (needed for "
+                    f"{k!r}): that id is already used by a {node_kind(_spec_type(clash), _spec_params(clash))!r} "
+                    f"node — rename it. Reserved structural ids for this graph: "
+                    f"{sorted({_spec_id(s) for s in structural_template})}."
+                )
+            nodes.append(spec)
+            appended.append(candidate_id)
+            have.add(k)
+            by_id[candidate_id] = spec
+        # E5: with explicit port wiring the appended plumbing needs its edges too — derive
+        # them via the authoring wirer over the FULL list and keep those touching an appended
+        # node (the caller's drawn edges stay authoritative for the meaningful graph).
+        if appended and port_edges:
+            app_ids = set(appended)
+            existing = {_edge_key(e) for e in edges}
+            derived = [
+                e for e in emit_edges(nodes)
+                if (e["to"] in app_ids or e["from"] in app_ids) and _edge_key(e) not in existing
+            ]
+            override["edges"] = list(edges) + derived
+
+    # A node appended above can land after a meaningful node that consumes it (e.g.
+    # `build_query_traces` appended after an already-present `answer_judge`) — the loader
+    # requires a producer to precede its consumer in `graph.nodes`. Fix up the order using
+    # every edge now known; a no-op when nothing actually needs moving.
+    if override.get("edges"):
+        override["nodes"][:] = _topo_sort_nodes(override["nodes"], override["edges"])
+
+
+def _complete_with_plumbing_per_variant(
+    nodes: list, edges: list, structural_template: list, variant_ids: List[str],
+) -> list:
+    """Append one private structural chain per variant-root node (mutates ``nodes``); returns
+    the derived edges for all of them. A chain's nodes are wired via `emit_edges` scoped to
+    the nodes NOT exclusively owned by a DIFFERENT variant-root node — so one variant's
+    measured output can never bind into another's chain."""
+    forward: Dict[str, set] = {}
+    for e in edges:
+        f, t = e.get("from"), e.get("to")
+        if f and t:
+            forward.setdefault(f, set()).add(t)
+    # Which variant root(s) can reach each node, walking forward over the MEANINGFUL edges
+    # only (the structural chains don't exist yet) — a node reachable from exactly one
+    # variant id is that variant's exclusive property (its own rerank/answer_gen/judge/...).
+    reach: Dict[str, set] = {}
+    for rid in variant_ids:
+        stack, seen = [rid], set()
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            reach.setdefault(cur, set()).add(rid)
+            stack.extend(forward.get(cur, ()))
+    owned = {
+        rid: {n for n, rids in reach.items() if rids == {rid}}
+        for rid in variant_ids
+    }
+    from .operators import node_kind
+
+    id_to_spec = {_spec_id(n): n for n in nodes}
+    all_ids = set(id_to_spec)
+    existing = {_edge_key(e) for e in edges}
+    derived_edges: list = []
+    for rid in variant_ids:
+        other_owned = set().union(*(owned[o] for o in variant_ids if o != rid))
+        scope_ids = all_ids - other_owned
+        # A per-variant meaningful node the author already wrote (e.g. `answer_judge_dense`) may
+        # already have its OWN binding to a structural producer by a SPECIFIC id (e.g.
+        # `build_query_traces_dense`) that doesn't exist yet — reuse that exact id instead of
+        # inventing a new one, or the existing edge stays dangling (unknown node). Falls back
+        # to `<type>_<suffix>` (stripping the ROOT's own kind name off its id — e.g.
+        # `retrieval_dense` -> "dense", `answer_gen_mms` -> "mms" — matching the convention real
+        # multi-variant configs already use, whichever :data:`VARIANT_ROOT_KINDS` kind the root
+        # actually is) when nothing references it yet.
+        dangling = {
+            e["from"] for e in edges
+            if e.get("to") in owned[rid] and e.get("from") and e["from"] not in all_ids
+        }
+        root_kind = node_kind(_spec_type(id_to_spec[rid]), _spec_params(id_to_spec[rid]))
+        root_prefix = f"{root_kind}_"
+        suffix = (
+            rid[len(root_prefix):] if rid.startswith(root_prefix) and len(rid) > len(root_prefix)
+            else rid
+        )
+        chain_nodes = []
+        for spec in structural_template:
+            base_type = _spec_type(spec)
+            reused = next(
+                (d for d in dangling if d == base_type or d.startswith(base_type + "_")), None
+            )
+            new_id = reused or f"{base_type}_{suffix}"
+            if new_id in all_ids:
+                clash = id_to_spec[new_id]
+                clash_kind = node_kind(_spec_type(clash), _spec_params(clash))
+                expected_kind = node_kind(base_type, _spec_params(spec))
+                if clash_kind != expected_kind:
+                    # A meaningful node (typically user-renamed) occupies the id this
+                    # variant's structural chain needs — e.g. a node renamed to "metrics_dense"
+                    # collides with the auto-derived per-variant report node of that name.
+                    # Blindly treating it as "already present" (the old behavior) would silently
+                    # scope a real meaningful node into someone else's structural chain instead
+                    # of erroring here where the cause is clear.
+                    raise ValueError(
+                        f"cannot auto-derive the structural node {new_id!r} (needed for "
+                        f"{expected_kind!r} in variant {rid!r}): that id is already used by a "
+                        f"{clash_kind!r} node — rename it."
+                    )
+                continue  # already present (e.g. a full-DAG spec, not meaningful-only) — the
+                          # existing node is already in scope_nodes below, nothing to add
+            new_spec = dict(spec) if isinstance(spec, dict) else {"type": spec}
+            new_spec.setdefault("type", base_type)
+            new_spec["id"] = new_id
+            chain_nodes.append(new_spec)
+        scope_nodes = [n for n in nodes if _spec_id(n) in scope_ids] + chain_nodes
+        chain_ids = {_spec_id(n) for n in chain_nodes}
+        derived_edges.extend(
+            e for e in emit_edges(scope_nodes)
+            if (e["to"] in chain_ids or e["from"] in chain_ids) and _edge_key(e) not in existing
+        )
+        nodes.extend(chain_nodes)
+    return derived_edges
 
 
 def build_graph_for_config(config: Any) -> StageGraph:

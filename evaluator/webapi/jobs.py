@@ -24,7 +24,6 @@ from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from evaluator import EvaluationConfig, run_evaluation
-from evaluator.cli.utils import generate_output_filename
 from evaluator.evaluation.results import EvaluationResults
 from evaluator.logging_config import get_logger
 from evaluator.storage.leaderboard import ExperimentStore
@@ -60,6 +59,26 @@ _PROGRESS_FILENAME = "progress.jsonl"
 _ERR_TAIL_LINES = 50
 _LOG_CAP = 5000  # max console lines retained per job
 _CANCEL_POLL_S = 0.5  # how often to re-check for a cancel while the child runs
+_JOB_SCRATCH_FILES = {"config.yaml", _PROGRESS_FILENAME}
+
+
+def _copy_job_artifacts(jobdir: Path, dest_dir: Path) -> None:
+    """Copy everything the subprocess wrote (report/resolved-config/run-log/`variants/`) from
+    the temp ``jobdir`` into the run's real configured ``dest_dir``, skipping the job's own
+    scratch files (the submitted config copy, the progress feed). Best-effort — a copy failure
+    logs a warning rather than failing an otherwise-completed job."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for entry in jobdir.iterdir():
+        if entry.name in _JOB_SCRATCH_FILES:
+            continue
+        target = dest_dir / entry.name
+        try:
+            if entry.is_dir():
+                shutil.copytree(entry, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(entry, target)
+        except OSError as exc:  # noqa: BLE001 — best-effort, never fail a completed job
+            logger.warning("job artifact copy failed for %s: %s", entry, exc)
 
 
 # Env vars that importing torch injects into the webapi server process; inherited by the
@@ -178,9 +197,9 @@ class JobManager:
         self._jobs: Dict[str, JobRecord] = {}
         self._lock = Lock()
 
-    def push_progress(self, job_id: str, phase: str, current: int, total: int,
+    def push_progress(self, job_id: str, step: str, current: int, total: int,
                       message: str) -> None:
-        event = {"phase": phase, "current": current, "total": total,
+        event = {"step": step, "current": current, "total": total,
                  "message": message, "ts": utc_now()}
         with self._lock:
             if job_id in self._jobs:
@@ -252,13 +271,20 @@ class JobManager:
 
             self._launch_cli(job_id, cfg_path, jobdir / _PROGRESS_FILENAME)
 
-            result_file = jobdir / generate_output_filename(cfg)
-            if not result_file.exists():
+            # Glob, not `generate_output_filename(cfg)` — the filename now carries a per-run id
+            # generated inside the child process, which this (parent) process can't predict.
+            result_files = sorted(jobdir.glob("results_*.json"))
+            if not result_files:
                 raise _JobFailed("evaluation finished but produced no result file")
-            with open(result_file, "r", encoding="utf-8") as handle:
+            with open(result_files[-1], "r", encoding="utf-8") as handle:
                 result = json.load(handle)
 
             self._ingest_leaderboard(config, cfg, result)
+            # The child wrote its report/resolved-config/run-log/`variants/` into `jobdir` —
+            # copy them to the run's REAL configured output_dir before it's deleted below, so
+            # they survive (today everything in `jobdir` is silently lost; only the in-memory
+            # parsed `result` above did).
+            _copy_job_artifacts(jobdir, Path(config.output_dir))
             return result
         finally:
             shutil.rmtree(jobdir, ignore_errors=True)
@@ -326,7 +352,7 @@ class JobManager:
 
     def _push_progress_event(self, job_id: str, record: Dict[str, Any]) -> None:
         """Translate one structured progress record (ProgressSink JSONL) into the job's
-        progress feed: node name as the phase, level/total_levels as the progress fraction."""
+        progress feed: node name as the step, level/total_levels as the progress fraction."""
         event = str(record.get("event", ""))
         node = str(record.get("node", ""))
         level = int(record.get("level", 0) or 0)

@@ -161,17 +161,19 @@ def _attach_report(results, report) -> None:
     results.update(flatten_report(report))
 
 
-def attach_judge_metrics(s: "RunState") -> None:
-    """Merge the LLM-judge per-query scores into the report as registry metrics (J3).
+def attach_judge_metrics(s: "RunState", own_report: dict) -> None:
+    """Merge the LLM-judge per-query scores into ``own_report``'s report as registry metrics
+    (J3).
 
-    The judge node runs *downstream* of the report assembler (and, in a branched run, of the
-    terminal ``aggregate``), so its keyed ``judge_*`` ItemSets are not on the bus when the
-    report is first scored. This terminal pass — called from the finalize node, after every
-    report producer has run — scores those ItemSets through the SAME metric registry + reducer
-    and merges the scalars into ``report['branches'][<branch>]`` + the flat leaderboard keys.
-    No-op when the judge did not run (no ``judge_*`` ItemSets published), so a judge-off run
-    (the parity default) is byte-identical."""
-    report = s.results.get("report") if s.results else None
+    The judge node runs *downstream* of the report assembler, so its keyed ``judge_*``
+    ItemSets are not on the bus when the report is first scored. This terminal pass — called
+    from the finalize node, after every report producer has run — scores those ItemSets
+    through the SAME metric registry + reducer and merges the scalars into
+    ``report['branches'][<branch>]`` + the flat leaderboard keys. No-op when the judge did not
+    run (no ``judge_*`` ItemSets published), so a judge-off run (the parity default) is
+    byte-identical. ``own_report`` is THIS finalize node's own dict (R4/multi-variant) — never
+    the shared ``s.results``."""
+    report = own_report.get("report") if own_report else None
     if not isinstance(report, dict):
         return
     from ..item_set import ItemSet
@@ -196,8 +198,7 @@ def attach_judge_metrics(s: "RunState") -> None:
     scores = compute_metrics(judge_arts, only=s.metric_allowlist)
     if not scores:
         return
-    # The judge runs once globally (single query_traces); attach to the run's mode branch when
-    # present (single-branch), else the first branch (a branched run's primary).
+    # Attach to the run's mode branch when present (single-branch), else the first branch.
     branches = report.setdefault("branches", {})
     target = s.mode if s.mode in branches else next(iter(branches), s.mode)
     branch = branches.setdefault(target, {})
@@ -205,7 +206,7 @@ def attach_judge_metrics(s: "RunState") -> None:
         branch[name] = reduce_scores(
             item_scores, with_ci=getattr(s, "compute_confidence_intervals", False)
         )
-    s.results.update(flatten_report(report))
+    own_report.update(flatten_report(report))
 
 
 def _retrieval_wer_impact(
@@ -476,8 +477,8 @@ def _stage_metrics(s: RunState) -> None:
     ``retrieval_metrics`` nodes; this node assembles the report from the registry (the
     flat WER/MRR/Recall@k/... keys) + the per-item intermediates those nodes set."""
     _results_with_scores, retrieved_keys, _ids = _retrieved_from_bus(s)
-    _t_phase = time.perf_counter()
-    s.cb("phase_4_metrics", 0, s.total, "Computing metrics")
+    _t_step = time.perf_counter()
+    s.cb("step_4_metrics", 0, s.total, "Computing metrics")
 
     results: RunResults = {}
     results["pipeline_mode"] = s.mode
@@ -508,8 +509,14 @@ def _stage_metrics(s: RunState) -> None:
     if isinstance(answer_scores, dict):
         results.update({k: v for k, v in answer_scores.items() if v is not None})
 
-    s.stage_times["metrics_s"] = time.perf_counter() - _t_phase
+    s.stage_times["metrics_s"] = time.perf_counter() - _t_step
     s.results = results
+    # Also publish on the bus, keyed by this node's own id (R4/multi-variant): a graph with N
+    # `metrics` nodes (one per compared variant) would otherwise have each one silently
+    # overwrite `s.results` — the shared slot only ever reflects whichever ran last. Each
+    # `finalize` node reads its OWN bound metrics producer via `s.get_artifact("metrics")`
+    # (binding-scoped, not this shared assignment) — see `_stage_finalize`.
+    s.put_artifact("metrics", results)
 
 
 def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:

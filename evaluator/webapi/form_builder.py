@@ -52,6 +52,7 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     settings, plus any explicit per-node ``params`` (branch/graph overrides) on top.
     Empty values are dropped."""
     from dataclasses import fields as _dc_fields
+    from types import SimpleNamespace
 
     from evaluator.config.graph_config import (
         _FEATURE_NODE_CONFIG,
@@ -67,13 +68,23 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     # The config-block map is keyed by legacy node name; resolve the operator+fields back.
     kind = node_kind(node.stage, node.params)
     info: Dict[str, Any] = {}
-    if kind in _MODEL_NODE_FIELDS:
+    # corpus_embedding has no `_MODEL_NODE_FIELDS` entry of its own — the text-corpus runtime
+    # path (`evaluation/handlers/embedding.py:_stage_corpus_embedding`) resolves it AS
+    # text_embedding (its own params overlaid on the flat text_emb_* default; the audio-corpus
+    # path doesn't support per-node overrides at all). Mirror that here, or a config using the
+    # legacy flat `nodes: {text_embedding: {...}}` map (not per-node graph.nodes params) shows
+    # (and round-trips) an empty corpus_embedding card — losing e.g. its embedding_space.
+    fields_kind = "text_embedding" if kind == "corpus_embedding" else kind
+    if fields_kind in _MODEL_NODE_FIELDS:
         # config.model overlaid with this node's own params — the resolver factory.py/
         # node_pipeline.py use, so the panel shows what actually resolves, not just the flat
         # default (the generic node.params loop below would overlay the same values anyway,
         # but resolving here keeps this block self-consistent with the rest of the pipeline).
-        mcfg = resolved_model_config(config, node)
-        for yaml_key, cfg_field in _MODEL_NODE_FIELDS[kind].items():
+        resolve_as = node if fields_kind == kind else SimpleNamespace(
+            stage="text_embedding", params=node.params
+        )
+        mcfg = resolved_model_config(config, resolve_as)
+        for yaml_key, cfg_field in _MODEL_NODE_FIELDS[fields_kind].items():
             val = getattr(mcfg, cfg_field, None)
             if val not in (None, "", {}):
                 info[yaml_key] = val
@@ -139,6 +150,14 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     # builder seed round-trips correctly (refetchForm uses these params + the alias type).
     visible_params = {k: v for k, v in merged.items() if k not in (alias_disc or {})}
 
+    form = resolve_node_form(node.stage, merged)
+    # A B2 *routed* artifact (a type-open port fed something the node def never lists, e.g.
+    # dataset_source.reference_text -> an embedder's query_text port) lives on the graph
+    # instance's input_aliases, not in the static per-type form -- without this overlay (the
+    # same one render_node applies) this preview's input_ports never names that alternative,
+    # so Config & Run's buildSpec() can't map the binding back to its real port and emits an
+    # edge naming the wrong input (found live: pubmed_qa_rag_fulltext's text_embedding).
+    _overlay_routed_aliases(form, node)
     return {
         "id": node.id,
         "stage": node.stage,
@@ -160,7 +179,7 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
         "params": visible_params,
         # label / category / domain / inputs / outputs / optional_inputs / input_ports /
         # model_field / family / node_params / default_model — field-resolved per instance.
-        **resolve_node_form(node.stage, merged),
+        **form,
         # Override resolve_node_form's raw operator name ("embed") with the concrete alias kind
         # ("audio_embedding") — same fix as render_node. Without this, the builder seed stores
         # type="embed" and refetchForm with no discriminators defaults to text_embedding.
@@ -706,7 +725,13 @@ def node_catalogue() -> Dict[str, Any]:
                 ),
                 "input_ports": _input_ports(stage, {}),
                 "param_defaults": dict(d.param_defaults),
-                "node_params": _node_param_specs(d),
+                # The bare "embed" tile IS text_embedding by default (node_kind("embed", {})
+                # resolves to it) — seed its discriminators so the existing alias-hiding logic
+                # (below) suppresses axis/modality instead of showing them as editable, which
+                # would let a "Text embedding" node be turned into an audio/corpus embedder.
+                "node_params": _node_param_specs(
+                    d, {"axis": "query", "modality": "text"} if stage == "embed" else None
+                ),
             }
         )
     return {"nodes": nodes, "presets": _alias_presets()}

@@ -1,4 +1,15 @@
-"""CLI command for comparing experiment results with statistical significance testing."""
+"""CLI command for comparing experiment results with statistical significance testing.
+
+Input shapes, auto-detected:
+- Two flat result JSON files (the original, unchanged: `evaluator compare a.json b.json`).
+- Two or more variant/run directories (`variants/<id>/`, or a whole run `output_dir` that
+  resolves to its single variant) — baseline-vs-each against the first path.
+- ONE multi-variant run's `output_dir` (or its `variants/` dir) — a run with several compared
+  paths in its graph (e.g. several ASR models or audio encoders) auto-expands to compare all
+  of them, baseline = the first: `evaluator compare path/to/run`.
+Reuses the same significance testing plus a resolved-config diff and per-query answer diffs
+(`analysis/variant_compare.py`, the "unified comparison tool" roadmap item).
+"""
 
 import argparse
 import json
@@ -10,23 +21,31 @@ from evaluator.analysis import (
     compare_result_files,
     format_comparison_report,
 )
+from evaluator.analysis.variant_compare import (
+    VariantCompareError,
+    compare_paths,
+    format_variant_comparison_report,
+)
 
 
 def parse_compare_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments for compare command."""
     parser = argparse.ArgumentParser(
-        description="Compare two evaluation result files with statistical significance testing"
+        description=(
+            "Compare evaluation results with statistical significance testing: two flat "
+            "result JSON files, or two+ variant/run directories (baseline-vs-each, first = "
+            "baseline)"
+        )
     )
 
     parser.add_argument(
-        "file_a",
+        "paths",
         type=str,
-        help="Path to first results JSON file"
-    )
-    parser.add_argument(
-        "file_b",
-        type=str,
-        help="Path to second results JSON file"
+        nargs="+",
+        help=(
+            "Two result JSON files, or two+ variant/run directories "
+            "(a variants/<id>/ dir, or a whole output_dir with exactly one variant)"
+        ),
     )
     parser.add_argument(
         "--metrics",
@@ -63,19 +82,23 @@ def run_compare(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
-    path_a = Path(args.file_a)
-    path_b = Path(args.file_b)
+    paths = [Path(p) for p in args.paths]
+    for p in paths:
+        if not p.exists():
+            print(f"Error: path not found: {p}", file=sys.stderr)
+            return 1
 
-    # Validate paths
-    if not path_a.exists():
-        print(f"Error: File not found: {path_a}", file=sys.stderr)
-        return 1
-    if not path_b.exists():
-        print(f"Error: File not found: {path_b}", file=sys.stderr)
-        return 1
+    # Two flat JSON files → the original file-diff+stats path, unchanged.
+    legacy_mode = len(paths) == 2 and all(p.is_file() for p in paths)
 
     try:
-        comparison = compare_result_files(path_a, path_b, args.metrics)
+        if legacy_mode:
+            comparison = compare_result_files(paths[0], paths[1], args.metrics)
+        else:
+            comparison = compare_paths(paths, args.metrics)
+    except VariantCompareError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     except json.JSONDecodeError as e:
         print(f"Error: Invalid JSON in input file: {e}", file=sys.stderr)
         return 1
@@ -86,8 +109,10 @@ def run_compare(args: argparse.Namespace) -> int:
     # Format output
     if args.format == "json":
         output = json.dumps(comparison, indent=2)
-    else:
+    elif legacy_mode:
         output = format_comparison_report(comparison)
+    else:
+        output = format_variant_comparison_report(comparison)
 
     # Write output
     if args.output:
