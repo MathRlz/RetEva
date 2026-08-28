@@ -12,6 +12,9 @@ requires-python = ">=3.10"
 dependencies = [
     # Core ML
     "torch>=2.0,<3",
+    # datasets/core.py imports this unconditionally — it's a hard runtime dependency, not
+    # just something that happens to already be present alongside torch in most envs.
+    "torchaudio>=2.0,<3",
     "transformers>=4.30,<5",
     "sentencepiece>=0.1.99",
     "sentence-transformers>=2.2,<4",
@@ -43,7 +46,16 @@ notebooks = ["jupyter", "notebook", "ipywidgets"]
 chromadb = ["chromadb>=0.4"]
 qdrant = ["qdrant-client>=1.6"]
 backends = ["chromadb>=0.4", "qdrant-client>=1.6"]
-sonar = ["sonar-space"]
+# fairseq2n==0.8.1 hard-pins torch==2.9.1 (its first release to pin torch at all) — an
+# unconstrained `sonar-space` install resolves fairseq2/fairseq2n to the newest release,
+# force-upgrading torch out from under whatever this env already has and breaking any
+# ABI-sensitive torch extension (torchaudio, torchvision, ...) built against the old
+# version — observed in practice: "undefined symbol: torch_library_impl" from torchaudio
+# after `pip install evaluator[sonar]` silently bumped torch 2.6.0+cu124 -> 2.9.1. Pin
+# below the first pinning release so this extra installs alongside whatever torch is
+# already here instead of hijacking it. Bump this cap only after checking the new
+# fairseq2n release's own torch pin won't repeat this.
+sonar = ["sonar-space", "fairseq2n<0.8.1", "fairseq2<0.8.1"]
 dev = ["pytest", "pytest-cov", "black", "flake8", "mypy", "pytrec-eval-terrier"]
 all = [
     "fastapi>=0.100",
@@ -53,6 +65,8 @@ all = [
     "ipywidgets",
     "chromadb>=0.4",
     "qdrant-client>=1.6",
+    "fairseq2n<0.8.1",
+    "fairseq2<0.8.1",
     "sonar-space",
 ]
 
