@@ -56,6 +56,7 @@ def run_graph(
     context: "EvaluationContext",
     *,
     service_provider: Any = None,
+    device_pool: Any = None,
     offload_policy: str = "never",
     eval_config: Any = None,
     load_info: Any = None,
@@ -71,6 +72,9 @@ def run_graph(
             k, batch_size, trace_limit, num_workers, checkpoint_interval, experiment_id,
             resume_from_checkpoint, progress_callback, oracle_mode, and ``features``).
         service_provider: Optional model service provider (offload coordination).
+        device_pool: Optional GPUPool (memory-aware allocation + LRU eviction) — reaches
+            per-node model-override builds too (`_build_node_pipeline`), not just the
+            shared global pipeline built before this call.
         offload_policy: "never" | "on_finish" | "on_finish_soft_cpu" — free each stage's
             model after last use ("on_finish_soft_cpu" parks it warm on CPU instead).
         eval_config: The EvaluationConfig (mode detection, multi-dataset sources, provenance).
@@ -122,6 +126,7 @@ def run_graph(
         cb=_cb,
         t_total=time.perf_counter(),
         service_provider=service_provider,
+        device_pool=device_pool,
         offload_policy=offload_policy,
     )
 
@@ -234,7 +239,8 @@ def _setup_execution_context(
     cb: Callable,
     t_total: float,
     service_provider: Any,
-    offload_policy: str,
+    device_pool: Any = None,
+    offload_policy: str = "never",
 ) -> RunState:
     """Build the seeded ``RunState`` for a graph run (M2: extracted from ``run_graph``
     so the DAG flow stays readable): multi-dataset sources + join validation, the
@@ -286,6 +292,7 @@ def _setup_execution_context(
         cb=cb,
         t_total=t_total,
         service_provider=service_provider,
+        device_pool=device_pool,
         offload_after_stage=(
             service_provider is not None
             and offload_policy in ("on_finish", "on_finish_soft_cpu")
@@ -430,6 +437,7 @@ def run_from_bundle(
     # Non-context run params (not bundled in EvaluationContext): provider + report inputs.
     _run_kwargs = dict(
         service_provider=bundle.service_provider,
+        device_pool=bundle.device_pool,
         eval_config=config,
         load_info=load_info,
         graph_override=getattr(config, "graph_override", None),

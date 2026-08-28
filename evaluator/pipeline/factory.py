@@ -23,6 +23,51 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+#: Devices already warned about (module-level so the warning fires once per distinct
+#: requested device per process, not once per node — a multi-variant graph can request the
+#: same out-of-range device from dozens of nodes).
+_WARNED_DEVICE_CLAMPS: set = set()
+
+
+def _clamp_to_available_device(device: str) -> str:
+    """Remap a config-requested ``cuda:N`` to an ordinal that actually exists, instead of
+    crashing with ``CUDA error: invalid device ordinal``.
+
+    A config is often written assuming more GPUs than a given launch actually exposes (a
+    scheduler/launcher narrowing ``CUDA_VISIBLE_DEVICES``, or just running on a smaller
+    box) — that shouldn't be fatal. Remap cyclically (``N % count``) so with exactly one
+    visible GPU everything lands on it (models share the device, loaded/unloaded as
+    needed via the existing service-provider/device-pool lifecycle); with more than one
+    but fewer than the config assumes, load spreads across what's actually there. No CUDA
+    at all falls back to CPU. Logged once per distinct requested device."""
+    if not device.startswith("cuda"):
+        return device
+    import torch
+
+    count = torch.cuda.device_count()
+    if count == 0:
+        if device not in _WARNED_DEVICE_CLAMPS:
+            _WARNED_DEVICE_CLAMPS.add(device)
+            logger.warning(
+                "requested device '%s' but no CUDA device is available — using 'cpu' instead.",
+                device,
+            )
+        return "cpu"
+    if ":" not in device:
+        return device  # bare "cuda" resolves to ordinal 0, always valid when count > 0
+    ordinal = int(device.split(":", 1)[1])
+    if ordinal < count:
+        return device
+    remapped = f"cuda:{ordinal % count}"
+    if device not in _WARNED_DEVICE_CLAMPS:
+        _WARNED_DEVICE_CLAMPS.add(device)
+        logger.warning(
+            "requested device '%s' but only %d CUDA device(s) available — using '%s' "
+            "instead. Models will share this device, loaded/unloaded as needed.",
+            device, count, remapped,
+        )
+    return remapped
+
 
 def create_reranker_from_config(vector_db_config,
                                 service_provider: Optional["ModelServiceProvider"] = None):
@@ -37,16 +82,17 @@ def create_reranker_from_config(vector_db_config,
     if not vector_db_config.reranker_enabled:
         return None
 
+    device = _clamp_to_available_device(vector_db_config.reranker_device)
     if service_provider is not None:
         return service_provider.get_reranker(
             model_type="cross_encoder",
             model_name=vector_db_config.reranker_model,
-            device=vector_db_config.reranker_device,
+            device=device,
         )
     return create_reranker(
         model_type="cross_encoder",
         model_name=vector_db_config.reranker_model,
-        device=vector_db_config.reranker_device,
+        device=device,
     )
 
 
@@ -234,7 +280,7 @@ class _ModelBuilders:
 
             memory_gb = estimate_model_memory_gb(model_category, model_type)
             return self.device_pool.allocate(model_category, memory_gb)
-        return config_device
+        return _clamp_to_available_device(config_device)
 
     def _build(self, model_category, model_type, config_device, from_provider, from_factory):
         """Resolve device then build via the shared service provider when present, else the

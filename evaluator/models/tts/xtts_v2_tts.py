@@ -40,10 +40,17 @@ class XTTSv2TTS(BaseTTSModel):
             ) from exc
 
         self._tts = TTS(model_name=self.DEFAULT_MODEL, progress_bar=False)
+        self.device = str(getattr(config, "device", "cpu") or "cpu")
+        self._tts.to(self.device)
         self.output_sample_rate = int(
             getattr(getattr(self._tts, "synthesizer", None), "output_sample_rate", 24000)
         )
-        logger.info("XTTS-v2 initialized")
+        logger.info("XTTS-v2 initialized (device=%s)", self.device)
+
+    def to(self, device: str) -> "XTTSv2TTS":
+        self.device = str(device)
+        self._tts.to(self.device)
+        return self
 
     def synthesize(self, text: str) -> np.ndarray:
         speaker_wav = None

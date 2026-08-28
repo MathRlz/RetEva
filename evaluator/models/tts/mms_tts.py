@@ -49,8 +49,15 @@ class MMSTTS(BaseTTSModel):
         self._tokenizer = AutoTokenizer.from_pretrained(model_id)
         self._model = VitsModel.from_pretrained(model_id)
         self._model.eval()
+        self.device = str(getattr(config, "device", "cpu") or "cpu")
+        self._model.to(self.device)
         self.output_sample_rate = model_sampling_rate(self._model)
-        logger.info(f"MMS TTS initialized with model: {model_id}")
+        logger.info(f"MMS TTS initialized with model: {model_id} (device={self.device})")
+
+    def to(self, device: str) -> "MMSTTS":
+        self.device = str(device)
+        self._model.to(self.device)
+        return self
 
     def _resolve_model_id(self) -> str:
         voice = (self.config.voice or "").strip()
@@ -60,7 +67,7 @@ class MMSTTS(BaseTTSModel):
         return self.LANGUAGE_TO_MODEL.get(language, "facebook/mms-tts-eng")
 
     def synthesize(self, text: str) -> np.ndarray:
-        inputs = self._tokenizer(text=text, return_tensors="pt")
+        inputs = self._tokenizer(text=text, return_tensors="pt").to(self.device)
         with self._torch.no_grad():
             output = self._model(**inputs)
         audio = output.waveform.squeeze().cpu().numpy()

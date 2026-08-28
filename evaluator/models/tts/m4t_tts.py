@@ -45,12 +45,19 @@ class M4TTTS(BaseTTSModel):
         self._processor = AutoProcessor.from_pretrained(model_id)
         self._model = SeamlessM4Tv2ForTextToSpeech.from_pretrained(model_id)
         self._model.eval()
+        self.device = str(getattr(config, "device", "cpu") or "cpu")
+        self._model.to(self.device)
         self.lang = self._LANG_ALIASES.get((config.language or "en").lower(), (config.language or "eng"))
         self.output_sample_rate = model_sampling_rate(self._model)
-        logger.info(f"M4T TTS initialized with model: {model_id} (lang={self.lang})")
+        logger.info(f"M4T TTS initialized with model: {model_id} (lang={self.lang}, device={self.device})")
+
+    def to(self, device: str) -> "M4TTTS":
+        self.device = str(device)
+        self._model.to(self.device)
+        return self
 
     def synthesize(self, text: str) -> np.ndarray:
-        inputs = self._processor(text=text, src_lang=self.lang, return_tensors="pt")
+        inputs = self._processor(text=text, src_lang=self.lang, return_tensors="pt").to(self.device)
         with self._torch.no_grad():
             output = self._model.generate(**inputs, tgt_lang=self.lang)
         # generate() returns a tuple/list of waveform tensors.

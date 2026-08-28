@@ -26,6 +26,10 @@ class AudioSynthesisConfig:
         cache_dir: Directory for caching synthesized audio. Default: None (auto-derived
             from output_dir).
         skip_cache: Skip all caches and force re-synthesis on every call. Default: False.
+        device: Device for GPU-capable providers (m4t, mms: transformers `.to(device)`;
+            xtts_v2: Coqui's own `.to(device)`). Ignored by piper (CPU-only subprocess
+            binary — no device concept). Default: "cpu" (unchanged behavior for anyone not
+            setting it — these providers never moved off CPU before this field existed).
 
     Examples:
         >>> config = AudioSynthesisConfig(
@@ -57,3 +61,4 @@ class AudioSynthesisConfig:
     output_dir: str = "prepared_benchmarks/audio"
     cache_dir: Optional[str] = None
     skip_cache: bool = False
+    device: str = "cpu"

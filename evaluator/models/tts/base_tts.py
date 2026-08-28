@@ -22,6 +22,13 @@ class BaseTTSModel:
         """Synthesize ``text`` into a float32 mono waveform."""
         raise NotImplementedError
 
+    def to(self, device: str) -> "BaseTTSModel":
+        """Move the underlying model to ``device``. No-op default for providers with no
+        GPU concept (piper: an external CPU-only subprocess binary) — a provider that
+        DOES support a device (m4t, mms: transformers; xtts_v2: Coqui TTS) overrides
+        this to actually move its model, so callers can treat every provider uniformly."""
+        return self
+
 
 def require_torch_transformers(provider_label: str):
     """Import torch (and ensure transformers is present) or raise a clear error.

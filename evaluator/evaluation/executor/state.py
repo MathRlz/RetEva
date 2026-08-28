@@ -128,6 +128,11 @@ class RunState:
     # Model lifecycle: when set, a stage's model is released after the last stage that
     # uses it (frees the device mid-run). Off unless a provider + on_finish policy apply.
     service_provider: Any = field(default=None, metadata=_SHARED)
+    # GPUPool (evaluator.devices.pool), when `device_pool:` is configured — memory-aware
+    # allocation + LRU eviction across ALL model builds, including per-node overrides
+    # (_build_node_pipeline). None (the default) means no pool: models use their plain
+    # configured device string for the run's lifetime, same as before this field existed.
+    device_pool: Any = field(default=None, metadata=_SHARED)
     offload_after_stage: bool = field(default=False, metadata=_SHARED)
     # Soft-CPU offload (2c): release-after-last-use parks the model warm on host RAM instead
     # of freeing it, so a later stage/run reuses it with a CPU↔device move (no full reload).

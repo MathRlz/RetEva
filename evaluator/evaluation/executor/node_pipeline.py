@@ -59,7 +59,11 @@ def _build_node_pipeline(s: "RunState", stage: str, params: dict):
     params onto a copy of ``config.model`` and building through ``_ModelBuilders`` — routed via
     the run's shared ``service_provider`` (same as ``_node_reranking``) so two nodes that resolve
     to the SAME model (type/name/device/params) share one loaded instance instead of each paying
-    for its own load; a node with a genuinely different override still gets its own cache key."""
+    for its own load; a node with a genuinely different override still gets its own cache key.
+    Also threads the run's ``device_pool`` (was hardcoded ``None`` — a multi-variant graph's
+    per-node model overrides never went through memory-aware allocation/eviction at all,
+    regardless of a configured ``device_pool:``) so a per-node override is packed/evicted the
+    same way the shared global pipeline already was."""
     from types import SimpleNamespace
 
     from ...config.graph_config import resolved_model_config
@@ -68,7 +72,9 @@ def _build_node_pipeline(s: "RunState", stage: str, params: dict):
     node = SimpleNamespace(stage=stage, params=params)
     eff_model = resolved_model_config(s.config, node)
     model = getattr(
-        _ModelBuilders(SimpleNamespace(model=eff_model), s.service_provider, None),
+        _ModelBuilders(
+            SimpleNamespace(model=eff_model), s.service_provider, getattr(s, "device_pool", None),
+        ),
         _BUILDER_METHOD[stage],
     )()
     cache = s.cache_manager
