@@ -179,19 +179,41 @@ def _node_space(node: Any, config: Any) -> Optional[str]:
     return None
 
 
-def resolve_query_space(config: Any, stream_name: Optional[str]) -> Optional[str]:
+def resolve_query_space(
+    config: Any, stream_name: Optional[str], *, producer_id: Optional[str] = None
+) -> Optional[str]:
     """The embedding space of a bound query-vector stream at runtime, or None when unknowable
     (fused vectors, missing model info). Used by the retrieval runtime guard (2b) to assert
-    the query is comparable to the index it dots against. Mirrors the pre-flight resolution but
-    keyed by the actually-bound stream name."""
+    the query is comparable to the index it dots against.
+
+    ``producer_id`` (the actual bound producer node, from ``RunState.data_flow`` after
+    ``input()``/``get_artifact()`` resolved it) is resolved via ``_node_space`` FIRST — a
+    multi-variant graph's branches each carry their own per-node model override, so the flat
+    ``config.model`` default below is wrong for any node that overrides it (confirmed bug:
+    every branch asserted the SAME flat-default space regardless of which embedder it
+    actually ran, false-positively raising ``EmbeddingSpaceMismatch`` for every branch that
+    differed from the flat default). The flat-default path remains as a fallback for callers
+    with no live producer_id (legacy/direct callers) and for a producer `_node_space` can't
+    resolve (e.g. a pass-through)."""
     from ..models.registry import audio_embedding_registry, text_embedding_registry
+
+    name = stream_name or "query_vectors"
+    if name == "fused_query_vectors":
+        return None  # a combined space is not a single model's space
+
+    if producer_id is not None:
+        graph = getattr(config, "graph", None)
+        node = next(
+            (n for n in getattr(graph, "nodes", ()) if n.id == producer_id), None
+        )
+        if node is not None:
+            space = _node_space(node, config)
+            if space is not None:
+                return space
 
     model = getattr(config, "model", None)
     if model is None:
         return None
-    name = stream_name or "query_vectors"
-    if name == "fused_query_vectors":
-        return None  # a combined space is not a single model's space
 
     audio = (
         audio_embedding_registry,

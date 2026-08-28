@@ -110,8 +110,7 @@ def _stage_index(s: RunState) -> None:
         # so the offload planner's free-after-last-use semantics are unchanged.
         reranker=getattr(s.retrieval_pipeline, "reranker", None),
     )
-    build_index_from_vectors(rp, cv)
-    rp.embedding_space = cv.space  # space tag rides the index (§4 V[s] typing)
+    build_index_from_vectors(rp, cv)  # also tags rp.index_space_id = cv.space (§4 V[s] typing)
     s.put_artifact("vector_index", rp)
 
 
@@ -161,7 +160,12 @@ def _stage_retrieval(s: RunState) -> None:
     if (params.get("mode") or cfg_mode) != "sparse" and hasattr(rp, "assert_query_space"):
         from ..validation import resolve_query_space
 
-        rp.assert_query_space(resolve_query_space(s.config, vname))
+        # Resolve against the ACTUAL bound producer (this branch's own embedder), not just
+        # the flat config default — a multi-variant graph's branches can each override it.
+        artifact_name, producer_id = s.resolved_producer(vname or "query_vectors")
+        rp.assert_query_space(
+            resolve_query_space(s.config, artifact_name or vname, producer_id=producer_id)
+        )
     # Per-node k (R2): a branch may retrieve a different depth.
     k = report_depth(params.get("k", s.k))
     # Per-node retrieval mode (R-hybrid): the hybrid DAG runs its dense + sparse arms as two

@@ -6,7 +6,7 @@ Holds the mutable ``RunState`` threaded through stage handlers plus the two inpu
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
 from ..run_context import RunContext
@@ -265,6 +265,17 @@ class RunState:
         if (artifact, producer) != expected:
             entry["fallback"] = True
         self.data_flow.setdefault(node_id, {})[key] = entry
+
+    def resolved_producer(self, key: str) -> Tuple[Optional[str], Optional[str]]:
+        """The ``(artifact_name, producer_id)`` that actually served canonical input
+        ``key`` for the current node — must be called AFTER ``input()``/``get_artifact()``
+        resolved it (reads the A3 ``data_flow`` record they leave behind).
+        ``(None, None)`` if nothing has resolved ``key`` yet for this node."""
+        node_id = getattr(self.current_node, "id", None)
+        entry = self.data_flow.get(node_id, {}).get(key)
+        if entry is None:
+            return None, None
+        return entry.get("artifact"), entry.get("producer")
 
     def _input_candidates(self, key: str) -> tuple:
         """The ordered candidate artifact names for a handler's canonical input key.
