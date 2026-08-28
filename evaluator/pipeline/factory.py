@@ -417,10 +417,6 @@ def create_pipeline_from_config(
     # bundle; the build *decision* is graph-authoritative, so an explicit graph (or one with no
     # ASR node) never builds a model it doesn't use.
     plan = _graph_build_plan(config.graph, config.model)
-    logger.info(
-        "pipeline build plan (template=%s): asr=%s text_emb=%s audio_emb=%s retrieval=%s",
-        mode, plan.build_asr, plan.build_text, plan.build_audio, plan.build_retrieval,
-    )
 
     # Create GPU pool if configured
     device_pool = create_gpu_pool_from_config(config)

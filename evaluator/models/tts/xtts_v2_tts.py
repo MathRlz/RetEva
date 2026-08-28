@@ -54,10 +54,30 @@ class XTTSv2TTS(BaseTTSModel):
 
     def synthesize(self, text: str) -> np.ndarray:
         speaker_wav = None
+        speaker = None
+        available_speakers = getattr(self._tts, "speakers", None) or []
+
         if self.config.voice:
             voice_path = Path(self.config.voice)
             if voice_path.exists() and voice_path.is_file():
                 speaker_wav = str(voice_path)
+            elif self.config.voice in available_speakers:
+                speaker = self.config.voice
+
+        if speaker_wav is None and speaker is None:
+            # XTTS-v2 is multi-speaker and refuses to synthesize with neither
+            # `speaker_wav` nor `speaker_id` set. `config.voice` is shared across TTS
+            # providers in a comparison config and often isn't a valid XTTS speaker name
+            # (e.g. a Piper voice id) — fall back to the model's own first built-in
+            # speaker rather than crashing, and log so the choice is visible.
+            if not available_speakers:
+                raise RuntimeError(
+                    "XTTS-v2 requires a speaker reference: set `voice` to a WAV file "
+                    "path for voice cloning, or to one of the model's built-in speaker "
+                    "names, but this model exposes no built-in speakers."
+                )
+            speaker = available_speakers[0]
+            logger.info("XTTS-v2: no usable voice/speaker in config, defaulting to built-in speaker %r", speaker)
 
         kwargs = {
             "text": text,
@@ -65,6 +85,8 @@ class XTTSv2TTS(BaseTTSModel):
         }
         if speaker_wav is not None:
             kwargs["speaker_wav"] = speaker_wav
+        else:
+            kwargs["speaker"] = speaker
 
         audio = self._tts.tts(**kwargs)
         return np.asarray(audio, dtype=np.float32)
