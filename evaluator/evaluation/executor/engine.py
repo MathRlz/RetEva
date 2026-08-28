@@ -20,14 +20,53 @@ logger = get_logger(__name__)
 _STAGE_TIMES_LOCK = threading.Lock()
 
 
+def _failed_ancestor(state: "RunState", node: Any) -> str | None:
+    """Root failed node this node transitively depends on, or None when all clear.
+
+    ``depends_on`` is the full ordering contract (a superset of the data bindings), so it
+    covers structural nodes too. A skipped dependency propagates its own root, keeping the
+    attribution pointed at the node that actually raised."""
+    for dep in getattr(node, "depends_on", ()):
+        if dep in state.failed_nodes:
+            return dep
+        if dep in state.skipped_nodes:
+            return state.skipped_nodes[dep]
+    return None
+
+
 def _run_one_node(
-    state: "RunState", node: Any, sink: Any = None, level: int = 0
+    state: "RunState", node: Any, sink: Any = None, level: int = 0,
+    absorb_errors: bool = True,
 ) -> None:
     """Run a single node's handler (with timing) against ``state`` (a base or a view).
 
-    Emits ``node_start`` / ``node_complete`` events to ``sink`` (T10) so an observer sees the
-    DAG advance node by node mid-run, with each node's wall time."""
+    Emits ``node_start`` / ``node_complete`` / ``node_error`` / ``node_skipped`` events to
+    ``sink`` (T10) so an observer sees the DAG advance node by node mid-run, with each
+    node's wall time.
+
+    Branch fail-fast: a handler exception marks the node failed instead of aborting the
+    run, and every node downstream of a failed node is skipped without running — a broken
+    branch stops at its error, sibling branches keep going. ``KeyboardInterrupt`` /
+    ``SystemExit`` (BaseException, not caught here) still abort the whole run.
+
+    ``absorb_errors=False`` (the windowed-streaming path) re-raises after recording:
+    streaming's recovery model is crash → window-journal resume, not branch skipping."""
     spec = get_stage_spec(node.stage)
+    skip_root = _failed_ancestor(state, node)
+    if skip_root is not None:
+        state.skipped_nodes[node.id] = skip_root
+        node_logger.info(
+            "⤼ node %s skipped (level=%d): upstream node '%s' failed", node.id, level, skip_root
+        )
+        if sink is not None:
+            sink.emit(
+                "node_skipped",
+                node=node.id,
+                level=level,
+                stage=node.stage,
+                failed_ancestor=skip_root,
+            )
+        return
     state.current_node = node  # so handlers put/get artifacts by node id
     # Node-granular console marker (replaces the old per-phase banners, N2): every DAG
     # node announces itself by id + stage, so the log tracks the graph, not fixed phases.
@@ -35,8 +74,18 @@ def _run_one_node(
     if sink is not None:
         sink.emit("node_start", node=node.id, level=level, stage=node.stage)
     _t = time.perf_counter()
+    error: Exception | None = None
     try:
         spec.fn(state)
+    except Exception as exc:
+        if not absorb_errors:
+            raise
+        error = exc
+        state.failed_nodes[node.id] = f"{type(exc).__name__}: {exc}"
+        logger.exception(
+            "node %s failed — this branch stops here; its downstream nodes will be skipped",
+            node.id,
+        )
     finally:
         dur = time.perf_counter() - _t
         # stage_times is shared; a lock keeps the += from losing updates under parallelism.
@@ -49,13 +98,23 @@ def _run_one_node(
                     state.stage_times.get(spec.time_key, 0.0) + dur
                 )
         if sink is not None:
-            sink.emit(
-                "node_complete",
-                node=node.id,
-                level=level,
-                stage=node.stage,
-                duration_s=round(dur, 3),
-            )
+            if error is not None:
+                sink.emit(
+                    "node_error",
+                    node=node.id,
+                    level=level,
+                    stage=node.stage,
+                    duration_s=round(dur, 3),
+                    error=state.failed_nodes.get(node.id, ""),
+                )
+            else:
+                sink.emit(
+                    "node_complete",
+                    node=node.id,
+                    level=level,
+                    stage=node.stage,
+                    duration_s=round(dur, 3),
+                )
         # Opt-in mid-run artifact inspection (R7) — no-op unless EVALUATOR_DUMP_ARTIFACTS lists
         # this node, so the normal run path is untouched.
         from ..artifact_dump import maybe_dump_node_artifacts
@@ -147,12 +206,20 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
                         "offload after stage '%s' failed: %s", node.stage, exc
                     )
             pos += 1
-        if journal is not None:
+        if journal is not None and not state.failed_nodes:
+            # Once any node has failed, stop advancing the journal: it stays at the last
+            # fully-clean level, so a rerun resumes there and RE-ATTEMPTS the failed branch
+            # instead of replaying a level that silently omitted it.
             from ..run_journal import snapshot_state
 
             journal.save(i, snapshot_state(state))
     if journal is not None:
-        journal.clear()  # ran to completion → no resume needed
+        if state.failed_nodes:
+            node_logger.info(
+                "run had failed branches — keeping journal at last clean level for resume"
+            )
+        else:
+            journal.clear()  # ran to completion → no resume needed
 
 
 def _setup_run_journal(state: "RunState", flat_nodes) -> tuple:

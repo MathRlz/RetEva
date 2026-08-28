@@ -202,6 +202,12 @@ class RunState:
     # {node_id → its resolved feature config} (global ⊕ node params, computed once
     # in _setup_execution_context). Read via `resolved_config()`; replaces node_overlay.
     node_configs: Dict[str, Any] = field(default_factory=dict, metadata=_SHARED)
+    # Branch fail-fast: a node whose handler raised is recorded here (node_id → error
+    # summary) instead of aborting the run; every transitive dependent is then skipped
+    # (node_id → the root failed ancestor) so a broken branch stops at its error while
+    # sibling branches keep running. Both surface in the final result.
+    failed_nodes: Dict[str, str] = field(default_factory=dict, metadata=_SHARED)
+    skipped_nodes: Dict[str, str] = field(default_factory=dict, metadata=_SHARED)
 
     def put_artifact(self, name: str, value: Any) -> None:
         """Publish ``name`` as an output of the currently-running node."""

@@ -67,7 +67,9 @@ def _run_level_parallel(
     Threads (not processes): the heavy work is GPU/LLM/IO-bound and releases the GIL, and a
     shared in-process ``ctx`` is how branches exchange artifacts. A per-device lock means
     same-device nodes still run one-at-a-time (no single-GPU contention / OOM), while nodes on
-    distinct devices overlap. Exceptions propagate (drop-and-log already handles per-item).
+    distinct devices overlap. Handler exceptions are absorbed by ``_run_one_node`` (branch
+    fail-fast: the node is marked failed, its downstream skipped); only BaseException escapes
+    (KeyboardInterrupt/SystemExit) reach the re-raise below and abort the run.
     """
     device_locks: Dict[str, threading.Lock] = {
         _node_device(n, state): threading.Lock() for n in level

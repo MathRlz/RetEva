@@ -152,6 +152,23 @@ def _stage_retrieval(s: RunState) -> None:
     # The vector_index artifact is the indexed retrieval pipeline (published by
     # vector_db); fall back to the shared pipeline for direct callers (R4a).
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
+    # The ACTUAL bound producer (this branch's own embedder), not just the flat config
+    # default — a multi-variant graph's branches can each override it. Resolved once and
+    # reused for the space guard below + forwarded to the report/provenance assembler
+    # (which binds to `retrieved`, not the embedding streams, so it can't see the embedder
+    # node directly — this is how it recovers per-branch embedder identity).
+    artifact_name, producer_id = s.resolved_producer(vname or "query_vectors")
+    if producer_id is not None:
+        # Kept as two distinct keys (not one generic slot): a mode with both an audio and a
+        # text embedder (audio_emb_retrieval — audio as query, text over the corpus) must not
+        # let one role's identity bleed into the other when the report assembler reads these
+        # back by role by role.
+        text_prov = s.ctx.get_opt(producer_id, "text_embedding_model_provenance", None)
+        audio_prov = s.ctx.get_opt(producer_id, "audio_embedding_model_provenance", None)
+        if text_prov is not None:
+            s.put_artifact("query_text_embedder_model_provenance", text_prov)
+        if audio_prov is not None:
+            s.put_artifact("query_audio_embedder_model_provenance", audio_prov)
     # Runtime space guard (2b): loud error if the bound query stream and the index live in
     # incompatible embedding spaces. No-op when either space is unknown (defense-in-depth
     # behind the pre-flight validators). Only the vector-dotting arms (dense/hybrid) qualify.
@@ -160,9 +177,6 @@ def _stage_retrieval(s: RunState) -> None:
     if (params.get("mode") or cfg_mode) != "sparse" and hasattr(rp, "assert_query_space"):
         from ..validation import resolve_query_space
 
-        # Resolve against the ACTUAL bound producer (this branch's own embedder), not just
-        # the flat config default — a multi-variant graph's branches can each override it.
-        artifact_name, producer_id = s.resolved_producer(vname or "query_vectors")
         rp.assert_query_space(
             resolve_query_space(s.config, artifact_name or vname, producer_id=producer_id)
         )

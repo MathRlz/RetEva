@@ -152,20 +152,38 @@ def _collect_final_result(state: "RunState", stage_graph) -> RunResults:
         for nid in finalize_ids
         if state.ctx.has(nid, "run_report")
     ]
+    # Branch fail-fast: a failed branch's finalize never published a run_report — name the
+    # casualties in the result (and in one end-of-run warning) instead of dropping them
+    # silently next to the healthy variants.
+    failed = dict(getattr(state, "failed_nodes", {}) or {})
+    skipped = dict(getattr(state, "skipped_nodes", {}) or {})
+    if failed:
+        summary = "; ".join(f"{nid} ({err})" for nid, err in sorted(failed.items()))
+        logger.warning(
+            "%d node(s) failed: %s — %d downstream node(s) skipped",
+            len(failed), summary, len(skipped),
+        )
     # G5: traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
     # the duplicate top-level keys at the output boundary (sinks read them during the run).
     if not reports:
         drop_mirrored_top_level_keys(state.results)
+        if failed and isinstance(state.results, dict):
+            state.results["failed_nodes"] = failed
+            state.results["skipped_nodes"] = skipped or None
         return state.results
     for _, report in reports:
         drop_mirrored_top_level_keys(report)
-    if len(reports) == 1:
+    if len(reports) == 1 and not failed:
         return reports[0][1]
-    return {
+    result: RunResults = {
         "variants": dict(reports),
         "latency": dict(state.stage_times),
         "node_latency": dict(state.node_times),
     }
+    if failed:
+        result["failed_nodes"] = failed
+        result["skipped_nodes"] = skipped or None
+    return result
 
 
 def _resolve_mode_and_graph(

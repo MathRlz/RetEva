@@ -91,20 +91,46 @@ def _run_provenance(s: "Any", dropped_by_branch: Optional[Dict] = None):
     return prov
 
 
+def _resolved_name(prov: Optional[Dict[str, Any]], fallback_pipeline: "Any") -> str:
+    """``resolved`` off a per-branch provenance artifact when one was published (a node that
+    overrode its model for this branch), else the pipeline's own name (correct as-is for a
+    node using the shared/global pipeline, which is never transiently swapped)."""
+    if prov and prov.get("resolved"):
+        return prov["resolved"]
+    return fallback_pipeline.model.name()
+
+
 def _record_model_info(results: "Any", s: "Any") -> None:
     """Record model names (display) + audio<->text embedding alignment (metadata, not metrics).
 
     Driven by which pipelines actually ran, so every mode is covered — including
-    ``audio_emb_retrieval`` (audio query + text corpus), which previously recorded nothing."""
+    ``audio_emb_retrieval`` (audio query + text corpus), which previously recorded nothing.
+
+    A per-node model override (``params.model``/``params.name``) only lives on
+    ``s.asr_pipeline`` / ``s.text_embedding_pipeline`` for the duration of that node's own
+    handler (``_node_pipeline`` reverts it on exit) — this report node runs after every
+    branch's nodes, so reading those attributes directly here always sees the last-restored
+    (usually the flat global default) pipeline, not this branch's own. `sibling_artifact`
+    recovers the branch-scoped identity that `_node_pipeline` published alongside its node's
+    regular output; a node that never overrode its model has nothing published, so this
+    falls back to the (already-correct, never-swapped) pipeline attribute unchanged."""
     if s.asr_pipeline is not None:
-        results["asr"] = s.asr_pipeline.model.name()
+        asr_prov = s.sibling_artifact("query_text", "asr_model_provenance")
+        results["asr"] = _resolved_name(asr_prov, s.asr_pipeline)
     if s.audio_embedding_pipeline is not None:
-        results["audio_embedder"] = s.audio_embedding_pipeline.model.name()
+        audio_prov = s.sibling_artifact("retrieved", "query_audio_embedder_model_provenance")
+        results["audio_embedder"] = _resolved_name(audio_prov, s.audio_embedding_pipeline)
     if s.text_embedding_pipeline is not None:
         # asr_text: the text embedder IS the query embedder → 'embedder'; otherwise it
-        # embeds the corpus → 'text_embedder' (back-compat key names).
+        # embeds the corpus → 'text_embedder' (back-compat key names). Only the query role
+        # is recoverable via `retrieved` (the corpus-embedding node doesn't feed it) — a
+        # corpus text_embedder keeps the old (correct, unswapped) read.
         key = "embedder" if is_asr_text_retrieval(s) else "text_embedder"
-        results[key] = s.text_embedding_pipeline.model.name()
+        text_prov = (
+            s.sibling_artifact("retrieved", "query_text_embedder_model_provenance")
+            if key == "embedder" else None
+        )
+        results[key] = _resolved_name(text_prov, s.text_embedding_pipeline)
     # The embedding-alignment artifact is published only by the fusion node (audio_text);
     # its presence is the signal — no need to consult the mode.
     alignment = _ctx_first(s, "embedding_alignment")
@@ -133,14 +159,25 @@ def _build_provenance(s: "Any") -> Dict[str, Any]:
     def _clean(d: Dict[str, Any]) -> Dict[str, Any]:
         return {k: v for k, v in d.items() if v not in (None, "", {}, [])}
 
+    # A per-node override (`params.model`/`params.name`) publishes its OWN effective
+    # type/size/name/params/resolved as a branch-scoped artifact (see `_node_pipeline` /
+    # `_publish_node_model_provenance`) — reachable here via `sibling_artifact` — because
+    # `m` above is the run's flat global config and can't see it; a node with no override
+    # has nothing published, so this falls back to `m` unchanged (already correct there,
+    # since no override means the branch used the flat default anyway).
     if s.asr_pipeline is not None:
-        prov["asr"] = _clean({
+        asr_prov = s.sibling_artifact("query_text", "asr_model_provenance")
+        prov["asr"] = asr_prov or _clean({
             "type": m.asr_model_type, "size": m.asr_size, "name": m.asr_model_name,
             "adapter": m.asr_adapter_path, "params": dict(m.asr_params or {}),
             "resolved": s.asr_pipeline.model.name(),
         })
     if s.text_embedding_pipeline is not None:
-        prov["text_emb"] = _clean({
+        text_prov = (
+            s.sibling_artifact("retrieved", "query_text_embedder_model_provenance")
+            if is_asr_text_retrieval(s) else None
+        )
+        prov["text_emb"] = text_prov or _clean({
             "type": m.text_emb_model_type, "size": m.text_emb_size,
             "name": m.text_emb_model_name,
             "adapter": m.text_emb_adapter_path, "model_path": m.text_emb_model_path,
@@ -149,7 +186,8 @@ def _build_provenance(s: "Any") -> Dict[str, Any]:
             "resolved": s.text_embedding_pipeline.model.name(),
         })
     if s.audio_embedding_pipeline is not None:
-        prov["audio_emb"] = _clean({
+        audio_prov = s.sibling_artifact("retrieved", "query_audio_embedder_model_provenance")
+        prov["audio_emb"] = audio_prov or _clean({
             "type": m.audio_emb_model_type, "size": m.audio_emb_size,
             "name": m.audio_emb_model_name,
             "dim": m.audio_emb_dim,

@@ -141,6 +141,8 @@ def synthesize_missing_query_audio(
         return synthesizers[lang]
 
     done = 0
+    failed = 0
+    first_error: Optional[str] = None
     for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=progress_disabled()):
         text = getattr(question, "question_text", None)
         if not text:
@@ -163,7 +165,10 @@ def synthesize_missing_query_audio(
             if caching and output_path:
                 cache_manager.register_synthesized_audio(key, Path(output_path))
             done += 1
-        except Exception as e:  # keep going; one bad clip shouldn't abort the run
+        except Exception as e:  # attempt every clip first, then fail the node (see below)
+            failed += 1
+            if first_error is None:
+                first_error = f"{type(e).__name__}: {e}"
             log.error(
                 "Failed to synthesize audio for question %s: %s",
                 getattr(question, "question_id", "?"),
@@ -177,6 +182,17 @@ def synthesize_missing_query_audio(
     # Release the TTS model(s) before the caller embeds (co-residence has caused crashes).
     synthesizers.clear()
     _release_torch_memory()
+
+    if failed:
+        # Fail the TTS node HERE, at the actual error, instead of "succeeding" with holes:
+        # a branch with partial audio measures a different question subset than its siblings
+        # (incomparable in a comparison run), and the missing clips used to surface much
+        # later as a misleading `Question ... has no audio_path` crash in ASR. The executor
+        # turns this raise into failed-branch + skipped-downstream; other branches continue.
+        raise RuntimeError(
+            f"TTS provider '{synth_config.provider}' failed for {failed}/{len(pending)} "
+            f"question(s); first error: {first_error}"
+        )
 
     log.info("Audio synthesis complete (%d synthesized, %d reused)", done, resolved)
     return resolved + done

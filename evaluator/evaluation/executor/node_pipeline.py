@@ -22,6 +22,52 @@ _NODE_PIPELINE_ATTR = {
     "audio_embedding": "audio_embedding_pipeline",
 }
 
+# The swap this context manager performs is transient — `s.<attr>` reverts the moment the
+# node's own handler returns, so anything reading `s.asr_pipeline` / `s.text_embedding_pipeline`
+# later in the run (the report/provenance assembler, which runs after every branch's nodes)
+# only ever sees the last-restored value, not this branch's override. Publishing the resolved
+# identity as a node artifact here — while the override is live — lets those later readers
+# fetch it back through the bus (`sibling_artifact`), which stays branch-scoped.
+_PROVENANCE_ARTIFACT = {
+    "asr": "asr_model_provenance",
+    "text_embedding": "text_embedding_model_provenance",
+    "audio_embedding": "audio_embedding_model_provenance",
+}
+_PROVENANCE_FIELDS = {
+    "asr": {
+        "type": "asr_model_type", "size": "asr_size", "name": "asr_model_name",
+        "adapter": "asr_adapter_path", "params": "asr_params",
+    },
+    "text_embedding": {
+        "type": "text_emb_model_type", "size": "text_emb_size",
+        "name": "text_emb_model_name", "adapter": "text_emb_adapter_path",
+        "model_path": "text_emb_model_path", "embedding_space": "text_emb_embedding_space",
+        "params": "text_emb_params",
+    },
+    "audio_embedding": {
+        "type": "audio_emb_model_type", "size": "audio_emb_size",
+        "name": "audio_emb_model_name", "dim": "audio_emb_dim",
+        "model_path": "audio_emb_model_path", "adapter": "audio_emb_adapter_path",
+        "embedding_space": "audio_emb_embedding_space", "params": "audio_emb_params",
+    },
+}
+
+
+def _publish_node_model_provenance(s: "RunState", stage: str, pipeline, eff_model) -> None:
+    """Record ``stage``'s effective per-node model identity as an artifact of the
+    currently-running node, so a later branch-scoped reader (report/provenance) can recover
+    it via `sibling_artifact` instead of the transient, already-reverted `s.<attr>`."""
+    fields = _PROVENANCE_FIELDS.get(stage)
+    if fields is None or pipeline is None:
+        return
+    prov = {
+        key: getattr(eff_model, attr, None) for key, attr in fields.items() if key != "params"
+    }
+    prov["params"] = dict(getattr(eff_model, fields["params"], None) or {})
+    prov = {k: v for k, v in prov.items() if v not in (None, "", {}, [])}
+    prov["resolved"] = pipeline.model.name()
+    s.put_artifact(_PROVENANCE_ARTIFACT[stage], prov)
+
 
 @contextmanager
 def _node_pipeline(s: "RunState", stage: str, params):
@@ -36,7 +82,12 @@ def _node_pipeline(s: "RunState", stage: str, params):
         return
     saved = getattr(s, attr)
     try:
-        setattr(s, attr, _build_node_pipeline(s, stage, params))
+        from ...config.graph_config import resolved_model_config
+
+        eff_model = resolved_model_config(s.config, s.current_node)
+        pipeline = _build_node_pipeline(s, stage, params)
+        setattr(s, attr, pipeline)
+        _publish_node_model_provenance(s, stage, pipeline, eff_model)
         logger.info(
             "node '%s' per-instance model: type=%s name=%s",
             getattr(s.current_node, "id", "?"),

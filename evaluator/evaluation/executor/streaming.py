@@ -141,7 +141,7 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
     # 1. Prelude — corpus index + whole per-item GT, over the full dataset, once (also on resume).
     for node in flat:
         if node.id in prelude:
-            _run_one_node(state, node)
+            _run_one_node(state, node, absorb_errors=False)
 
     # Window bounds must be taken AFTER the prelude: dataset loading is in-graph, so on the
     # service path ``state.dataset`` is None until the prelude has run — sizing earlier
@@ -163,7 +163,7 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
         state.dataset = _QueryIdSubset(full_dataset, list(range(start, stop)))
         for node in flat:
             if node.id in windowed:
-                _run_one_node(state, node)
+                _run_one_node(state, node, absorb_errors=False)
         for slot in accumulate:
             if state.ctx.has(*slot):
                 accum.setdefault(slot, []).append(state.ctx.get(*slot))
@@ -177,7 +177,7 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
     state.dataset = full_dataset
     for node in flat:
         if node.id in finalize:
-            _run_one_node(state, node)
+            _run_one_node(state, node, absorb_errors=False)
     if journal is not None:
         journal.clear()
     _ = by_id  # (kept for symmetry / future per-node hooks)
