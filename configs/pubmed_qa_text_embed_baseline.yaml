@@ -97,26 +97,26 @@ graph:
   edges:
   - {from: dataset_source, to: corpus_embedding_jina, input: corpus}
   - {from: corpus_embedding_jina, to: vector_db_jina, input: corpus_vectors}
-  - {from: dataset_source, to: text_embedding_jina, input: query_text}
+  - {from: dataset_source, output: reference_text, to: text_embedding_jina, input: query_text}
   - {from: text_embedding_jina, output: text_query_vectors, to: retrieval_jina, input: query_vectors}
   - {from: vector_db_jina, to: retrieval_jina, input: vector_index}
-  - {from: dataset_source, to: retrieval_jina, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_jina, input: query_text}
   - {from: dataset_source, to: retrieval_jina, input: reference_transcription}
   - {from: dataset_source, to: retrieval_jina, input: relevant_docs}
   - {from: dataset_source, to: corpus_embedding_labse, input: corpus}
   - {from: corpus_embedding_labse, to: vector_db_labse, input: corpus_vectors}
-  - {from: dataset_source, to: text_embedding_labse, input: query_text}
+  - {from: dataset_source, output: reference_text, to: text_embedding_labse, input: query_text}
   - {from: text_embedding_labse, output: text_query_vectors, to: retrieval_labse, input: query_vectors}
   - {from: vector_db_labse, to: retrieval_labse, input: vector_index}
-  - {from: dataset_source, to: retrieval_labse, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_labse, input: query_text}
   - {from: dataset_source, to: retrieval_labse, input: reference_transcription}
   - {from: dataset_source, to: retrieval_labse, input: relevant_docs}
   - {from: dataset_source, to: corpus_embedding_eam, input: corpus}
   - {from: corpus_embedding_eam, to: vector_db_eam, input: corpus_vectors}
-  - {from: dataset_source, to: text_embedding_eam, input: query_text}
+  - {from: dataset_source, output: reference_text, to: text_embedding_eam, input: query_text}
   - {from: text_embedding_eam, output: text_query_vectors, to: retrieval_eam, input: query_vectors}
   - {from: vector_db_eam, to: retrieval_eam, input: vector_index}
-  - {from: dataset_source, to: retrieval_eam, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_eam, input: query_text}
   - {from: dataset_source, to: retrieval_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_eam, input: relevant_docs}
 

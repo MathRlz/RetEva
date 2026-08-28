@@ -215,55 +215,55 @@ graph:
   - {from: tts_xtts, to: audio_embedding_xtts_apm_whisper, input: query_audio}
   - {from: audio_embedding_xtts_apm_whisper, output: audio_query_vectors, to: retrieval_xtts_apm_whisper, input: query_vectors}
   - {from: vector_db_apm_whisper, to: retrieval_xtts_apm_whisper, input: vector_index}
-  - {from: dataset_source, to: retrieval_xtts_apm_whisper, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_apm_whisper, input: query_text}
   - {from: dataset_source, to: retrieval_xtts_apm_whisper, input: reference_transcription}
   - {from: dataset_source, to: retrieval_xtts_apm_whisper, input: relevant_docs}
   - {from: tts_xtts, to: audio_embedding_xtts_apm_m4t, input: query_audio}
   - {from: audio_embedding_xtts_apm_m4t, output: audio_query_vectors, to: retrieval_xtts_apm_m4t, input: query_vectors}
   - {from: vector_db_apm_whisper, to: retrieval_xtts_apm_m4t, input: vector_index}
-  - {from: dataset_source, to: retrieval_xtts_apm_m4t, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_apm_m4t, input: query_text}
   - {from: dataset_source, to: retrieval_xtts_apm_m4t, input: reference_transcription}
   - {from: dataset_source, to: retrieval_xtts_apm_m4t, input: relevant_docs}
   - {from: tts_xtts, to: audio_embedding_xtts_eam, input: query_audio}
   - {from: audio_embedding_xtts_eam, output: audio_query_vectors, to: retrieval_xtts_eam, input: query_vectors}
   - {from: vector_db_eam, to: retrieval_xtts_eam, input: vector_index}
-  - {from: dataset_source, to: retrieval_xtts_eam, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_eam, input: query_text}
   - {from: dataset_source, to: retrieval_xtts_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_xtts_eam, input: relevant_docs}
   - {from: tts_m4t, to: audio_embedding_m4t_apm_whisper, input: query_audio}
   - {from: audio_embedding_m4t_apm_whisper, output: audio_query_vectors, to: retrieval_m4t_apm_whisper, input: query_vectors}
   - {from: vector_db_apm_whisper, to: retrieval_m4t_apm_whisper, input: vector_index}
-  - {from: dataset_source, to: retrieval_m4t_apm_whisper, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_apm_whisper, input: query_text}
   - {from: dataset_source, to: retrieval_m4t_apm_whisper, input: reference_transcription}
   - {from: dataset_source, to: retrieval_m4t_apm_whisper, input: relevant_docs}
   - {from: tts_m4t, to: audio_embedding_m4t_apm_m4t, input: query_audio}
   - {from: audio_embedding_m4t_apm_m4t, output: audio_query_vectors, to: retrieval_m4t_apm_m4t, input: query_vectors}
   - {from: vector_db_apm_whisper, to: retrieval_m4t_apm_m4t, input: vector_index}
-  - {from: dataset_source, to: retrieval_m4t_apm_m4t, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_apm_m4t, input: query_text}
   - {from: dataset_source, to: retrieval_m4t_apm_m4t, input: reference_transcription}
   - {from: dataset_source, to: retrieval_m4t_apm_m4t, input: relevant_docs}
   - {from: tts_m4t, to: audio_embedding_m4t_eam, input: query_audio}
   - {from: audio_embedding_m4t_eam, output: audio_query_vectors, to: retrieval_m4t_eam, input: query_vectors}
   - {from: vector_db_eam, to: retrieval_m4t_eam, input: vector_index}
-  - {from: dataset_source, to: retrieval_m4t_eam, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_eam, input: query_text}
   - {from: dataset_source, to: retrieval_m4t_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_m4t_eam, input: relevant_docs}
   - {from: tts_piper, to: audio_embedding_piper_apm_whisper, input: query_audio}
   - {from: audio_embedding_piper_apm_whisper, output: audio_query_vectors, to: retrieval_piper_apm_whisper, input: query_vectors}
   - {from: vector_db_apm_whisper, to: retrieval_piper_apm_whisper, input: vector_index}
-  - {from: dataset_source, to: retrieval_piper_apm_whisper, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_apm_whisper, input: query_text}
   - {from: dataset_source, to: retrieval_piper_apm_whisper, input: reference_transcription}
   - {from: dataset_source, to: retrieval_piper_apm_whisper, input: relevant_docs}
   - {from: tts_piper, to: audio_embedding_piper_apm_m4t, input: query_audio}
   - {from: audio_embedding_piper_apm_m4t, output: audio_query_vectors, to: retrieval_piper_apm_m4t, input: query_vectors}
   - {from: vector_db_apm_whisper, to: retrieval_piper_apm_m4t, input: vector_index}
-  - {from: dataset_source, to: retrieval_piper_apm_m4t, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_apm_m4t, input: query_text}
   - {from: dataset_source, to: retrieval_piper_apm_m4t, input: reference_transcription}
   - {from: dataset_source, to: retrieval_piper_apm_m4t, input: relevant_docs}
   - {from: tts_piper, to: audio_embedding_piper_eam, input: query_audio}
   - {from: audio_embedding_piper_eam, output: audio_query_vectors, to: retrieval_piper_eam, input: query_vectors}
   - {from: vector_db_eam, to: retrieval_piper_eam, input: vector_index}
-  - {from: dataset_source, to: retrieval_piper_eam, input: query_text}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_eam, input: query_text}
   - {from: dataset_source, to: retrieval_piper_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_piper_eam, input: relevant_docs}
 

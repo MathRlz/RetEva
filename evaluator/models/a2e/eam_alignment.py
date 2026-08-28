@@ -248,6 +248,8 @@ class _EamAlignmentCore:
     def encode_audio(self, features: torch.Tensor,
                      attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         features = features.to(self.device)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(self.device)
         with torch.no_grad():
             self.audio_backend.eval()
             self.audio_sa.eval()
