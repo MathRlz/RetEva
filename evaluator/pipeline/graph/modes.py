@@ -665,17 +665,23 @@ def _complete_with_plumbing_per_variant(
 ) -> list:
     """Append one private structural chain per variant-root node (mutates ``nodes``); returns
     the derived edges for all of them. A chain's nodes are wired via `emit_edges` scoped to
-    the nodes NOT exclusively owned by a DIFFERENT variant-root node — so one variant's
-    measured output can never bind into another's chain."""
+    ``rid``'s own ancestors plus whatever's downstream of it and NOT exclusively owned by a
+    DIFFERENT variant-root node — so one variant's measured output can never bind into
+    another's chain, AND a structural node with no adjacency of its own (transcription_metrics:
+    a plain, non-OneOf ``query_text`` input — see the template-assembly comment above) can't
+    silently bind to a SIBLING variant's ancestor of the same kind either."""
     forward: Dict[str, set] = {}
+    backward: Dict[str, set] = {}
     for e in edges:
         f, t = e.get("from"), e.get("to")
         if f and t:
             forward.setdefault(f, set()).add(t)
+            backward.setdefault(t, set()).add(f)
     # Which variant root(s) can reach each node, walking forward over the MEANINGFUL edges
     # only (the structural chains don't exist yet) — a node reachable from exactly one
     # variant id is that variant's exclusive property (its own rerank/answer_gen/judge/...).
     reach: Dict[str, set] = {}
+    forward_reach: Dict[str, set] = {}
     for rid in variant_ids:
         stack, seen = [rid], set()
         while stack:
@@ -685,10 +691,30 @@ def _complete_with_plumbing_per_variant(
             seen.add(cur)
             reach.setdefault(cur, set()).add(rid)
             stack.extend(forward.get(cur, ()))
+        forward_reach[rid] = seen
     owned = {
         rid: {n for n, rids in reach.items() if rids == {rid}}
         for rid in variant_ids
     }
+
+    def _ancestors(rid: str) -> set:
+        """Nodes that can reach ``rid`` walking BACKWARD over the meaningful edges — its
+        true upstream lineage (asr/tts/text_embedding/corpus_embedding/dataset_source/...).
+        Two variant roots can legitimately share a subset of these (e.g. two retrieval
+        variants over the same asr+tts but different text_embedding) — that sharing is
+        exactly why the old "not exclusively owned by someone else" scope was too broad: a
+        node shared by 2 of 18 variants was never exclusively owned by any ONE of them,
+        so it stayed in EVERY other variant's scope too, not just its real two owners."""
+        stack, seen = [rid], set()
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            stack.extend(backward.get(cur, ()))
+        seen.discard(rid)
+        return seen
+
     from .operators import node_kind
 
     id_to_spec = {_spec_id(n): n for n in nodes}
@@ -697,7 +723,11 @@ def _complete_with_plumbing_per_variant(
     derived_edges: list = []
     for rid in variant_ids:
         other_owned = set().union(*(owned[o] for o in variant_ids if o != rid))
-        scope_ids = all_ids - other_owned
+        # rid's own upstream lineage (correctly excludes a SIBLING variant's ancestor of
+        # the same kind, e.g. a different asr node) + rid itself + whatever's downstream
+        # of rid and not exclusively claimed by a DIFFERENT variant (the query-refine
+        # 2-hop case this scope was originally built for).
+        scope_ids = _ancestors(rid) | {rid} | (forward_reach.get(rid, set()) - other_owned)
         # A per-variant meaningful node the author already wrote (e.g. `answer_judge_dense`) may
         # already have its OWN binding to a structural producer by a SPECIFIC id (e.g.
         # `build_query_traces_dense`) that doesn't exist yet — reuse that exact id instead of

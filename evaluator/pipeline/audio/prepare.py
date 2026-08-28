@@ -51,16 +51,32 @@ def synthesize_missing_query_audio(
     if not questions:
         return 0
 
-    pending = [q for q in questions if not getattr(q, "audio_path", None)]
+    caching = cache_manager is not None and getattr(cache_manager, "enabled", False)
+    # cache_manager supplied but disabled = --no-cache: never reuse, always re-synthesize.
+    no_cache = cache_manager is not None and not caching
+
+    if cache_manager is not None:
+        # Don't trust a bare `question.audio_path` to mean "already resolved for THIS
+        # synth_config" — it can't tell "resolved by a SIBLING tts variant's different
+        # provider/voice" apart from "resolved for this one". In a multi-variant TTS-
+        # comparison graph (several `tts` nodes sharing one dataset), the shared Question
+        # objects carry only ONE audio_path slot: whichever tts node ran first set it, and
+        # every OTHER variant's naive "already has audio_path, skip" check then silently
+        # reused that first variant's audio instead of synthesizing its own — confirmed
+        # live: a 3-TTS-engine comparison came back with byte-identical downstream metrics
+        # for all 3 "different" engines. Route every question through the real,
+        # provider-discriminating check below instead (`_tts_cache_key` includes
+        # provider/voice/language/sample_rate, so a genuine cache hit/miss is per-config).
+        pending = list(questions)
+    else:
+        # No cache manager (a direct caller with no multi-variant coordination) — legacy:
+        # trust an already-set audio_path as-is.
+        pending = [q for q in questions if not getattr(q, "audio_path", None)]
     if not pending:
         return 0
 
     import dataclasses
     from evaluator.pipeline.audio.synthesis import AudioSynthesizer
-
-    caching = cache_manager is not None and getattr(cache_manager, "enabled", False)
-    # cache_manager supplied but disabled = --no-cache: never reuse, always re-synthesize.
-    no_cache = cache_manager is not None and not caching
 
     out_dir = Path(synth_config.output_dir) if synth_config.output_dir else None
     if out_dir is not None:

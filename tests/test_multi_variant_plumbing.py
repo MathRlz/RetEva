@@ -88,6 +88,84 @@ def test_each_chain_binds_only_to_its_own_retrieval_node():
     assert retrieved_producers == {"retrieval_whisper"}
 
 
+def _shared_subset_ancestor_spec():
+    """Two ASR nodes, each shared by exactly TWO of four retrieval variants (asr_a feeds
+    retrieval_a1/a2, asr_b feeds retrieval_b1/b2) — the shape that broke the OLD "not
+    exclusively owned by a DIFFERENT variant" scope: a node reachable from exactly 2 of 4
+    variant roots is never exclusively owned by any ONE of them, so it stayed in EVERY
+    other variant's scope too (not just its real two owners) — transcription_metrics then
+    auto-bound to BOTH asr nodes for every variant instead of just its own branch's."""
+    nodes = [
+        "dataset_source",
+        {"id": "corpus_embedding", "type": "corpus_embedding"},
+        {"id": "vector_db", "type": "vector_db"},
+        {"id": "asr_a", "type": "asr"},
+        {"id": "asr_b", "type": "asr"},
+        {"id": "text_embedding_a1", "type": "text_embedding"},
+        {"id": "text_embedding_a2", "type": "text_embedding"},
+        {"id": "text_embedding_b1", "type": "text_embedding"},
+        {"id": "text_embedding_b2", "type": "text_embedding"},
+        {"id": "retrieval_a1", "type": "retrieval"},
+        {"id": "retrieval_a2", "type": "retrieval"},
+        {"id": "retrieval_b1", "type": "retrieval"},
+        {"id": "retrieval_b2", "type": "retrieval"},
+    ]
+    edges = [
+        {"from": "dataset_source", "to": "corpus_embedding", "input": "corpus"},
+        {"from": "corpus_embedding", "to": "vector_db", "input": "corpus_vectors"},
+        {"from": "dataset_source", "to": "asr_a", "input": "query_audio"},
+        {"from": "dataset_source", "to": "asr_b", "input": "query_audio"},
+    ]
+    for asr_id, txt_ids in (("asr_a", ("a1", "a2")), ("asr_b", ("b1", "b2"))):
+        for suffix in txt_ids:
+            te_id = f"text_embedding_{suffix}"
+            r_id = f"retrieval_{suffix}"
+            edges += [
+                {"from": asr_id, "to": te_id, "input": "query_text"},
+                {"from": te_id, "output": "text_query_vectors", "to": r_id,
+                 "input": "query_vectors"},
+                {"from": "vector_db", "to": r_id, "input": "vector_index"},
+                {"from": asr_id, "to": r_id, "input": "query_text"},
+                {"from": "dataset_source", "to": r_id, "input": "reference_transcription"},
+            ]
+    return {"mode": "asr_text_retrieval", "nodes": nodes, "edges": edges}
+
+
+def test_transcription_metrics_binds_only_to_its_own_variants_asr():
+    """The bug this pins: asr_a is shared by retrieval_a1 AND retrieval_a2 (not all 4
+    variants, not exclusively 1) — the old ownership model never excluded it from
+    retrieval_b1/b2's scope either, so their transcription_metrics auto-bound to BOTH
+    asr_a and asr_b instead of just their own asr_b."""
+    graph = _build(_shared_subset_ancestor_spec())
+
+    def transcription_metrics_for(retrieval_id):
+        # transcription_metrics has no formal port linking it to a specific retrieval node
+        # directly — find it via the metrics node that DOES bind to this retrieval's
+        # `retrieved`, then follow that metrics node's own transcription_scores producer.
+        metrics = next(
+            n for n in graph.nodes
+            if node_kind(n.stage, n.params) == "metrics"
+            and ("retrieved", retrieval_id) in n.bindings
+        )
+        tm_id = next(p for art, p in metrics.bindings if art == "transcription_scores")
+        return next(n for n in graph.nodes if n.id == tm_id)
+
+    tm_a1 = transcription_metrics_for("retrieval_a1")
+    tm_a2 = transcription_metrics_for("retrieval_a2")
+    tm_b1 = transcription_metrics_for("retrieval_b1")
+
+    asr_producers_a1 = {p for art, p in tm_a1.bindings if art == "query_text"}
+    asr_producers_b1 = {p for art, p in tm_b1.bindings if art == "query_text"}
+    # dataset_source's own native query_text is a legitimate shared-global candidate (B2)
+    # and expected in every variant's set; the bug was picking up the SIBLING asr too.
+    assert "asr_a" in asr_producers_a1 and "asr_b" not in asr_producers_a1
+    assert "asr_b" in asr_producers_b1 and "asr_a" not in asr_producers_b1
+    # a1 and a2 legitimately share asr_a (same real ancestor) — sharing itself is fine,
+    # the bug was b1/b2 ALSO picking up asr_a despite having no relationship to it.
+    asr_producers_a2 = {p for art, p in tm_a2.bindings if art == "query_text"}
+    assert "asr_a" in asr_producers_a2 and "asr_b" not in asr_producers_a2
+
+
 def test_single_retrieval_node_graph_keeps_unsuffixed_ids():
     """Byte-parity: the common single-variant case must be untouched by the R5 fix — plain
     "metrics"/"finalize" ids, not "metrics_retrieval"/"finalize_retrieval"."""

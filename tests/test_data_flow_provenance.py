@@ -70,3 +70,20 @@ def test_get_artifact_older_producer_is_flagged():
     assert s.get_artifact("vector_index") == "idx_a"
     flow = s.data_flow["retrieval"]["vector_index"]
     assert flow == {"artifact": "vector_index", "producer": "vector_db_a", "fallback": True}
+
+
+def test_resolved_producer_reads_back_the_data_flow_winner():
+    # Used by the retrieval runtime space guard (resolve_query_space) to find the ACTUAL
+    # bound embedder for the current branch instead of the flat config default.
+    s = _state()
+    s.current_node = _embedding_node()
+    s.ctx.put("asr", "query_text", ["hi"])
+    s.ctx.put("query_optimization", "optimized_query_text", ["hi rewritten"])
+    s.input("query_text")  # resolves + records into data_flow
+    assert s.resolved_producer("query_text") == ("optimized_query_text", "query_optimization")
+
+
+def test_resolved_producer_is_none_before_the_key_is_resolved():
+    s = _state()
+    s.current_node = _embedding_node()
+    assert s.resolved_producer("query_text") == (None, None)
