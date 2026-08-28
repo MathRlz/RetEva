@@ -327,6 +327,7 @@ class EamAlignmentModel(AudioEmbeddingModel, TextEmbeddingModel):
     class Params:
         size: str = "v2-large"
         model_path: Optional[str] = None
+        config_path: Optional[str] = None
         num_heads: int = _DEFAULT_NUM_HEADS
         SIZES: ClassVar[Dict[str, str]] = {
             "v2-large": "facebook/seamless-m4t-v2-large",
@@ -335,23 +336,71 @@ class EamAlignmentModel(AudioEmbeddingModel, TextEmbeddingModel):
             "model_path": "Path to a trained side/eam AlignmentModel checkpoint (.pt file, "
                           "required). Use the SAME path on the eam_alignment audio_embedding "
                           "and text_embedding nodes to share one loaded model.",
+            "config_path": "Path to the training run's model.json (side/eam's "
+                           "AlignmentModelConfig, saved next to the checkpoint under "
+                           "runs/exp_*/config/). When set, num_heads comes from it and "
+                           "input_dim/embedding_dim are cross-checked against the "
+                           "checkpoint — the recommended way to guarantee the wrapper "
+                           "matches the training-time architecture.",
             "num_heads": "Attention head count the checkpoint was trained with (not "
                          "recoverable from the checkpoint's tensor shapes — a wrong value "
-                         "loads without error but computes silently-wrong attention).",
+                         "loads without error but computes silently-wrong attention). "
+                         "Ignored when config_path is set (model.json wins).",
         }
 
     def __init__(self,
                  audio_encoder_name: str = "facebook/seamless-m4t-v2-large",
                  model_path: Optional[str] = None,
+                 config_path: Optional[str] = None,
                  num_heads: int = _DEFAULT_NUM_HEADS):
         if not model_path:
             raise ValueError(
                 "eam_alignment requires model_path: a trained side/eam AlignmentModel "
                 "checkpoint (embedding_dim/input_dim are read from its weights)."
             )
+        expected_dims: Optional[Tuple[int, int]] = None
+        if config_path:
+            train_cfg = self._read_model_json(config_path)
+            cfg_heads = train_cfg.get("num_heads")
+            if cfg_heads is not None:
+                if num_heads != _DEFAULT_NUM_HEADS and int(cfg_heads) != int(num_heads):
+                    logger.warning(
+                        "eam_alignment: num_heads=%s from config param is overridden by "
+                        "%s's num_heads=%s (model.json is the training truth).",
+                        num_heads, config_path, cfg_heads,
+                    )
+                num_heads = int(cfg_heads)
+            if "input_dim" in train_cfg and "embedding_dim" in train_cfg:
+                expected_dims = (int(train_cfg["input_dim"]), int(train_cfg["embedding_dim"]))
         self.encoder_name = audio_encoder_name
         self.model_path = model_path
         self.core = _get_or_build_core(audio_encoder_name, model_path, num_heads=num_heads)
+        if expected_dims is not None:
+            got = (self.core.hidden_dim, self.core.embedding_dim)
+            if got != expected_dims:
+                raise ValueError(
+                    f"eam_alignment: {config_path} says (input_dim, embedding_dim)="
+                    f"{expected_dims} but checkpoint {model_path} has {got} — the model.json "
+                    f"does not belong to this checkpoint."
+                )
+
+    @staticmethod
+    def _read_model_json(config_path: str) -> dict:
+        import json
+
+        try:
+            with open(config_path) as fh:
+                cfg = json.load(fh)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"eam_alignment: could not read config_path {config_path!r} as side/eam's "
+                f"model.json (AlignmentModelConfig): {exc}"
+            ) from exc
+        if not isinstance(cfg, dict):
+            raise ValueError(
+                f"eam_alignment: {config_path} is not a JSON object (AlignmentModelConfig)."
+            )
+        return cfg
 
     def to(self, device: torch.device):
         self.core.to(device)

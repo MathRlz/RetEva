@@ -75,6 +75,7 @@ graph:
       model: eam_alignment
       size: v2-large
       model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
       embedding_space: eam_space
       device: "cuda:1"
   - id: vector_db_eam
@@ -87,6 +88,7 @@ graph:
       model: eam_alignment
       size: v2-large
       model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
       embedding_space: eam_space
       device: "cuda:1"
   - id: retrieval_eam
