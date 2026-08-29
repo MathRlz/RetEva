@@ -6,8 +6,7 @@ them; **metrics and aggregation are nodes too**. One `EvaluationConfig` YAML des
 whole graph, and one execution core runs it — from the CLI, the Python API, or the web UI.
 
 Built for the thesis domain: **voice query → ASR → correction → retrieval/RAG over medical
-corpora**, with safety-oriented metrics (CEER) and statistically honest branch comparisons
-(paired bootstrap CIs, Wilcoxon, Cohen's *d*, Benjamini–Hochberg FDR). The operator algebra
+corpora**, with per-query metrics and paired cross-branch comparisons. The operator algebra
 and registries are domain-general; end-to-end validation covers the spoken-clinical path.
 
 ```
@@ -118,7 +117,7 @@ schema reference: architecture doc §10.
 | `cache status\|clear` | inspect / clear the artifact cache |
 | `leaderboard` | top runs by metric across `leaderboard.sqlite` |
 | `sweep --base X --axes AX --out Y` | expand a base config's node params over an axes spec into a multi-variant graph config (see [Sweeping over node parameters](#sweeping-over-node-parameters)) |
-| `compare a.json b.json` \| `compare DIR_A DIR_B [DIR_C ...]` | offline significance comparison (BH-FDR, under-powered flags); two flat result files, or 2+ variant/run dirs (baseline-vs-each) with a resolved-config diff + per-query answer diffs |
+| `compare a.json b.json` \| `compare DIR_A DIR_B [DIR_C ...]` | offline comparison; two flat result files, or 2+ variant/run dirs (baseline-vs-each) with a resolved-config diff + per-query answer diffs |
 | `export R -f FMT -o OUT` | `csv`, `excel`, `latex`, `latex-compare`, `samples`, `metrics-table`, `traces`, `traces-parquet`, `provenance`, `mlflow`, `wandb` |
 | `branch-report R --out-dir D` | LaTeX branch table + delta plot + per-query failure CSV (`--plot-format pdf\|svg` for vector) |
 | `replay --config X --query-id Q` | re-run one query through the full graph with a per-node artifact trace |
@@ -195,12 +194,11 @@ evaluator run --config configs/campaign/pubmed200_3branch.yaml
 ```
 
 > **`trace_limit` does two jobs, and both bite.** It caps the dataset *and* gates
-> per-query trace building. Below n=20 no bootstrap CI is emitted at all, and a two-sided
-> Wilcoxon signed-rank test on n=5 cannot reach p<0.05 for *any* effect size — so the gate
-> configs' `trace_limit: 5` (their baselines depend on it) is for parity, never for results.
-> But `0` is not the campaign answer either: it means "whole dataset, **no traces**", which
-> silently disables failure analysis, the per-speaker breakdown, the per-query charts, and
-> the judge. Set it to the dataset size (200 for the campaign set).
+> per-query trace building. The gate configs' tiny `trace_limit: 5` (their baselines depend
+> on it) is for parity, never for results. But `0` is not the campaign answer either: it
+> means "whole dataset, **no traces**", which silently disables failure analysis, the
+> per-speaker breakdown, the per-query charts, and the judge. Set it to the dataset size
+> (200 for the campaign set).
 
 **[`configs/campaign/RUNBOOK.md`](configs/campaign/RUNBOOK.md)** is the entry point for the full
 campaign: the three arms (branch comparison, APM/cross-modal embedding variants, LLM arms), the
@@ -229,9 +227,8 @@ changed"), per-stage cache hit/miss, per-node/branch dropped item ids, LLM token
 `data_flow` (which producer actually fed each input port, with fired fallbacks flagged), and
 `optimization_fallbacks` when an LLM optimizer fell back to the original query.
 
-Cross-branch deltas carry `mean_delta`, bootstrap `ci`, Wilcoxon `p_value`, BH-FDR
-`p_value_fdr`, `cohens_d`, honest paired denominators (`n_paired` / `n_branch` / `n_baseline`)
-and a `drop_biased` flag when one-sided exclusions exceed 5%.
+Cross-branch deltas carry `mean_delta`, honest paired denominators (`n_paired` / `n_branch` /
+`n_baseline`) and a `drop_biased` flag when one-sided exclusions exceed 5%.
 
 ## Thesis / paper artifacts
 
@@ -267,8 +264,8 @@ python3 m1c_check.py configs/e2e_pubmed_qa_3branch.yaml baselines/m1c_baseline_3
 
 - **Unit suite** — fast and model-free (heavy models are mocked). Includes the golden-graph
   harness that freezes every repo config's built graph, an IR cross-check against `pytrec_eval`
-  to 1e-9 per query, CEER pins against a hand-computed table, and the expressiveness suite
-  proving every documented experiment shape is authorable.
+  to 1e-9 per query, and the expressiveness suite proving every documented experiment shape is
+  authorable.
 - **Parity gate** — runs real models and diffs the report against a committed baseline. A
   behavior-preserving change must print `PARITY OK` on both configs. The unit suite cannot see
   report-level drift; this is what catches it.
@@ -301,7 +298,7 @@ Worked examples: architecture doc §15.
 | `evaluator/models/` | five model registries + implementations (asr, t2e, a2e, tts, retrieval, llm) |
 | `evaluator/config/` | the dataclass config tree + node-centric→internal translation |
 | `evaluator/datasets/` | descriptors, ABCs, builtins, loaders |
-| `evaluator/metrics/` | per-query metric functions: IR (MRR/nDCG/recall), STT (WER/CER), clinical CEER, RAG, diagnostics |
+| `evaluator/metrics/` | per-query metric functions: IR (MRR/nDCG/recall), STT (WER/CER), RAG, diagnostics |
 | `evaluator/analysis/` | significance, Pareto, exports, error/branch reports |
 | `evaluator/judge/`, `llm_client/`, `tracking/` | LLM-as-judge trace scoring; shared OpenAI-compatible LLM client + cost accounting; MLflow / no-op trackers |
 | `evaluator/benchmarks/`, `core/` | hardware-fit model/retrieval benchmarking (off-DAG); shared core dataclasses |
@@ -309,19 +306,3 @@ Worked examples: architecture doc §15.
 | `evaluator/webapi/` | FastAPI routers + server-rendered UI + visual builder |
 | `configs/`, `configs/campaign/` | experiment configs; campaign configs + runbook |
 | `baselines/`, `m1c_check.py` | parity baselines and the gate |
-
-## Known limitations
-
-- **CEER is near-zero on PubMedQA** — those questions carry almost no drug/dose language. The
-  safety-metric story needs medication speech (admed / hani).
-- **LLM-backed nodes are reproducible per server, not absolutely.** `llm.seed` is forwarded and
-  `temperature: 0` is the default, but the server's model build/quantization is outside the
-  report. Local models (ASR, embedders) are seed-reproducible.
-- **The web UI's charts are browser-rendered** (light/dark, via the theme toggle) — fine for
-  exploration, not for print. Use `branch-report --plot-format pdf` for publication figures.
-- **Control flow that changes the graph shape at run time** (self-RAG-until-confident, adaptive
-  hop counts, agentic loops) is deliberately out of scope; the sanctioned escape hatch is a
-  composite node with a fixed artifact contract.
-- Image modality is designed, not built (architecture doc §13 tracks what is open). The C7
-  correctors (rule/kb/phonetic/clinical/llm) are built and measured (C7.7); the patient-context
-  grounding leg was cut from scope (`docs/archive/C7_GROUNDED_CORRECTION_PLAN.md`).
