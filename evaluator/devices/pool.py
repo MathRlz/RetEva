@@ -264,25 +264,31 @@ class GPUPool:
                 return True
         return False
 
-    def evict_lru_one(self) -> bool:
+    def evict_lru_one(self, prefer_device: Optional[str] = None) -> bool:
         """Evict the single least-recently-used GPU-resident model (via its registered
         eviction callback) and release its reservation. Returns True when a model was
         evicted — the runtime OOM recovery path (T7b) calls this repeatedly until the
-        failing forward pass fits or nothing evictable remains."""
+        failing forward pass fits or nothing evictable remains. ``prefer_device`` targets
+        models on that device first (the GPU the OOM happened on — freeing a different
+        GPU does nothing for the failing forward pass), falling back to any device."""
         with self._lock:
-            for model_type in list(self._lru.keys()):
-                callback = self._eviction_callbacks.get(model_type)
-                if callback is None:
-                    continue
-                device = self.get_device_for_model(model_type)
-                if device is None or device == "cpu":
-                    continue
-                logger.info(
-                    "gpu.evict model_type=%s device=%s reason=runtime-oom", model_type, device
-                )
-                callback()
-                self.release(model_type)
-                return True
+            passes = ([prefer_device, None] if prefer_device is not None else [None])
+            for wanted in passes:
+                for model_type in list(self._lru.keys()):
+                    callback = self._eviction_callbacks.get(model_type)
+                    if callback is None:
+                        continue
+                    device = self.get_device_for_model(model_type)
+                    if device is None or device == "cpu":
+                        continue
+                    if wanted is not None and device != wanted:
+                        continue
+                    logger.info(
+                        "gpu.evict model_type=%s device=%s reason=runtime-oom", model_type, device
+                    )
+                    callback()
+                    self.release(model_type)
+                    return True
         return False
 
     def get_usage(self) -> Dict[str, DeviceUsage]:

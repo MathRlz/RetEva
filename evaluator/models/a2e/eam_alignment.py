@@ -92,6 +92,13 @@ class _M4TTextBackend:
     ``side/eam/encoder/sonar_space/SonarSpaceEncoder.py`` — a misleading name, it wraps
     M4T's own text encoder, not SONAR)."""
 
+    #: Hard cap on tokenized length. M4T's tokenizer ships no ``model_max_length``, so
+    #: ``truncation=True`` alone is a NO-OP ("Default to no truncation") — a full-length
+    #: PubMed document then OOMs the encoder even at batch size 1 (attention is O(n²)).
+    #: 1024 stays within the encoder's positional range; side/eam trained on short
+    #: utterances anyway, so nothing meaningful is lost past this.
+    MAX_TOKENS = 1024
+
     def __init__(self, encoder_name: str):
         from transformers import SeamlessM4Tv2ForTextToSpeech, AutoProcessor
 
@@ -100,9 +107,14 @@ class _M4TTextBackend:
         self.encoder = SeamlessM4Tv2ForTextToSpeech.from_pretrained(encoder_name).get_encoder()
         for param in self.encoder.parameters():
             param.requires_grad = False
+        limit = getattr(getattr(self.encoder, "config", None), "max_position_embeddings", None)
+        self.max_length = min(int(limit), self.MAX_TOKENS) if limit else self.MAX_TOKENS
 
     def preprocess(self, texts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
-        inputs = self.processor(text=texts, return_tensors="pt", padding=True, truncation=True)
+        inputs = self.processor(
+            text=texts, return_tensors="pt", padding=True,
+            truncation=True, max_length=self.max_length,
+        )
         return inputs.input_ids, inputs.attention_mask
 
     def run_encoder(self, encoder, input_ids, attention_mask):
@@ -421,10 +433,18 @@ class EamAlignmentModel(AudioEmbeddingModel, TextEmbeddingModel):
         features, attention_mask = self.preprocess_audio(audio_list, sampling_rates)
         return self.encode_from_features(features, attention_mask)
 
+    #: Internal forward batch. ``encode`` receives the WHOLE uncached corpus in one call
+    #: (the pipeline delegates batching to the model); one padded forward over 1000 docs
+    #: is a guaranteed OOM, and padding-to-longest across a whole corpus wastes compute.
+    TEXT_BATCH_SIZE = 32
+
     # --- TextEmbeddingModel ---
     def encode(self, texts: List[str], show_progress: bool = False,
               desc: str = "Embedding") -> np.ndarray:
-        return self.core.encode_text(texts).cpu().numpy()
+        chunks = []
+        for i in range(0, len(texts), self.TEXT_BATCH_SIZE):
+            chunks.append(self.core.encode_text(texts[i:i + self.TEXT_BATCH_SIZE]).cpu().numpy())
+        return np.concatenate(chunks, axis=0) if chunks else np.empty((0, self.core.embedding_dim))
 
     def name(self) -> str:
         return (f"EamAlignmentModel - encoder:{self.encoder_name}"

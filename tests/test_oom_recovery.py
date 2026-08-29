@@ -159,6 +159,65 @@ def test_cpu_only_tts_provider_skips_pool():
     assert estimate_model_memory_gb("tts", "m4t") > 0
 
 
+def test_evict_lru_one_prefers_failing_device():
+    pool = _pool()
+    evicted = []
+    pool.allocate("on_gpu0", 1.0)  # most-free tie → cuda:0
+    pool.allocate("on_gpu1", 2.0)  # cuda:1 now freer? no — allocate picks most free ⇒ cuda:1
+    pool.register_eviction_callback("on_gpu0", lambda: evicted.append("on_gpu0"))
+    pool.register_eviction_callback("on_gpu1", lambda: evicted.append("on_gpu1"))
+    dev1 = pool.get_device_for_model("on_gpu1")
+    # Even though on_gpu0 is older in LRU, prefer_device targets the failing GPU first.
+    assert pool.evict_lru_one(prefer_device=dev1) is True
+    assert evicted == ["on_gpu1"]
+
+
+def test_minimal_batch_oom_prefers_device_from_message(monkeypatch):
+    pool = _pool()
+    evicted = []
+    pool.allocate("a", 1.0)
+    pool.allocate("b", 1.0)
+    pool.register_eviction_callback("a", lambda: evicted.append("a"))
+    pool.register_eviction_callback("b", lambda: evicted.append("b"))
+    dev_b = pool.get_device_for_model("b")
+    monkeypatch.setattr(pool_module, "_active_pool", pool)
+
+    calls = {"n": 0}
+
+    def fn(items):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError(
+                f"CUDA out of memory. Tried to allocate 608.00 MiB. "
+                f"GPU {dev_b.split(':')[1]} has a total capacity of 23.55 GiB"
+            )
+        return list(items)
+
+    assert run_with_oom_backoff(fn, [1]) == [1]
+    assert evicted == ["b"]  # the model on the OOMing GPU, not the LRU head
+
+
+def test_eam_encode_batches_internally():
+    from evaluator.models.a2e.eam_alignment import EamAlignmentModel
+    import numpy as _np
+    import torch as _torch
+
+    seen = []
+
+    class _FakeCore:
+        embedding_dim = 512
+
+        def encode_text(self, texts):
+            seen.append(len(texts))
+            return _torch.zeros(len(texts), 512)
+
+    stub = SimpleNamespace(core=_FakeCore(), TEXT_BATCH_SIZE=EamAlignmentModel.TEXT_BATCH_SIZE)
+    out = EamAlignmentModel.encode(stub, [f"doc {i}" for i in range(70)])
+    assert out.shape == (70, 512)
+    assert seen == [32, 32, 6]  # chunked, not one 70-doc forward
+    assert EamAlignmentModel.encode(stub, []).shape == (0, 512)
+
+
 def test_on_use_soft_cpu_policy_is_valid():
     from evaluator.config.service_runtime import ServiceRuntimeConfig
 

@@ -376,13 +376,19 @@ def _retry_after_evictions(
     model itself sits at the LRU tail (touched at build), so parked idle models go first;
     if it is the last one standing its own eviction moves it to CPU and the retry runs
     there — slow, but the run survives."""
+    import re
+
     from .pool import get_active_pool
 
     pool = get_active_pool()
     if pool is None:
         raise original
+    # Torch's OOM message names the device ("GPU 1 has a total capacity of ..."); freeing
+    # a DIFFERENT GPU does nothing for the failing forward pass, so target that one first.
+    m = re.search(r"GPU (\d+)", str(original))
+    prefer_device = f"cuda:{m.group(1)}" if m else None
     evictions = 0
-    while pool.evict_lru_one():
+    while pool.evict_lru_one(prefer_device=prefer_device):
         evictions += 1
         get_memory_manager().clear_gpu_cache()
         logger.warning(
