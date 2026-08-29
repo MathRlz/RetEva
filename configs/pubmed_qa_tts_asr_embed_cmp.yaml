@@ -38,10 +38,11 @@ experiment:
   name: pubmed_qa_tts_asr_embed_cmp
   output_dir: evaluation_results
 
+# PUBMED_QA_DATASET -- dir with questions.json + corpus.json (export before running).
 dataset:
   id: pubmed_qa
-  questions: questions.json
-  corpus: corpus.json
+  questions: ${PUBMED_QA_DATASET}/questions.json
+  corpus: ${PUBMED_QA_DATASET}/corpus.json
   trace_limit: 0
   batch_size: 8
 

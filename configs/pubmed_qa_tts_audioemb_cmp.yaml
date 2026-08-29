@@ -18,7 +18,8 @@
 # written here; retrieval_metrics/metrics/finalize are auto-appended per retrieval variant
 # (complete_structural_plumbing) -- do not add them by hand.
 #
-# Checkpoints (fill in / export before running):
+# Env vars (export before running):
+#   PUBMED_QA_DATASET -- dir with questions.json + corpus.json
 #   APM_CHECKPOINT_DIR -- dir with apm_whisper_jina_admed_voice.pt (jina-space APM)
 #   EAM_CHECKPOINT_DIR -- dir with eam_alignment.pt (side/eam AlignmentModel state_dict)
 #                         + model.json (the run's AlignmentModelConfig; supplies num_heads,
@@ -31,8 +32,8 @@ experiment:
 
 dataset:
   id: pubmed_qa
-  questions: questions.json
-  corpus: corpus.json
+  questions: ${PUBMED_QA_DATASET}/questions.json
+  corpus: ${PUBMED_QA_DATASET}/corpus.json
   trace_limit: 0
   batch_size: 8
 

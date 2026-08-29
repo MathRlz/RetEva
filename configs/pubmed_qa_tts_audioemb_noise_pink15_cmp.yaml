@@ -1,9 +1,10 @@
 # TTS x audio-embedding comparison on pubmed_qa — DISTORTED-AUDIO variant.
 #
 # Same 3x3 grid as pubmed_qa_tts_audioemb_cmp, but every synthesized clip passes through
-# an augment_audio node (white noise @ SNR 15 dB + speed perturbation, seeded per item,
-# n_variants=1 so query ids stay 1:1 comparable with the clean run) BEFORE the audio
-# embedder. Measures robustness of each cross-modal embedder to audio degradation.
+# an augment_audio node (pink noise @ SNR 15 dB, NO speed perturbation -- noise-color comparison vs white/brown @ 15 dB;
+# seeded per item, n_variants=1 so query ids stay 1:1 comparable with the clean and
+# noisy runs) BEFORE the audio embedder. Part of the noise-robustness experiment set
+# around pubmed_qa_tts_audioemb_noisy_cmp (15 dB white + speed).
 #
 # Pipeline per leaf: dataset_source.query_text -> tts -> audio_embedding -> retrieval.
 # The query never goes back through text: the synthesized audio is embedded DIRECTLY by a
@@ -32,7 +33,7 @@
 #
 # TTS on GPU: xtts_v2/m4t on cuda:0; piper is a CPU-only external binary.
 experiment:
-  name: pubmed_qa_tts_audioemb_noisy_cmp
+  name: pubmed_qa_tts_audioemb_noise_pink15_cmp
   output_dir: evaluation_results
 
 dataset:
@@ -55,7 +56,7 @@ graph:
       language: en
       sample_rate: 16000
       seed: 42
-      output_dir: evaluation_results/pubmed_qa_tts_audioemb_noisy_cmp/xtts/audio
+      output_dir: evaluation_results/pubmed_qa_tts_audioemb_noise_pink15_cmp/xtts/audio
       device: "cuda:0"
   - id: tts_m4t
     type: tts
@@ -64,7 +65,7 @@ graph:
       language: en
       sample_rate: 16000
       seed: 42
-      output_dir: evaluation_results/pubmed_qa_tts_audioemb_noisy_cmp/m4t/audio
+      output_dir: evaluation_results/pubmed_qa_tts_audioemb_noise_pink15_cmp/m4t/audio
       device: "cuda:0"
   - id: tts_piper
     type: tts
@@ -73,30 +74,30 @@ graph:
       voice: en_US-lessac-medium
       sample_rate: 16000
       seed: 42
-      output_dir: evaluation_results/pubmed_qa_tts_audioemb_noisy_cmp/piper/audio
+      output_dir: evaluation_results/pubmed_qa_tts_audioemb_noise_pink15_cmp/piper/audio
   - id: augment_xtts
     type: augment_audio
     params:
       add_noise: True
-      noise_type: white
+      noise_type: pink
       snr_db: 15.0
-      speed_perturbation: True
+      speed_perturbation: False
       n_variants: 1
   - id: augment_m4t
     type: augment_audio
     params:
       add_noise: True
-      noise_type: white
+      noise_type: pink
       snr_db: 15.0
-      speed_perturbation: True
+      speed_perturbation: False
       n_variants: 1
   - id: augment_piper
     type: augment_audio
     params:
       add_noise: True
-      noise_type: white
+      noise_type: pink
       snr_db: 15.0
-      speed_perturbation: True
+      speed_perturbation: False
       n_variants: 1
   - id: corpus_embedding_apm_whisper
     type: corpus_embedding
