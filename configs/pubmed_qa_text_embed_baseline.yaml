@@ -120,6 +120,20 @@ graph:
   - {from: dataset_source, to: retrieval_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_eam, input: relevant_docs}
 
+# Model lifecycle: lazy load, park models warm in host RAM after last use (fast
+# CPU->GPU reuse across the many branches), memory-aware GPU placement with LRU
+# eviction instead of OOM. Per-node `device:` params become hints under device_pool.
+service_runtime:
+  startup_mode: lazy
+  offload_policy: on_finish_soft_cpu
+  soft_offload_max_warm: 3
+
+device_pool:
+  available_devices: ["auto"]
+  memory_buffer_percent: 0.1
+  allow_gpu_eviction: true
+  allow_cpu_fallback: true
+
 runtime:
   cache:
     enabled: true

@@ -91,13 +91,16 @@ def _run_provenance(s: "Any", dropped_by_branch: Optional[Dict] = None):
     return prov
 
 
-def _resolved_name(prov: Optional[Dict[str, Any]], fallback_pipeline: "Any") -> str:
+def _resolved_name(prov: Optional[Dict[str, Any]], fallback_pipeline: "Any") -> Optional[str]:
     """``resolved`` off a per-branch provenance artifact when one was published (a node that
     overrode its model for this branch), else the pipeline's own name (correct as-is for a
-    node using the shared/global pipeline, which is never transiently swapped)."""
+    node using the shared/global pipeline, which is never transiently swapped). Some configs
+    run a stage with NO shared/global pipeline at all — every branch supplies its own
+    override — so ``fallback_pipeline`` can be ``None`` here even though the stage genuinely
+    ran; ``None`` back means the caller has nothing to record."""
     if prov and prov.get("resolved"):
         return prov["resolved"]
-    return fallback_pipeline.model.name()
+    return fallback_pipeline.model.name() if fallback_pipeline is not None else None
 
 
 def _record_model_info(results: "Any", s: "Any") -> None:
@@ -107,30 +110,36 @@ def _record_model_info(results: "Any", s: "Any") -> None:
     ``audio_emb_retrieval`` (audio query + text corpus), which previously recorded nothing.
 
     A per-node model override (``params.model``/``params.name``) only lives on
-    ``s.asr_pipeline`` / ``s.text_embedding_pipeline`` for the duration of that node's own
-    handler (``_node_pipeline`` reverts it on exit) — this report node runs after every
-    branch's nodes, so reading those attributes directly here always sees the last-restored
-    (usually the flat global default) pipeline, not this branch's own. `sibling_artifact`
-    recovers the branch-scoped identity that `_node_pipeline` published alongside its node's
-    regular output; a node that never overrode its model has nothing published, so this
-    falls back to the (already-correct, never-swapped) pipeline attribute unchanged."""
-    if s.asr_pipeline is not None:
-        asr_prov = s.sibling_artifact("query_text", "asr_model_provenance")
-        results["asr"] = _resolved_name(asr_prov, s.asr_pipeline)
-    if s.audio_embedding_pipeline is not None:
-        audio_prov = s.sibling_artifact("retrieved", "query_audio_embedder_model_provenance")
-        results["audio_embedder"] = _resolved_name(audio_prov, s.audio_embedding_pipeline)
-    if s.text_embedding_pipeline is not None:
-        # asr_text: the text embedder IS the query embedder → 'embedder'; otherwise it
-        # embeds the corpus → 'text_embedder' (back-compat key names). Only the query role
-        # is recoverable via `retrieved` (the corpus-embedding node doesn't feed it) — a
-        # corpus text_embedder keeps the old (correct, unswapped) read.
-        key = "embedder" if is_asr_text_retrieval(s) else "text_embedder"
-        text_prov = (
-            s.sibling_artifact("retrieved", "query_text_embedder_model_provenance")
-            if key == "embedder" else None
-        )
-        results[key] = _resolved_name(text_prov, s.text_embedding_pipeline)
+    ``s.asr_pipeline`` / ``s.text_embedding_pipeline`` / ``s.audio_embedding_pipeline`` for
+    the duration of that node's own handler (``_node_pipeline`` reverts it on exit) — this
+    report node runs after every branch's nodes, so reading those attributes directly here
+    always sees the last-restored value (the flat global default, or ``None`` for a stage
+    with no global default at all — a config where every branch supplies its own override
+    and the field would otherwise go missing entirely), not this branch's own.
+    `sibling_artifact` recovers the branch-scoped identity that `_node_pipeline` published
+    alongside its node's regular output; a node that never overrode its model has nothing
+    published, so this falls back to the (already-correct, never-swapped) pipeline attribute
+    unchanged — hence the lookup always runs first, the pipeline attribute only as fallback."""
+    asr_prov = s.sibling_artifact("query_text", "asr_model_provenance")
+    asr_name = _resolved_name(asr_prov, s.asr_pipeline)
+    if asr_name:
+        results["asr"] = asr_name
+
+    audio_prov = s.sibling_artifact("retrieved", "query_audio_embedder_model_provenance")
+    audio_name = _resolved_name(audio_prov, s.audio_embedding_pipeline)
+    if audio_name:
+        results["audio_embedder"] = audio_name
+
+    # asr_text / plain text_retrieval: the text embedder IS the query embedder →
+    # 'embedder'; audio_emb_retrieval: it embeds the corpus, audio is the query →
+    # 'text_embedder' (back-compat key names). `retrieved`'s sibling is always safe to try
+    # regardless of key: it resolves to whichever node actually fed retrieval's query
+    # vectors, so in the corpus-role case it simply finds nothing (the corpus-embedding node
+    # doesn't feed `retrieved`) and falls through to the old read.
+    text_prov = s.sibling_artifact("retrieved", "query_text_embedder_model_provenance")
+    text_name = _resolved_name(text_prov, s.text_embedding_pipeline)
+    if text_name:
+        results["embedder" if is_asr_text_retrieval(s) else "text_embedder"] = text_name
     # The embedding-alignment artifact is published only by the fusion node (audio_text);
     # its presence is the signal — no need to consult the mode.
     alignment = _ctx_first(s, "embedding_alignment")
@@ -153,49 +162,57 @@ def _build_provenance(s: "Any") -> Dict[str, Any]:
 
     m = getattr(s.config, "model", None) if s.config is not None else None
     prov: Dict[str, Any] = {}
-    if m is None:
-        return prov
 
     def _clean(d: Dict[str, Any]) -> Dict[str, Any]:
         return {k: v for k, v in d.items() if v not in (None, "", {}, [])}
+
+    def _flat_block(pipeline: "Any", fields: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """The run's flat global config block for a pipeline with no per-branch override.
+        ``None`` when there's nothing to report: no run-level model config (``m``), or this
+        stage has no shared/global pipeline at all (every branch supplies its own — see
+        `_resolved_name`)."""
+        if m is None or pipeline is None:
+            return None
+        d = {key: getattr(m, attr) for key, attr in fields.items() if key != "params"}
+        d["params"] = dict(getattr(m, fields["params"]) or {})
+        d["resolved"] = pipeline.model.name()
+        return _clean(d)
 
     # A per-node override (`params.model`/`params.name`) publishes its OWN effective
     # type/size/name/params/resolved as a branch-scoped artifact (see `_node_pipeline` /
     # `_publish_node_model_provenance`) — reachable here via `sibling_artifact` — because
     # `m` above is the run's flat global config and can't see it; a node with no override
     # has nothing published, so this falls back to `m` unchanged (already correct there,
-    # since no override means the branch used the flat default anyway).
-    if s.asr_pipeline is not None:
-        asr_prov = s.sibling_artifact("query_text", "asr_model_provenance")
-        prov["asr"] = asr_prov or _clean({
-            "type": m.asr_model_type, "size": m.asr_size, "name": m.asr_model_name,
-            "adapter": m.asr_adapter_path, "params": dict(m.asr_params or {}),
-            "resolved": s.asr_pipeline.model.name(),
-        })
-    if s.text_embedding_pipeline is not None:
-        text_prov = (
-            s.sibling_artifact("retrieved", "query_text_embedder_model_provenance")
-            if is_asr_text_retrieval(s) else None
-        )
-        prov["text_emb"] = text_prov or _clean({
-            "type": m.text_emb_model_type, "size": m.text_emb_size,
-            "name": m.text_emb_model_name,
-            "adapter": m.text_emb_adapter_path, "model_path": m.text_emb_model_path,
-            "embedding_space": m.text_emb_embedding_space,
-            "params": dict(m.text_emb_params or {}),
-            "resolved": s.text_embedding_pipeline.model.name(),
-        })
-    if s.audio_embedding_pipeline is not None:
-        audio_prov = s.sibling_artifact("retrieved", "query_audio_embedder_model_provenance")
-        prov["audio_emb"] = audio_prov or _clean({
-            "type": m.audio_emb_model_type, "size": m.audio_emb_size,
-            "name": m.audio_emb_model_name,
-            "dim": m.audio_emb_dim,
-            "model_path": m.audio_emb_model_path, "adapter": m.audio_emb_adapter_path,
-            "embedding_space": m.audio_emb_embedding_space,
-            "params": dict(m.audio_emb_params or {}),
-            "resolved": s.audio_embedding_pipeline.model.name(),
-        })
+    # since no override means the branch used the flat default anyway — or, for a stage
+    # with no global default at all, correctly reports nothing rather than crashing).
+    asr_prov = s.sibling_artifact("query_text", "asr_model_provenance")
+    asr_block = asr_prov or _flat_block(s.asr_pipeline, {
+        "type": "asr_model_type", "size": "asr_size", "name": "asr_model_name",
+        "adapter": "asr_adapter_path", "params": "asr_params",
+    })
+    if asr_block:
+        prov["asr"] = asr_block
+
+    # Safe regardless of role (see `_record_model_info`): resolves to nothing when
+    # text_embedding_pipeline is acting as the corpus embedder, not retrieval's query.
+    text_prov = s.sibling_artifact("retrieved", "query_text_embedder_model_provenance")
+    text_block = text_prov or _flat_block(s.text_embedding_pipeline, {
+        "type": "text_emb_model_type", "size": "text_emb_size", "name": "text_emb_model_name",
+        "adapter": "text_emb_adapter_path", "model_path": "text_emb_model_path",
+        "embedding_space": "text_emb_embedding_space", "params": "text_emb_params",
+    })
+    if text_block:
+        prov["text_emb"] = text_block
+
+    audio_prov = s.sibling_artifact("retrieved", "query_audio_embedder_model_provenance")
+    audio_block = audio_prov or _flat_block(s.audio_embedding_pipeline, {
+        "type": "audio_emb_model_type", "size": "audio_emb_size", "name": "audio_emb_model_name",
+        "dim": "audio_emb_dim", "model_path": "audio_emb_model_path",
+        "adapter": "audio_emb_adapter_path", "embedding_space": "audio_emb_embedding_space",
+        "params": "audio_emb_params",
+    })
+    if audio_block:
+        prov["audio_emb"] = audio_block
     vdb = getattr(s.config, "vector_db", None)
     if vdb is not None:
         reranker = (
