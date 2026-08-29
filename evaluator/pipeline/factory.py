@@ -274,33 +274,74 @@ class _ModelBuilders:
         self.service_provider = service_provider
         self.device_pool = device_pool
 
-    def _get_device(self, model_category: str, model_type: str, config_device: str) -> str:
+    #: mcfg field prefix per category — pool-key fields resolve through it.
+    _MCFG_PREFIX = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding": "audio_emb"}
+
+    def _pool_key(self, model_category: str, model_type: Optional[str]) -> str:
+        """Unique pool identity for the model this build resolves to. The category alone
+        collides as soon as a graph builds two models of one family (jina_v4 + eam are both
+        'text_embedding'): the second allocate overwrote the first's reservation entry,
+        eviction callback, and LRU slot, so the pool could neither account for nor evict
+        them. Keyed ``category:type[:name][:path][:size...]`` instead — colon-segmented so
+        ManualStrategy overrides can still match on the ``category`` or ``category:type``
+        prefix. Two nodes resolving to the same model produce the same key and share one
+        reservation (allocate is idempotent per key), mirroring the service provider's
+        instance sharing."""
+        parts = [model_category, str(model_type)]
+        prefix = self._MCFG_PREFIX.get(model_category)
+        if prefix is not None:
+            for suffix in ("model_name", "model_path", "adapter_path", "size",
+                           "encoder_type", "encoder_size"):
+                value = getattr(self.mcfg, f"{prefix}_{suffix}", None)
+                if value:
+                    parts.append(str(value))
+        return ":".join(parts)
+
+    def _get_device(
+        self, model_category: str, model_type: str, config_device: str,
+        pool_key: Optional[str] = None,
+    ) -> str:
         if self.device_pool is not None and model_type is not None:
             from ..config import estimate_model_memory_gb
 
             memory_gb = estimate_model_memory_gb(model_category, model_type)
-            return self.device_pool.allocate(model_category, memory_gb)
+            return self.device_pool.allocate(pool_key or model_category, memory_gb)
         return _clamp_to_available_device(config_device)
 
     def _build(self, model_category, model_type, config_device, from_provider, from_factory):
         """Resolve device then build via the shared service provider when present, else the
         standalone factory."""
-        dev = self._get_device(model_category, model_type, config_device)
+        pool_key = self._pool_key(model_category, model_type)
+        dev = self._get_device(model_category, model_type, config_device, pool_key)
         logger.info(
             "build %s model: type=%s device=%s via=%s",
             model_category, model_type, dev,
             "provider" if self.service_provider is not None else "factory",
         )
         if self.service_provider is not None:
-            return from_provider(dev)
-        model = from_factory(dev)
-        if self.device_pool is not None:
+            model = from_provider(dev)
+        else:
+            model = from_factory(dev)
+        if self.device_pool is not None and model_type is not None:
             import torch as _torch
+            if dev.startswith("cuda"):
+                # A provider-cached instance may sit on CPU from an earlier eviction —
+                # its allocation was released then, so this build's allocate re-reserved
+                # the device and the move re-promotes it. Same-device moves are no-ops.
+                to_method = getattr(model, "to", None)
+                if callable(to_method):
+                    to_method(_torch.device(dev))
             self.device_pool.register_eviction_callback(
-                model_category,
+                pool_key,
                 lambda m=model: m.to(_torch.device("cpu")),
             )
-            self.device_pool.touch(model_category)
+            self.device_pool.touch(pool_key)
+            try:
+                # The offload paths (aggressive node release, level-boundary release)
+                # return the reservation through this reverse mapping.
+                model._gpu_pool_key = pool_key
+            except Exception:  # noqa: BLE001 - slotted/frozen models just skip it
+                pass
         return model
 
     def asr(self):

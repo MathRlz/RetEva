@@ -28,15 +28,23 @@ class MemoryAwareStrategy:
 
 
 class ManualStrategy:
-    """User-specified model_type → device mapping; unmapped models fall back to the pool."""
+    """User-specified model_type → device mapping; unmapped models fall back to the pool.
+
+    Pool keys are colon-segmented (``category:type[:name][:path]...``); an override may
+    name the full key, the ``category:type`` pair, or just the ``category`` — matched
+    most-specific first, so ``text_embedding: cuda:1`` still pins every text embedder
+    while ``text_embedding:jina_v4: cuda:0`` pins only jina."""
 
     def __init__(self, overrides: Dict[str, str]):
         self._overrides = overrides
 
     def allocate(self, pool: "GPUPool", model_type: str, memory_gb: float) -> Optional[str]:
-        if model_type in self._overrides:
-            # An override device outside the pool is honored as-is (deliberate escape hatch).
-            return self._overrides[model_type]
+        # An override device outside the pool is honored as-is (deliberate escape hatch).
+        segments = model_type.split(":")
+        for length in range(len(segments), 0, -1):
+            candidate = ":".join(segments[:length])
+            if candidate in self._overrides:
+                return self._overrides[candidate]
         return None
 
 

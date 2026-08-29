@@ -23,6 +23,7 @@ def synthesize_missing_query_audio(
     *,
     log: Optional[logging.Logger] = None,
     cache_manager: Any = None,
+    device_pool: Any = None,
 ) -> int:
     """Synthesize audio for questions that lack an ``audio_path``.
 
@@ -43,6 +44,11 @@ def synthesize_missing_query_audio(
         synth_config: AudioSynthesisConfig (provider, voice, output_dir, ...).
         log: Optional logger; falls back to module logger.
         cache_manager: Optional shared CacheManager for synthesized-audio caching.
+        device_pool: Optional GPUPool. A GPU-capable provider's device is allocated
+            through it (reservation + LRU eviction of parked models) instead of taken
+            verbatim from ``synth_config.device``, and released when synthesis ends —
+            the TTS model is freed here, unlike the long-lived embedders. Falls back
+            to the run's active pool; no pool → the config device is used as before.
 
     Returns:
         Number of questions whose audio is now available (synthesized + reused).
@@ -127,6 +133,30 @@ def synthesize_missing_query_audio(
         else synth_config
     )
 
+    # Route the TTS model's device through the GPU pool, so its footprint is visible to
+    # the pool's packing (embedders no longer land on a GPU already holding a 10GB TTS
+    # model) and a packed GPU can shed parked models to make room for it. Providers with
+    # a 0.0 estimate (piper: CPU-only external binary) skip the pool entirely.
+    pool = device_pool
+    if pool is None:
+        from evaluator.devices.pool import get_active_pool
+
+        pool = get_active_pool()
+    tts_pool_key: Optional[str] = None
+    if pool is not None:
+        from evaluator.config import estimate_model_memory_gb
+
+        memory_gb = estimate_model_memory_gb("tts", synth_config.provider)
+        if memory_gb > 0:
+            tts_pool_key = f"tts:{synth_config.provider}"
+            device = pool.allocate(tts_pool_key, memory_gb)
+            if device != getattr(base_cfg, "device", None):
+                log.info(
+                    "TTS provider '%s': pool allocated %s (config device %s)",
+                    synth_config.provider, device, getattr(base_cfg, "device", None),
+                )
+                base_cfg = dataclasses.replace(base_cfg, device=device)
+
     # One synthesizer per language (a question's own ``language`` wins over the default).
     synthesizers: dict = {}
 
@@ -143,45 +173,50 @@ def synthesize_missing_query_audio(
     done = 0
     failed = 0
     first_error: Optional[str] = None
-    for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=progress_disabled()):
-        text = getattr(question, "question_text", None)
-        if not text:
-            log.warning(
-                "Question %s has no text, skipping synthesis",
-                getattr(question, "question_id", "?"),
-            )
-            continue
-        lang = getattr(question, "language", None) or default_lang
-        if caching:
-            key = _tts_cache_key(synth_config, question)
-            output_path: Optional[str] = str(cache_manager.synthesized_audio_path(key))
-        elif out_dir is not None:
-            output_path = str(out_dir / f"{question.question_id}.wav")
-        else:
-            output_path = None
-        try:
-            _get_synth(lang).synthesize(text, output_path=output_path)
-            question.audio_path = output_path
-            if caching and output_path:
-                cache_manager.register_synthesized_audio(key, Path(output_path))
-            done += 1
-        except Exception as e:  # attempt every clip first, then fail the node (see below)
-            failed += 1
-            if first_error is None:
-                first_error = f"{type(e).__name__}: {e}"
-            log.error(
-                "Failed to synthesize audio for question %s: %s",
-                getattr(question, "question_id", "?"),
-                e,
-            )
+    try:
+        for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=progress_disabled()):
+            text = getattr(question, "question_text", None)
+            if not text:
+                log.warning(
+                    "Question %s has no text, skipping synthesis",
+                    getattr(question, "question_id", "?"),
+                )
+                continue
+            lang = getattr(question, "language", None) or default_lang
+            if caching:
+                key = _tts_cache_key(synth_config, question)
+                output_path: Optional[str] = str(cache_manager.synthesized_audio_path(key))
+            elif out_dir is not None:
+                output_path = str(out_dir / f"{question.question_id}.wav")
+            else:
+                output_path = None
+            try:
+                _get_synth(lang).synthesize(text, output_path=output_path)
+                question.audio_path = output_path
+                if caching and output_path:
+                    cache_manager.register_synthesized_audio(key, Path(output_path))
+                done += 1
+            except Exception as e:  # attempt every clip first, then fail the node (see below)
+                failed += 1
+                if first_error is None:
+                    first_error = f"{type(e).__name__}: {e}"
+                log.error(
+                    "Failed to synthesize audio for question %s: %s",
+                    getattr(question, "question_id", "?"),
+                    e,
+                )
 
-    for synth in synthesizers.values():
-        if hasattr(synth, "log_cache_stats"):
-            synth.log_cache_stats()
-
-    # Release the TTS model(s) before the caller embeds (co-residence has caused crashes).
-    synthesizers.clear()
-    _release_torch_memory()
+        for synth in synthesizers.values():
+            if hasattr(synth, "log_cache_stats"):
+                synth.log_cache_stats()
+    finally:
+        # Release the TTS model(s) before the caller embeds (co-residence has caused
+        # crashes), and return the pool reservation — the model is genuinely freed here,
+        # so the memory really is available again.
+        synthesizers.clear()
+        _release_torch_memory()
+        if pool is not None and tts_pool_key is not None:
+            pool.release(tts_pool_key)
 
     if failed:
         # Fail the TTS node HERE, at the actual error, instead of "succeeding" with holes:

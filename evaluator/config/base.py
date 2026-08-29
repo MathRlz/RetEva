@@ -26,25 +26,39 @@ def validate_device_string(device: str) -> None:
         )
 
 
-# Model size estimates in GB (approximate VRAM requirements)
+# Model size estimates in GB (approximate VRAM requirements: weights at their load dtype
+# plus inference activation headroom). Under-estimating packs too many models on one GPU
+# and the run dies with a runtime OOM the pool never saw coming — when in doubt, round UP:
+# an over-estimate merely spreads models across devices or parks one on CPU.
 MODEL_MEMORY_ESTIMATES_GB: Dict[str, Dict[str, float]] = {
     "asr": {
-        "whisper": 2.5,  # whisper-medium
+        "whisper": 3.5,  # whisper-large fp16 + decode activations (medium fits in less)
         "wav2vec2": 1.5,
-        "default": 2.0,
+        "default": 2.5,
     },
     "text_embedding": {
-        "labse": 1.0,
-        "jina_v4": 1.5,
-        "bge_m3": 2.0,
+        "labse": 2.0,
+        "jina_v4": 9.0,  # 3.8B backbone + long-document activation peaks
+        "bge_m3": 2.5,
         "nemotron": 3.0,
-        "clip": 1.0,
-        "default": 1.5,
+        "clip": 1.5,
+        "eam_alignment": 6.0,  # SeamlessM4T-v2 text encoder fp32 + projection head
+        "default": 3.0,
     },
     "audio_embedding": {
-        "attention_pool": 1.5,
+        "attention_pool": 4.0,  # whisper-large / M4T speech encoder fp32 + APM head
         "clap_style": 2.0,
-        "default": 1.5,
+        "eam_alignment": 6.0,  # SeamlessM4T-v2 speech encoder fp32 + projection head
+        "default": 3.0,
+    },
+    # TTS providers (keyed by provider name). A 0.0 entry marks a CPU-only provider the
+    # pool should not reserve GPU memory for (piper runs as an external subprocess binary).
+    "tts": {
+        "xtts_v2": 3.0,  # Coqui XTTS-v2 fp32 + vocoder
+        "m4t": 10.0,  # full SeamlessM4T-v2-large fp32 (encoder+decoder+t2u+vocoder)
+        "mms": 1.0,  # VITS-style, small
+        "piper": 0.0,
+        "default": 3.0,
     },
 }
 

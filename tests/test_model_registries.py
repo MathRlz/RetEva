@@ -87,9 +87,12 @@ def test_memory_estimate_warns_on_unknown_model():
     lg.addHandler(handler)
     lg.setLevel(logging.WARNING)
     try:
-        assert estimate_model_memory_gb("text_embedding", "labse") == 1.0  # known → silent
+        from evaluator.config.base import MODEL_MEMORY_ESTIMATES_GB
+
+        table = MODEL_MEMORY_ESTIMATES_GB["text_embedding"]
+        assert estimate_model_memory_gb("text_embedding", "labse") == table["labse"]  # known → silent
         assert "labse" not in buf.getvalue()
-        assert estimate_model_memory_gb("text_embedding", "no_such_model") == 1.5  # default
+        assert estimate_model_memory_gb("text_embedding", "no_such_model") == table["default"]
         assert "no_such_model" in buf.getvalue()
     finally:
         lg.removeHandler(handler)

@@ -125,6 +125,12 @@ class GPUPool:
         # Hold the lock across the whole find-then-reserve so two threads can't both see the
         # same device as free and over-commit it (F2). RLock → nested _reserve / round-robin OK.
         with self._lock:
+            # Idempotent per model key: a graph that builds the same model for several
+            # nodes must not stack reservations for one loaded instance.
+            existing = self.get_device_for_model(model_type)
+            if existing is not None:
+                self.touch(model_type)
+                return existing
             if self._strategy is not None:
                 device = self._strategy.allocate(self, model_type, memory_gb)
                 if device is not None:
@@ -258,6 +264,27 @@ class GPUPool:
                 return True
         return False
 
+    def evict_lru_one(self) -> bool:
+        """Evict the single least-recently-used GPU-resident model (via its registered
+        eviction callback) and release its reservation. Returns True when a model was
+        evicted — the runtime OOM recovery path (T7b) calls this repeatedly until the
+        failing forward pass fits or nothing evictable remains."""
+        with self._lock:
+            for model_type in list(self._lru.keys()):
+                callback = self._eviction_callbacks.get(model_type)
+                if callback is None:
+                    continue
+                device = self.get_device_for_model(model_type)
+                if device is None or device == "cpu":
+                    continue
+                logger.info(
+                    "gpu.evict model_type=%s device=%s reason=runtime-oom", model_type, device
+                )
+                callback()
+                self.release(model_type)
+                return True
+        return False
+
     def get_usage(self) -> Dict[str, DeviceUsage]:
         """Current allocation status: device string -> DeviceUsage."""
         return dict(self._devices)
@@ -314,4 +341,24 @@ def pool_from_config(device_pool_cfg) -> "GPUPool":
         allow_gpu_eviction=device_pool_cfg.allow_gpu_eviction,
     )
     pool.set_strategy(pick_strategy(device_pool_cfg))
+    _set_active_pool(pool)
     return pool
+
+
+# The run's live pool, published so code without a pool reference (the OOM backoff in
+# devices.memory) can ask it to evict. Set by pool_from_config — the production
+# chokepoint — never by bare GPUPool() construction, so tests stay isolated.
+_active_pool: Optional["GPUPool"] = None
+_active_pool_lock = threading.Lock()
+
+
+def _set_active_pool(pool: Optional["GPUPool"]) -> None:
+    global _active_pool
+    with _active_pool_lock:
+        _active_pool = pool
+
+
+def get_active_pool() -> Optional["GPUPool"]:
+    """The most recently configured GPUPool, or None (no device_pool: in the run)."""
+    with _active_pool_lock:
+        return _active_pool

@@ -137,6 +137,10 @@ class RunState:
     # Soft-CPU offload (2c): release-after-last-use parks the model warm on host RAM instead
     # of freeing it, so a later stage/run reuses it with a CPU↔device move (no full reload).
     soft_cpu_offload: bool = field(default=False, metadata=_SHARED)
+    # Aggressive lifecycle (`offload_policy: on_use_soft_cpu`): a per-node model is parked
+    # on CPU the moment its node finishes — GPU holds only the actively-executing node's
+    # models; the next node needing a parked model warm-reactivates it (CPU→GPU move).
+    aggressive_offload: bool = field(default=False, metadata=_SHARED)
     # Multi-dataset runtime (B1): {dataset_id → loaded QueryDataset} for graphs with several
     # dataset_source nodes; empty in single-source mode (the dataset_source handler then uses
     # `dataset`). A node selects its source via `current_node.params.dataset`.

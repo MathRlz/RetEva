@@ -343,15 +343,20 @@ def run_with_oom_backoff(
     ``fn`` maps a list of inputs to an aligned sequence of outputs. On out-of-memory the GPU
     cache is cleared and the batch is split in two and processed recursively, so an oversized
     batch auto-reduces to whatever fits. Returns the concatenated outputs (1:1 with ``items``).
-    A genuine OOM on a single item (``len <= min_batch``) re-raises — that is a real capacity
-    problem, not a batching one. Non-OOM errors propagate unchanged."""
+
+    An OOM at ``len <= min_batch`` is a capacity problem, not a batching one: the GPU is
+    packed with other (usually idle) models. Before giving up, the active GPUPool is asked
+    to evict its LRU-parked models one at a time, retrying after each (T7b); only when
+    nothing evictable remains does the OOM re-raise. Non-OOM errors propagate unchanged."""
     if not items:
         return []
     try:
         return list(fn(items))
     except (RuntimeError, MemoryError) as exc:
-        if not _is_oom_error(exc) or len(items) <= max(1, min_batch):
+        if not _is_oom_error(exc):
             raise
+        if len(items) <= max(1, min_batch):
+            return _retry_after_evictions(fn, items, exc)
         logger.warning(
             "CUDA OOM on batch of %d; halving and retrying (T7 backoff)", len(items)
         )
@@ -360,3 +365,33 @@ def run_with_oom_backoff(
         left = run_with_oom_backoff(fn, items[:mid], min_batch=min_batch)
         right = run_with_oom_backoff(fn, items[mid:], min_batch=min_batch)
         return left + right
+
+
+def _retry_after_evictions(
+    fn: Callable[[list], Any], items: list, original: BaseException
+) -> list:
+    """Minimal-batch OOM recovery (T7b): evict pool-managed LRU models from GPU one at a
+    time, clearing the CUDA cache and retrying ``fn`` after each. Re-raises the original
+    OOM when no pool is active or every evictable model is already off-GPU. The failing
+    model itself sits at the LRU tail (touched at build), so parked idle models go first;
+    if it is the last one standing its own eviction moves it to CPU and the retry runs
+    there — slow, but the run survives."""
+    from .pool import get_active_pool
+
+    pool = get_active_pool()
+    if pool is None:
+        raise original
+    evictions = 0
+    while pool.evict_lru_one():
+        evictions += 1
+        get_memory_manager().clear_gpu_cache()
+        logger.warning(
+            "CUDA OOM on minimal batch; evicted LRU model #%d from GPU and retrying (T7b)",
+            evictions,
+        )
+        try:
+            return list(fn(items))
+        except (RuntimeError, MemoryError) as exc:
+            if not _is_oom_error(exc):
+                raise
+    raise original

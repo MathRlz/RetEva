@@ -200,6 +200,12 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
                     state.service_provider.release_model_instance(
                         model, soft_cpu=state.soft_cpu_offload
                     )
+                    # Return the GPU-pool reservation too — the model just left the GPU,
+                    # and a stale reservation makes the pool refuse space it really has.
+                    pool = getattr(state, "device_pool", None)
+                    pool_key = getattr(model, "_gpu_pool_key", None)
+                    if pool is not None and pool_key is not None:
+                        pool.release(pool_key)
                     node_logger.info("offloaded model after stage '%s'", node.stage)
                 except Exception as exc:  # never let offload break the run
                     logger.warning(

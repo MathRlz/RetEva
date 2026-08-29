@@ -131,6 +131,7 @@ def _stage_tts(s: RunState) -> None:
         tts_cfg,
         log=logger,
         cache_manager=s.cache_manager,
+        device_pool=getattr(s, "device_pool", None),
     )
     s.stage_times["tts_s"] = s.stage_times.get("tts_s", 0.0) + (
         time.perf_counter() - _t

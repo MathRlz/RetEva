@@ -75,8 +75,10 @@ def run_graph(
         device_pool: Optional GPUPool (memory-aware allocation + LRU eviction) — reaches
             per-node model-override builds too (`_build_node_pipeline`), not just the
             shared global pipeline built before this call.
-        offload_policy: "never" | "on_finish" | "on_finish_soft_cpu" — free each stage's
-            model after last use ("on_finish_soft_cpu" parks it warm on CPU instead).
+        offload_policy: "never" | "on_finish" | "on_finish_soft_cpu" | "on_use_soft_cpu" —
+            free each stage's model after last use ("on_finish_soft_cpu" parks it warm on
+            CPU instead; "on_use_soft_cpu" parks a per-node model the moment its node
+            finishes, so the GPU only ever holds the actively-executing node's models).
         eval_config: The EvaluationConfig (mode detection, multi-dataset sources, provenance).
         load_info: Optional model load metadata for the report.
         graph_override: Optional explicit stage-graph spec replacing the default for the mode.
@@ -313,10 +315,14 @@ def _setup_execution_context(
         device_pool=device_pool,
         offload_after_stage=(
             service_provider is not None
-            and offload_policy in ("on_finish", "on_finish_soft_cpu")
+            and offload_policy in ("on_finish", "on_finish_soft_cpu", "on_use_soft_cpu")
         ),
         soft_cpu_offload=(
-            service_provider is not None and offload_policy == "on_finish_soft_cpu"
+            service_provider is not None
+            and offload_policy in ("on_finish_soft_cpu", "on_use_soft_cpu")
+        ),
+        aggressive_offload=(
+            service_provider is not None and offload_policy == "on_use_soft_cpu"
         ),
         **_graph_shape_flags(stage_graph),
     )

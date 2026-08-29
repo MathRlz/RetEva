@@ -300,13 +300,13 @@ graph:
   - {from: dataset_source, to: retrieval_piper_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_piper_eam, input: relevant_docs}
 
-# Model lifecycle: lazy load, park models warm in host RAM after last use (fast
-# CPU->GPU reuse across the many branches), memory-aware GPU placement with LRU
-# eviction instead of OOM. Per-node `device:` params become hints under device_pool.
+# Model lifecycle: lazy load; a node's model is parked warm in host RAM the MOMENT its
+# node finishes (on_use_soft_cpu: GPU holds only the running node's models; warm pool
+# gives fast CPU->GPU reuse across branches). Memory-aware GPU placement, LRU eviction.
 service_runtime:
   startup_mode: lazy
-  offload_policy: on_finish_soft_cpu
-  soft_offload_max_warm: 3
+  offload_policy: on_use_soft_cpu
+  soft_offload_max_warm: 6
 
 device_pool:
   available_devices: ["auto"]

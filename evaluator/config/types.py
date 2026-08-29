@@ -36,7 +36,7 @@ class DatasetType(str, Enum):
 RETRIEVAL_MODES = ("dense", "sparse", "hybrid")
 RERANKER_MODES = ("none", "token_overlap", "cross_encoder")
 SERVICE_STARTUP_MODES = ("lazy", "eager")
-SERVICE_OFFLOAD_POLICIES = ("on_finish", "never", "on_finish_soft_cpu")
+SERVICE_OFFLOAD_POLICIES = ("on_finish", "never", "on_finish_soft_cpu", "on_use_soft_cpu")
 DATASET_SOURCES = ("local", "huggingface", "custom")
 
 # Coarse modality per dataset type (UI picker grouping + the introspection schema). Evaluator-owned

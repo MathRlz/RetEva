@@ -81,6 +81,7 @@ def _node_pipeline(s: "RunState", stage: str, params):
         yield
         return
     saved = getattr(s, attr)
+    pipeline = None
     try:
         from ...config.graph_config import resolved_model_config
 
@@ -97,6 +98,35 @@ def _node_pipeline(s: "RunState", stage: str, params):
         yield
     finally:
         setattr(s, attr, saved)
+        if pipeline is not None and getattr(s, "aggressive_offload", False):
+            _release_node_model(s, pipeline)
+
+
+def _release_node_model(s: "RunState", pipeline) -> None:
+    """Aggressive lifecycle (`on_use_soft_cpu`): park the node's model on CPU the moment
+    its node finishes and return its GPU-pool reservation, so the GPU only ever holds the
+    actively-executing node's models. The provider keeps the instance warm (bounded LRU),
+    so a later node using the same model reactivates it with a CPU→GPU move instead of a
+    reload; the pool key travels on the model (``_gpu_pool_key``, set at build)."""
+    model = getattr(pipeline, "model", None)
+    if model is None:
+        return
+    try:
+        if s.service_provider is not None:
+            s.service_provider.release_model_instance(model, soft_cpu=True)
+        pool = getattr(s, "device_pool", None)
+        key = getattr(model, "_gpu_pool_key", None)
+        if pool is not None and key is not None:
+            pool.release(key)
+        from ...devices.memory import get_memory_manager
+
+        get_memory_manager().clear_gpu_cache()
+        logger.info(
+            "aggressive offload: node '%s' model parked on cpu",
+            getattr(s.current_node, "id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001 - offload must never break the run
+        logger.warning("aggressive offload failed: %s", exc)
 
 
 _BUILDER_METHOD = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding": "audio_emb"}
