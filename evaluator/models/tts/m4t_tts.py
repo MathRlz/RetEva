@@ -28,7 +28,9 @@ class M4TTTS(BaseTTSModel):
     Notes:
     - Uses `transformers.SeamlessM4Tv2ForTextToSpeech`.
     - `config.language` sets both source and target language (e.g. "en", "pl").
-    - `config.voice` may set a numeric `speaker_id`.
+    - `config.speaker_id` selects the vocoder speaker (0-199; default 0).
+    - `config.voice`: a "facebook/..." id overrides the checkpoint; a numeric string is a
+      legacy fallback for `speaker_id`; anything else is ignored.
     """
 
     _LANG_ALIASES: ClassVar[Dict[str, str]] = SEAMLESS_LANG_ALIASES
@@ -38,9 +40,13 @@ class M4TTTS(BaseTTSModel):
         self._torch = require_torch_transformers("M4T TTS")
         from transformers import AutoProcessor, SeamlessM4Tv2ForTextToSpeech
 
-        model_id = (config.voice or "").strip() or "facebook/seamless-m4t-v2-large"
-        if not model_id.startswith("facebook/"):
-            model_id = "facebook/seamless-m4t-v2-large"
+        voice = (config.voice or "").strip()
+        model_id = voice if voice.startswith("facebook/") else "facebook/seamless-m4t-v2-large"
+        cfg_speaker = getattr(config, "speaker_id", None)
+        if cfg_speaker is not None:
+            self.speaker_id = int(cfg_speaker)
+        else:
+            self.speaker_id = int(voice) if voice.isdigit() else 0
 
         self._processor = AutoProcessor.from_pretrained(model_id)
         self._model = SeamlessM4Tv2ForTextToSpeech.from_pretrained(model_id)
@@ -49,7 +55,10 @@ class M4TTTS(BaseTTSModel):
         self._model.to(self.device)
         self.lang = self._LANG_ALIASES.get((config.language or "en").lower(), (config.language or "eng"))
         self.output_sample_rate = model_sampling_rate(self._model)
-        logger.info(f"M4T TTS initialized with model: {model_id} (lang={self.lang}, device={self.device})")
+        logger.info(
+            f"M4T TTS initialized with model: {model_id} "
+            f"(lang={self.lang}, speaker_id={self.speaker_id}, device={self.device})"
+        )
 
     def to(self, device: str) -> "M4TTTS":
         self.device = str(device)
@@ -59,8 +68,14 @@ class M4TTTS(BaseTTSModel):
     def synthesize(self, text: str) -> np.ndarray:
         inputs = self._processor(text=text, src_lang=self.lang, return_tensors="pt").to(self.device)
         with self._torch.no_grad():
-            output = self._model.generate(**inputs, tgt_lang=self.lang)
-        # generate() returns a tuple/list of waveform tensors.
+            output = self._model.generate(**inputs, tgt_lang=self.lang, speaker_id=self.speaker_id)
+        # generate() returns SeamlessM4Tv2GenerationOutput / tuple; field 0 is the waveform.
         waveform = output[0] if isinstance(output, (list, tuple)) else output
-        audio = waveform.squeeze().cpu().numpy()
-        return np.asarray(audio, dtype=np.float32)
+        audio = np.asarray(waveform.squeeze().cpu().numpy(), dtype=np.float32)
+        # The HiFi-GAN vocoder does not bound its output to [-1, 1]; the synthesizer saves
+        # PCM_16 WAVs, where any overshoot HARD-CLIPS into distortion the downstream ASR
+        # then eats. Peak-normalize only when actually over range.
+        peak = float(np.abs(audio).max()) if audio.size else 0.0
+        if peak > 1.0:
+            audio = audio / peak
+        return audio

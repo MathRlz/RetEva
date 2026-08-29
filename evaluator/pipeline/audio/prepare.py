@@ -249,8 +249,13 @@ def _tts_cache_key(synth_config: Any, question: Any) -> str:
         str(getattr(synth_config, "sample_rate", "")),
         str(getattr(synth_config, "speed", "")),
         str(getattr(synth_config, "pitch", "")),
-        getattr(question, "question_text", "") or "",
     ]
+    # Appended only when SET: an unset speaker_id keeps every existing cache key valid,
+    # while a chosen speaker keys its clips apart from the default-speaker ones.
+    speaker_id = getattr(synth_config, "speaker_id", None)
+    if speaker_id is not None:
+        parts.append(f"speaker:{speaker_id}")
+    parts.append(getattr(question, "question_text", "") or "")
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 

@@ -21,6 +21,8 @@ class AudioSynthesisConfig:
         pitch: Pitch shift multiplier. Default: 1.0.
         volume: Volume multiplier. Default: 1.0.
         language: Language code for TTS. Default: "en".
+        speaker_id: Vocoder speaker index for providers with multi-speaker vocoders
+            (m4t: 0-199). Default: None (provider default, m4t: 0).
         seed: Random seed for reproducibility. Default: 42.
         output_dir: Directory for synthesized audio files. Default: "prepared_benchmarks/audio".
         cache_dir: Directory for caching synthesized audio. Default: None (auto-derived
@@ -57,6 +59,7 @@ class AudioSynthesisConfig:
     pitch: float = 1.0
     volume: float = 1.0
     language: str = "en"
+    speaker_id: Optional[int] = None
     seed: int = 42
     output_dir: str = "prepared_benchmarks/audio"
     cache_dir: Optional[str] = None
