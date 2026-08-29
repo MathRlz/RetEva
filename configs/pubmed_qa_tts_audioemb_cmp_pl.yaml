@@ -1,0 +1,359 @@
+# TTS x audio-embedding comparison on pubmed_qa (retrieval-only, no ASR, no generation).
+#
+# POLISH variant: questions AND corpus in Polish (${PUBMED_QA_DATASET_PL}).
+# English-trained models (APM/EAM/wav2vec2-en) are swapped or serve as transfer baselines;
+# SONAR uses its Polish speech encoder + pol_Latn text tokenizer.
+#
+# Pipeline per leaf: dataset_source.query_text -> tts -> audio_embedding -> retrieval.
+# The query never goes back through text: the synthesized audio is embedded DIRECTLY by a
+# cross-modal audio embedder into the SAME space the corpus was embedded in by the paired
+# TEXT embedder:
+#
+#   apm_whisper: attention_pool (whisper-large encoder + APM attention-pool head,
+#        jina-aligned checkpoint, dim 2048) <-> corpus_embedding jina_v4 (jina_v4_space).
+#   apm_m4t: attention_pool (SeamlessM4T-v2 encoder + APM head, jina-aligned
+#        attention+whitening checkpoint) -- SAME jina_v4_space, so it retrieves against
+#        the SAME shared jina corpus/vector_db as apm_whisper (embedded once).
+#   eam: eam_alignment audio side <-> eam_alignment TEXT side embedding the corpus --
+#        one side/eam AlignmentModel checkpoint, SAME model_path on both nodes so the
+#        loaded core is shared (see models/a2e/eam_alignment.py), shared eam_space.
+#
+# 3 TTS (xtts_v2, m4t, piper) x 4 pairs = 12 retrieval variants (4th: SONAR
+# speech encoder <-> SONAR text encoder, shared zero-shot 'sonar' space — needs
+# `pip install 'evaluator[sonar]'`). Only MEANINGFUL nodes are
+# written here; retrieval_metrics/metrics/finalize are auto-appended per retrieval variant
+# (complete_structural_plumbing) -- do not add them by hand.
+#
+# Env vars (export before running):
+#   PUBMED_QA_DATASET_PL -- dir with POLISH questions.json + corpus.json
+#   APM_CHECKPOINT_DIR -- dir with apm_whisper_jina_admed_voice.pt (jina-space APM)
+#   EAM_CHECKPOINT_DIR -- dir with eam_alignment.pt (side/eam AlignmentModel state_dict)
+#                         + model.json (the run's AlignmentModelConfig; supplies num_heads,
+#                         cross-checks input_dim/embedding_dim against the checkpoint)
+#
+# TTS on GPU: xtts_v2/m4t on cuda:0; piper is a CPU-only external binary.
+experiment:
+  name: pubmed_qa_tts_audioemb_cmp_pl
+  output_dir: evaluation_results
+
+dataset:
+  id: pubmed_qa
+  questions: ${PUBMED_QA_DATASET_PL}/questions.json
+  corpus: ${PUBMED_QA_DATASET_PL}/corpus.json
+  trace_limit: 0
+  batch_size: 8
+
+data:
+  num_workers: 0
+
+graph:
+  nodes:
+  - dataset_source
+  - id: tts_xtts
+    type: tts
+    params:
+      provider: xtts_v2
+      language: pl
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_qa_tts_audioemb_cmp_pl/xtts/audio
+      device: "cuda:0"
+  - id: tts_m4t
+    type: tts
+    params:
+      provider: m4t
+      language: pl
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_qa_tts_audioemb_cmp_pl/m4t/audio
+      device: "cuda:0"
+  - id: tts_piper
+    type: tts
+    params:
+      provider: piper
+      voice: pl_PL-gosia-medium
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_qa_tts_audioemb_cmp_pl/piper/audio
+  - id: corpus_embedding_apm_whisper
+    type: corpus_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: vector_db_apm_whisper
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_eam
+    type: corpus_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:1"
+  - id: vector_db_eam
+    type: vector_db
+    params:
+      store: inmemory
+  - id: audio_embedding_xtts_apm_whisper
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: whisper
+      encoder-size: large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt"
+      device: "cuda:0"
+  - id: retrieval_xtts_apm_whisper
+    type: retrieval
+  - id: audio_embedding_xtts_apm_m4t
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: m4t
+      encoder-size: v2-large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt"
+      device: "cuda:0"
+  - id: retrieval_xtts_apm_m4t
+    type: retrieval
+  - id: audio_embedding_xtts_eam
+    type: audio_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:0"
+  - id: retrieval_xtts_eam
+    type: retrieval
+  - id: audio_embedding_m4t_apm_whisper
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: whisper
+      encoder-size: large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt"
+      device: "cuda:0"
+  - id: retrieval_m4t_apm_whisper
+    type: retrieval
+  - id: audio_embedding_m4t_apm_m4t
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: m4t
+      encoder-size: v2-large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt"
+      device: "cuda:0"
+  - id: retrieval_m4t_apm_m4t
+    type: retrieval
+  - id: audio_embedding_m4t_eam
+    type: audio_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:0"
+  - id: retrieval_m4t_eam
+    type: retrieval
+  - id: audio_embedding_piper_apm_whisper
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: whisper
+      encoder-size: large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt"
+      device: "cuda:0"
+  - id: retrieval_piper_apm_whisper
+    type: retrieval
+  - id: audio_embedding_piper_apm_m4t
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: m4t
+      encoder-size: v2-large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt"
+      device: "cuda:0"
+  - id: retrieval_piper_apm_m4t
+    type: retrieval
+  - id: audio_embedding_piper_eam
+    type: audio_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:0"
+  - id: retrieval_piper_eam
+    type: retrieval
+
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: audio_embedding_xtts_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      name: sonar_speech_encoder_pol
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_xtts_sonar
+    type: retrieval
+  - id: audio_embedding_m4t_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      name: sonar_speech_encoder_pol
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_m4t_sonar
+    type: retrieval
+  - id: audio_embedding_piper_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      name: sonar_speech_encoder_pol
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_piper_sonar
+    type: retrieval
+  edges:
+  - {from: dataset_source, to: tts_xtts, input: query_text}
+  - {from: dataset_source, to: tts_m4t, input: query_text}
+  - {from: dataset_source, to: tts_piper, input: query_text}
+  - {from: dataset_source, to: corpus_embedding_apm_whisper, input: corpus}
+  - {from: corpus_embedding_apm_whisper, to: vector_db_apm_whisper, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_eam, input: corpus}
+  - {from: corpus_embedding_eam, to: vector_db_eam, input: corpus_vectors}
+  - {from: tts_xtts, to: audio_embedding_xtts_apm_whisper, input: query_audio}
+  - {from: audio_embedding_xtts_apm_whisper, output: audio_query_vectors, to: retrieval_xtts_apm_whisper, input: query_vectors}
+  - {from: vector_db_apm_whisper, to: retrieval_xtts_apm_whisper, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_apm_whisper, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_apm_whisper, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_apm_whisper, input: relevant_docs}
+  - {from: tts_xtts, to: audio_embedding_xtts_apm_m4t, input: query_audio}
+  - {from: audio_embedding_xtts_apm_m4t, output: audio_query_vectors, to: retrieval_xtts_apm_m4t, input: query_vectors}
+  - {from: vector_db_apm_whisper, to: retrieval_xtts_apm_m4t, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_apm_m4t, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_apm_m4t, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_apm_m4t, input: relevant_docs}
+  - {from: tts_xtts, to: audio_embedding_xtts_eam, input: query_audio}
+  - {from: audio_embedding_xtts_eam, output: audio_query_vectors, to: retrieval_xtts_eam, input: query_vectors}
+  - {from: vector_db_eam, to: retrieval_xtts_eam, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_eam, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_eam, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_eam, input: relevant_docs}
+  - {from: tts_m4t, to: audio_embedding_m4t_apm_whisper, input: query_audio}
+  - {from: audio_embedding_m4t_apm_whisper, output: audio_query_vectors, to: retrieval_m4t_apm_whisper, input: query_vectors}
+  - {from: vector_db_apm_whisper, to: retrieval_m4t_apm_whisper, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_apm_whisper, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_apm_whisper, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_apm_whisper, input: relevant_docs}
+  - {from: tts_m4t, to: audio_embedding_m4t_apm_m4t, input: query_audio}
+  - {from: audio_embedding_m4t_apm_m4t, output: audio_query_vectors, to: retrieval_m4t_apm_m4t, input: query_vectors}
+  - {from: vector_db_apm_whisper, to: retrieval_m4t_apm_m4t, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_apm_m4t, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_apm_m4t, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_apm_m4t, input: relevant_docs}
+  - {from: tts_m4t, to: audio_embedding_m4t_eam, input: query_audio}
+  - {from: audio_embedding_m4t_eam, output: audio_query_vectors, to: retrieval_m4t_eam, input: query_vectors}
+  - {from: vector_db_eam, to: retrieval_m4t_eam, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_eam, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_eam, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_eam, input: relevant_docs}
+  - {from: tts_piper, to: audio_embedding_piper_apm_whisper, input: query_audio}
+  - {from: audio_embedding_piper_apm_whisper, output: audio_query_vectors, to: retrieval_piper_apm_whisper, input: query_vectors}
+  - {from: vector_db_apm_whisper, to: retrieval_piper_apm_whisper, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_apm_whisper, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_apm_whisper, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_apm_whisper, input: relevant_docs}
+  - {from: tts_piper, to: audio_embedding_piper_apm_m4t, input: query_audio}
+  - {from: audio_embedding_piper_apm_m4t, output: audio_query_vectors, to: retrieval_piper_apm_m4t, input: query_vectors}
+  - {from: vector_db_apm_whisper, to: retrieval_piper_apm_m4t, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_apm_m4t, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_apm_m4t, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_apm_m4t, input: relevant_docs}
+  - {from: tts_piper, to: audio_embedding_piper_eam, input: query_audio}
+  - {from: audio_embedding_piper_eam, output: audio_query_vectors, to: retrieval_piper_eam, input: query_vectors}
+  - {from: vector_db_eam, to: retrieval_piper_eam, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_eam, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_eam, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_eam, input: relevant_docs}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: tts_xtts, to: audio_embedding_xtts_sonar, input: query_audio}
+  - {from: audio_embedding_xtts_sonar, output: audio_query_vectors, to: retrieval_xtts_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_sonar, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_sonar, input: relevant_docs}
+  - {from: tts_m4t, to: audio_embedding_m4t_sonar, input: query_audio}
+  - {from: audio_embedding_m4t_sonar, output: audio_query_vectors, to: retrieval_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_sonar, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_sonar, input: relevant_docs}
+  - {from: tts_piper, to: audio_embedding_piper_sonar, input: query_audio}
+  - {from: audio_embedding_piper_sonar, output: audio_query_vectors, to: retrieval_piper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_sonar, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_sonar, input: relevant_docs}
+
+# Model lifecycle: lazy load; a node's model is parked warm in host RAM the MOMENT its
+# node finishes (on_use_soft_cpu: GPU holds only the running node's models; warm pool
+# gives fast CPU->GPU reuse across branches). Memory-aware GPU placement, LRU eviction.
+service_runtime:
+  startup_mode: lazy
+  offload_policy: on_use_soft_cpu
+  soft_offload_max_warm: 6
+
+device_pool:
+  available_devices: ["auto"]
+  memory_buffer_percent: 0.1
+  allow_gpu_eviction: true
+  allow_cpu_fallback: true
+
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG
