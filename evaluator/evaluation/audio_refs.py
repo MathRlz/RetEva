@@ -48,12 +48,36 @@ class RefAudioDatasetView:
 
         qid = self._ids[idx]
         owner = self._owner.get(qid) or self._owner.get(_lineage_parent(qid))
-        item = dict(owner[0][owner[1]]) if owner is not None else {}
+        item = self._base_metadata(owner) if owner is not None else {}
         waveform, sr = load_audio_file(self._paths[qid])
         item["audio_array"] = waveform.squeeze().numpy()
         item["sampling_rate"] = int(sr)
         item["question_id"] = qid
         return item
+
+    @staticmethod
+    def _base_metadata(owner: tuple) -> dict:
+        """Metadata for a base question WITHOUT going through ``base.__getitem__``.
+
+        The base's item accessor decodes the base waveform (discarded here — the ref
+        audio replaces it) and refuses questions without an ``audio_path``. That check is
+        the base's business, not the view's: on a journal-resumed run the tts levels are
+        skipped, the reloaded questions carry no audio_path, and the old
+        ``dict(base[idx])`` call crashed every audio consumer with a misleading
+        "has no audio_path" — even though the refs held all the audio needed.
+        """
+        base, i = owner
+        q = base.questions[i]
+        text = getattr(q, "question_text", None)
+        return {
+            "transcription": text,
+            "question_text": text,
+            "question_id": getattr(q, "question_id", i),
+            "groundtruth_doc_ids": getattr(q, "groundtruth_doc_ids", None),
+            "relevance_grades": getattr(q, "relevance_grades", None),
+            "language": getattr(q, "language", None),
+            "metadata": getattr(q, "metadata", None),
+        }
 
     # Some consumers introspect questions (e.g. relevance derivation) — expose base's.
     @property
