@@ -97,6 +97,12 @@ def _run_one_node(
                 state.stage_times[spec.time_key] = (
                     state.stage_times.get(spec.time_key, 0.0) + dur
                 )
+        # Symmetric finish marker to the ▶ start line: without it a long stage is
+        # indistinguishable from a hung one in the console log.
+        if error is not None:
+            node_logger.info("✖ node %s failed after %.1fs", node.id, dur)
+        else:
+            node_logger.info("✔ node %s done (stage=%s, %.1fs)", node.id, node.stage, dur)
         if sink is not None:
             if error is not None:
                 sink.emit(

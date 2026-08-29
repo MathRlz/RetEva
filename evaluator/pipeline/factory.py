@@ -330,11 +330,19 @@ class _ModelBuilders:
                 # the device and the move re-promotes it. Same-device moves are no-ops.
                 to_method = getattr(model, "to", None)
                 if callable(to_method):
+                    origin = str(getattr(model, "device", "")) or "?"
+                    if origin != dev:
+                        logger.info(
+                            "model.move %s: %s -> %s (build/re-promote)",
+                            pool_key, origin, dev,
+                        )
                     to_method(_torch.device(dev))
-            self.device_pool.register_eviction_callback(
-                pool_key,
-                lambda m=model: m.to(_torch.device("cpu")),
-            )
+
+            def _evict_to_cpu(m=model, k=pool_key, d=dev):
+                logger.info("model.move %s: %s -> cpu (pool eviction)", k, d)
+                m.to(_torch.device("cpu"))
+
+            self.device_pool.register_eviction_callback(pool_key, _evict_to_cpu)
             self.device_pool.touch(pool_key)
             try:
                 # The offload paths (aggressive node release, level-boundary release)
