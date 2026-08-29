@@ -177,8 +177,17 @@ def synthesize_missing_query_audio(
         for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=progress_disabled()):
             text = getattr(question, "question_text", None)
             if not text:
-                log.warning(
-                    "Question %s has no text, skipping synthesis",
+                # A silently-skipped question ends up with NO audio_path; the tts node then
+                # cannot publish its ref set (all-or-nothing) and every downstream audio
+                # consumer of this branch dies far from the cause. Count it as a failure so
+                # the node raises HERE, naming the question.
+                failed += 1
+                if first_error is None:
+                    first_error = (
+                        f"question {getattr(question, 'question_id', '?')} has empty question_text"
+                    )
+                log.error(
+                    "Question %s has no text — synthesis impossible",
                     getattr(question, "question_id", "?"),
                 )
                 continue

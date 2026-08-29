@@ -105,6 +105,20 @@ def resolve_audio_dataset(s: Any, dataset: Any) -> Any:
         logger.debug("audio_refs: keyed_items('query_audio') failed: %s", exc)
         refs = None
     if not isinstance(refs, ItemSet) or not refs.ids:
+        # Falling back to the dataset object is correct for graphs whose refs mirror it,
+        # but when this node is explicitly BOUND to a query_audio producer that published
+        # nothing, the fallback usually ends in a misleading "no audio_path" crash — say
+        # so here, at the decision point.
+        try:
+            bound = [pid for art, pid in getattr(s.current_node, "bindings", ()) if art == "query_audio"]
+        except Exception:  # noqa: BLE001 - diagnostics only
+            bound = []
+        if bound:
+            logger.warning(
+                "audio_refs: node '%s' is bound to query_audio from %s but no refs were "
+                "published — falling back to the dataset's own audio paths",
+                getattr(s.current_node, "id", "?"), bound,
+            )
         return dataset
     # Refs must actually be path strings (a positional wrap of decoded arrays is not
     # a ref publish — leave those to the legacy path).

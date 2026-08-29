@@ -65,8 +65,15 @@ def _stage_augment_audio(s: RunState) -> None:
     if not isinstance(refs, ItemSet) or not refs.ids or not all(
         isinstance(v, str) for v in refs.values
     ):
-        logger.warning("augment_audio: no audio refs on the bus — no-op")
-        return
+        # An augment node with no input refs is an upstream failure (its bound tts/source
+        # never published), not a benign no-op: passing silently here hands downstream
+        # audio consumers NO refs, and they crash later on the raw dataset with a
+        # misleading "no audio_path" error. Fail the branch at the real boundary.
+        raise RuntimeError(
+            f"augment_audio '{getattr(s.current_node, 'id', '?')}': no query_audio refs "
+            f"from its bound producer — the upstream tts/dataset node did not publish "
+            f"audio refs (check its log for unsynthesized questions)"
+        )
     node_id = getattr(s.current_node, "id", "augment_audio")
     # Resolved before execution: global ⊕ node params; the node's presence ⇒ enabled.
     from ..node_config import resolve_node_config
@@ -144,3 +151,17 @@ def _stage_tts(s: RunState) -> None:
 
         ids, paths = refs
         s.put_artifact("query_audio", ItemSet(ids, paths))
+    else:
+        # All-or-nothing by design (partial refs would silently measure a subset), but
+        # say WHICH question broke the set instead of publishing nothing wordlessly.
+        missing = [
+            str(getattr(q, "question_id", i))
+            for i, q in enumerate(questions)
+            if not getattr(q, "audio_path", None)
+        ]
+        logger.warning(
+            "tts node '%s': query_audio refs NOT published — %d question(s) lack an "
+            "audio_path (first: %s); downstream audio nodes on this branch will not "
+            "receive refs",
+            getattr(s.current_node, "id", "tts"), len(missing), missing[:3],
+        )
