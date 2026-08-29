@@ -13170,6 +13170,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -13255,6 +13286,30 @@
     [
      "retrieved",
      "retrieval_labse"
+    ]
+   ]
+  ],
+  "finalize_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_sonar",
+    "retrieval_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_sonar"
     ]
    ]
   ],
@@ -13378,6 +13433,47 @@
     [
      "retrieved",
      "retrieval_labse"
+    ]
+   ]
+  ],
+  "metrics_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_sonar",
+    "retrieval_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_sonar"
     ]
    ]
   ],
@@ -13549,6 +13645,62 @@
     ]
    ]
   ],
+  "retrieval_metrics_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_sonar"
+    ]
+   ]
+  ],
+  "retrieval_sonar": [
+   "search",
+   "retrieval",
+   [
+    "dataset_source",
+    "text_embedding_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "text_embedding_eam": [
    "embed",
    "text_embedding",
@@ -13670,6 +13822,41 @@
     ]
    ]
   ],
+  "text_embedding_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "reference_text",
+     "dataset_source"
+    ]
+   ]
+  ],
   "vector_db_eam": [
    "index",
    "vector_db",
@@ -13724,6 +13911,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_labse"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -14018,6 +14224,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -14086,6 +14323,30 @@
     ]
    ]
   ],
+  "finalize_m4t_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_m4t_sonar",
+    "retrieval_m4t_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_m4t_wav2vec2_jina": [
    "sink",
    "finalize",
@@ -14131,6 +14392,30 @@
     [
      "retrieved",
      "retrieval_m4t_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "finalize_m4t_wav2vec2_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_wav2vec2_sonar",
+    "retrieval_m4t_wav2vec2_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_wav2vec2_sonar"
     ]
    ]
   ],
@@ -14182,6 +14467,30 @@
     ]
    ]
   ],
+  "finalize_m4t_whisper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_whisper_sonar",
+    "retrieval_m4t_whisper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_whisper_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_m4t_jina": [
    "sink",
    "finalize",
@@ -14227,6 +14536,30 @@
     [
      "retrieved",
      "retrieval_piper_m4t_labse"
+    ]
+   ]
+  ],
+  "finalize_piper_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_m4t_sonar",
+    "retrieval_piper_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_m4t_sonar"
     ]
    ]
   ],
@@ -14278,6 +14611,30 @@
     ]
    ]
   ],
+  "finalize_piper_wav2vec2_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_wav2vec2_sonar",
+    "retrieval_piper_wav2vec2_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_whisper_jina": [
    "sink",
    "finalize",
@@ -14323,6 +14680,30 @@
     [
      "retrieved",
      "retrieval_piper_whisper_labse"
+    ]
+   ]
+  ],
+  "finalize_piper_whisper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_whisper_sonar",
+    "retrieval_piper_whisper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_whisper_sonar"
     ]
    ]
   ],
@@ -14374,6 +14755,30 @@
     ]
    ]
   ],
+  "finalize_xtts_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_m4t_sonar",
+    "retrieval_xtts_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_wav2vec2_jina": [
    "sink",
    "finalize",
@@ -14422,6 +14827,30 @@
     ]
    ]
   ],
+  "finalize_xtts_wav2vec2_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_wav2vec2_sonar",
+    "retrieval_xtts_wav2vec2_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_whisper_jina": [
    "sink",
    "finalize",
@@ -14467,6 +14896,30 @@
     [
      "retrieved",
      "retrieval_xtts_whisper_labse"
+    ]
+   ]
+  ],
+  "finalize_xtts_whisper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_whisper_sonar",
+    "retrieval_xtts_whisper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_whisper_sonar"
     ]
    ]
   ],
@@ -14588,6 +15041,65 @@
     ]
    ]
   ],
+  "metrics_m4t_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_m4t_m4t",
+    "dataset_source",
+    "retrieval_m4t_m4t_sonar",
+    "retrieval_metrics_m4t_m4t_sonar",
+    "transcription_metrics_m4t_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_m4t_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_m4t_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_m4t_wav2vec2_jina": [
    "measure",
    "metrics",
@@ -14703,6 +15215,65 @@
     [
      "transcription_scores",
      "transcription_metrics_m4t_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "metrics_m4t_wav2vec2_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_m4t_wav2vec2",
+    "dataset_source",
+    "retrieval_m4t_wav2vec2_sonar",
+    "retrieval_metrics_m4t_wav2vec2_sonar",
+    "transcription_metrics_m4t_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_wav2vec2_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_m4t_wav2vec2_sonar"
     ]
    ]
   ],
@@ -14824,6 +15395,65 @@
     ]
    ]
   ],
+  "metrics_m4t_whisper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_m4t_whisper",
+    "dataset_source",
+    "retrieval_m4t_whisper_sonar",
+    "retrieval_metrics_m4t_whisper_sonar",
+    "transcription_metrics_m4t_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_whisper_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_m4t_whisper_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_m4t_jina": [
    "measure",
    "metrics",
@@ -14939,6 +15569,65 @@
     [
      "transcription_scores",
      "transcription_metrics_piper_m4t_labse"
+    ]
+   ]
+  ],
+  "metrics_piper_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_piper_m4t",
+    "dataset_source",
+    "retrieval_metrics_piper_m4t_sonar",
+    "retrieval_piper_m4t_sonar",
+    "transcription_metrics_piper_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_piper_m4t_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_m4t_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_piper_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_m4t_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_piper_m4t_sonar"
     ]
    ]
   ],
@@ -15060,6 +15749,65 @@
     ]
    ]
   ],
+  "metrics_piper_wav2vec2_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_piper_wav2vec2",
+    "dataset_source",
+    "retrieval_metrics_piper_wav2vec2_sonar",
+    "retrieval_piper_wav2vec2_sonar",
+    "transcription_metrics_piper_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_wav2vec2_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_piper_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_whisper_jina": [
    "measure",
    "metrics",
@@ -15175,6 +15923,65 @@
     [
      "transcription_scores",
      "transcription_metrics_piper_whisper_labse"
+    ]
+   ]
+  ],
+  "metrics_piper_whisper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_piper_whisper",
+    "dataset_source",
+    "retrieval_metrics_piper_whisper_sonar",
+    "retrieval_piper_whisper_sonar",
+    "transcription_metrics_piper_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_piper_whisper_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_whisper_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_piper_whisper_sonar"
+    ],
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_whisper_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_piper_whisper_sonar"
     ]
    ]
   ],
@@ -15296,6 +16103,65 @@
     ]
    ]
   ],
+  "metrics_xtts_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_xtts_m4t",
+    "dataset_source",
+    "retrieval_metrics_xtts_m4t_sonar",
+    "retrieval_xtts_m4t_sonar",
+    "transcription_metrics_xtts_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_m4t_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_xtts_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_xtts_wav2vec2_jina": [
    "measure",
    "metrics",
@@ -15411,6 +16277,65 @@
     [
      "transcription_scores",
      "transcription_metrics_xtts_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "metrics_xtts_wav2vec2_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_xtts_wav2vec2",
+    "dataset_source",
+    "retrieval_metrics_xtts_wav2vec2_sonar",
+    "retrieval_xtts_wav2vec2_sonar",
+    "transcription_metrics_xtts_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_wav2vec2_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_xtts_wav2vec2_sonar"
     ]
    ]
   ],
@@ -15532,6 +16457,65 @@
     ]
    ]
   ],
+  "metrics_xtts_whisper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_xtts_whisper",
+    "dataset_source",
+    "retrieval_metrics_xtts_whisper_sonar",
+    "retrieval_xtts_whisper_sonar",
+    "transcription_metrics_xtts_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_whisper_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_xtts_whisper_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_m4t_jina": [
    "search",
    "retrieval",
@@ -15595,6 +16579,39 @@
     [
      "vector_index",
      "vector_db_labse"
+    ]
+   ]
+  ],
+  "retrieval_m4t_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_m4t_m4t",
+    "dataset_source",
+    "text_embedding_m4t_m4t_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_m4t_m4t_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -15664,6 +16681,39 @@
     ]
    ]
   ],
+  "retrieval_m4t_wav2vec2_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_m4t_wav2vec2",
+    "dataset_source",
+    "text_embedding_m4t_wav2vec2_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_m4t_wav2vec2_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_whisper_jina": [
    "search",
    "retrieval",
@@ -15730,6 +16780,39 @@
     ]
    ]
   ],
+  "retrieval_m4t_whisper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_m4t_whisper",
+    "dataset_source",
+    "text_embedding_m4t_whisper_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_m4t_whisper_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_m4t_jina": [
    "measure",
    "retrieval_metrics",
@@ -15775,6 +16858,30 @@
     [
      "retrieved",
      "retrieval_m4t_m4t_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_m4t_sonar"
     ]
    ]
   ],
@@ -15826,6 +16933,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_m4t_wav2vec2_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_whisper_jina": [
    "measure",
    "retrieval_metrics",
@@ -15871,6 +17002,30 @@
     [
      "retrieved",
      "retrieval_m4t_whisper_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_whisper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_whisper_sonar"
     ]
    ]
   ],
@@ -15922,6 +17077,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_m4t_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_piper_wav2vec2_jina": [
    "measure",
    "retrieval_metrics",
@@ -15967,6 +17146,30 @@
     [
      "retrieved",
      "retrieval_piper_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_piper_wav2vec2_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_wav2vec2_sonar"
     ]
    ]
   ],
@@ -16018,6 +17221,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_whisper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_whisper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_m4t_jina": [
    "measure",
    "retrieval_metrics",
@@ -16063,6 +17290,30 @@
     [
      "retrieved",
      "retrieval_xtts_m4t_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_m4t_sonar"
     ]
    ]
   ],
@@ -16114,6 +17365,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_xtts_wav2vec2_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_whisper_jina": [
    "measure",
    "retrieval_metrics",
@@ -16159,6 +17434,30 @@
     [
      "retrieved",
      "retrieval_xtts_whisper_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_whisper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_whisper_sonar"
     ]
    ]
   ],
@@ -16228,6 +17527,39 @@
     ]
    ]
   ],
+  "retrieval_piper_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_piper_m4t",
+    "dataset_source",
+    "text_embedding_piper_m4t_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_piper_m4t_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_piper_wav2vec2_jina": [
    "search",
    "retrieval",
@@ -16291,6 +17623,39 @@
     [
      "vector_index",
      "vector_db_labse"
+    ]
+   ]
+  ],
+  "retrieval_piper_wav2vec2_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_piper_wav2vec2",
+    "dataset_source",
+    "text_embedding_piper_wav2vec2_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_piper_wav2vec2_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -16360,6 +17725,39 @@
     ]
    ]
   ],
+  "retrieval_piper_whisper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_piper_whisper",
+    "dataset_source",
+    "text_embedding_piper_whisper_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_piper_whisper_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_m4t_jina": [
    "search",
    "retrieval",
@@ -16423,6 +17821,39 @@
     [
      "vector_index",
      "vector_db_labse"
+    ]
+   ]
+  ],
+  "retrieval_xtts_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_xtts_m4t",
+    "dataset_source",
+    "text_embedding_xtts_m4t_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_xtts_m4t_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -16492,6 +17923,39 @@
     ]
    ]
   ],
+  "retrieval_xtts_wav2vec2_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_xtts_wav2vec2",
+    "dataset_source",
+    "text_embedding_xtts_wav2vec2_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_xtts_wav2vec2_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_whisper_jina": [
    "search",
    "retrieval",
@@ -16558,6 +18022,39 @@
     ]
    ]
   ],
+  "retrieval_xtts_whisper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_xtts_whisper",
+    "dataset_source",
+    "text_embedding_xtts_whisper_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_xtts_whisper_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "text_embedding_m4t_m4t_jina": [
    "embed",
    "text_embedding",
@@ -16615,6 +18112,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ]
+   ]
+  ],
+  "text_embedding_m4t_m4t_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_m4t_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -16690,6 +18222,41 @@
     ]
    ]
   ],
+  "text_embedding_m4t_wav2vec2_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_m4t_wav2vec2"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ]
+   ]
+  ],
   "text_embedding_m4t_whisper_jina": [
    "embed",
    "text_embedding",
@@ -16747,6 +18314,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ]
+   ]
+  ],
+  "text_embedding_m4t_whisper_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_m4t_whisper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -16822,6 +18424,41 @@
     ]
    ]
   ],
+  "text_embedding_piper_m4t_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_piper_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ]
+   ]
+  ],
   "text_embedding_piper_wav2vec2_jina": [
    "embed",
    "text_embedding",
@@ -16879,6 +18516,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ]
+   ]
+  ],
+  "text_embedding_piper_wav2vec2_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_piper_wav2vec2"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -16954,6 +18626,41 @@
     ]
    ]
   ],
+  "text_embedding_piper_whisper_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_piper_whisper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ]
+   ]
+  ],
   "text_embedding_xtts_m4t_jina": [
    "embed",
    "text_embedding",
@@ -17011,6 +18718,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ]
+   ]
+  ],
+  "text_embedding_xtts_m4t_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_xtts_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -17086,6 +18828,41 @@
     ]
    ]
   ],
+  "text_embedding_xtts_wav2vec2_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_xtts_wav2vec2"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ]
+   ]
+  ],
   "text_embedding_xtts_whisper_jina": [
    "embed",
    "text_embedding",
@@ -17152,6 +18929,41 @@
     ]
    ]
   ],
+  "text_embedding_xtts_whisper_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_xtts_whisper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ]
+   ]
+  ],
   "transcription_metrics_m4t_m4t_jina": [
    "measure",
    "transcription_metrics",
@@ -17181,6 +18993,34 @@
    ]
   ],
   "transcription_metrics_m4t_m4t_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_m4t_m4t",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_m4t_m4t_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -17264,6 +19104,34 @@
     ]
    ]
   ],
+  "transcription_metrics_m4t_wav2vec2_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_m4t_wav2vec2",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_m4t_whisper_jina": [
    "measure",
    "transcription_metrics",
@@ -17293,6 +19161,34 @@
    ]
   ],
   "transcription_metrics_m4t_whisper_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_m4t_whisper",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_m4t_whisper_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -17376,6 +19272,34 @@
     ]
    ]
   ],
+  "transcription_metrics_piper_m4t_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_piper_m4t",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_piper_wav2vec2_jina": [
    "measure",
    "transcription_metrics",
@@ -17405,6 +19329,34 @@
    ]
   ],
   "transcription_metrics_piper_wav2vec2_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_piper_wav2vec2",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_piper_wav2vec2_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -17488,6 +19440,34 @@
     ]
    ]
   ],
+  "transcription_metrics_piper_whisper_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_piper_whisper",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_xtts_m4t_jina": [
    "measure",
    "transcription_metrics",
@@ -17517,6 +19497,34 @@
    ]
   ],
   "transcription_metrics_xtts_m4t_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_xtts_m4t",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_xtts_m4t_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -17600,6 +19608,34 @@
     ]
    ]
   ],
+  "transcription_metrics_xtts_wav2vec2_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_xtts_wav2vec2",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_xtts_whisper_jina": [
    "measure",
    "transcription_metrics",
@@ -17629,6 +19665,34 @@
    ]
   ],
   "transcription_metrics_xtts_whisper_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_xtts_whisper",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_xtts_whisper_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -17804,6 +19868,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_labse"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -18227,6 +20310,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -18295,6 +20409,30 @@
     ]
    ]
   ],
+  "finalize_m4t_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_m4t_sonar",
+    "retrieval_m4t_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_m4t_wav2vec2_jina": [
    "sink",
    "finalize",
@@ -18340,6 +20478,30 @@
     [
      "retrieved",
      "retrieval_m4t_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "finalize_m4t_wav2vec2_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_wav2vec2_sonar",
+    "retrieval_m4t_wav2vec2_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_wav2vec2_sonar"
     ]
    ]
   ],
@@ -18391,6 +20553,30 @@
     ]
    ]
   ],
+  "finalize_m4t_whisper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_whisper_sonar",
+    "retrieval_m4t_whisper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_whisper_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_m4t_jina": [
    "sink",
    "finalize",
@@ -18436,6 +20622,30 @@
     [
      "retrieved",
      "retrieval_piper_m4t_labse"
+    ]
+   ]
+  ],
+  "finalize_piper_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_m4t_sonar",
+    "retrieval_piper_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_m4t_sonar"
     ]
    ]
   ],
@@ -18487,6 +20697,30 @@
     ]
    ]
   ],
+  "finalize_piper_wav2vec2_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_wav2vec2_sonar",
+    "retrieval_piper_wav2vec2_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_whisper_jina": [
    "sink",
    "finalize",
@@ -18532,6 +20766,30 @@
     [
      "retrieved",
      "retrieval_piper_whisper_labse"
+    ]
+   ]
+  ],
+  "finalize_piper_whisper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_whisper_sonar",
+    "retrieval_piper_whisper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_whisper_sonar"
     ]
    ]
   ],
@@ -18583,6 +20841,30 @@
     ]
    ]
   ],
+  "finalize_xtts_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_m4t_sonar",
+    "retrieval_xtts_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_wav2vec2_jina": [
    "sink",
    "finalize",
@@ -18631,6 +20913,30 @@
     ]
    ]
   ],
+  "finalize_xtts_wav2vec2_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_wav2vec2_sonar",
+    "retrieval_xtts_wav2vec2_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_whisper_jina": [
    "sink",
    "finalize",
@@ -18676,6 +20982,30 @@
     [
      "retrieved",
      "retrieval_xtts_whisper_labse"
+    ]
+   ]
+  ],
+  "finalize_xtts_whisper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_whisper_sonar",
+    "retrieval_xtts_whisper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_whisper_sonar"
     ]
    ]
   ],
@@ -18797,6 +21127,65 @@
     ]
    ]
   ],
+  "metrics_m4t_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_m4t_m4t",
+    "dataset_source",
+    "retrieval_m4t_m4t_sonar",
+    "retrieval_metrics_m4t_m4t_sonar",
+    "transcription_metrics_m4t_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_m4t_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_m4t_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_m4t_wav2vec2_jina": [
    "measure",
    "metrics",
@@ -18912,6 +21301,65 @@
     [
      "transcription_scores",
      "transcription_metrics_m4t_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "metrics_m4t_wav2vec2_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_m4t_wav2vec2",
+    "dataset_source",
+    "retrieval_m4t_wav2vec2_sonar",
+    "retrieval_metrics_m4t_wav2vec2_sonar",
+    "transcription_metrics_m4t_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_wav2vec2_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_m4t_wav2vec2_sonar"
     ]
    ]
   ],
@@ -19033,6 +21481,65 @@
     ]
    ]
   ],
+  "metrics_m4t_whisper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_m4t_whisper",
+    "dataset_source",
+    "retrieval_m4t_whisper_sonar",
+    "retrieval_metrics_m4t_whisper_sonar",
+    "transcription_metrics_m4t_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_whisper_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_m4t_whisper_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_m4t_jina": [
    "measure",
    "metrics",
@@ -19148,6 +21655,65 @@
     [
      "transcription_scores",
      "transcription_metrics_piper_m4t_labse"
+    ]
+   ]
+  ],
+  "metrics_piper_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_piper_m4t",
+    "dataset_source",
+    "retrieval_metrics_piper_m4t_sonar",
+    "retrieval_piper_m4t_sonar",
+    "transcription_metrics_piper_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_piper_m4t_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_m4t_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_piper_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_m4t_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_piper_m4t_sonar"
     ]
    ]
   ],
@@ -19269,6 +21835,65 @@
     ]
    ]
   ],
+  "metrics_piper_wav2vec2_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_piper_wav2vec2",
+    "dataset_source",
+    "retrieval_metrics_piper_wav2vec2_sonar",
+    "retrieval_piper_wav2vec2_sonar",
+    "transcription_metrics_piper_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_wav2vec2_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_piper_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_whisper_jina": [
    "measure",
    "metrics",
@@ -19384,6 +22009,65 @@
     [
      "transcription_scores",
      "transcription_metrics_piper_whisper_labse"
+    ]
+   ]
+  ],
+  "metrics_piper_whisper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_piper_whisper",
+    "dataset_source",
+    "retrieval_metrics_piper_whisper_sonar",
+    "retrieval_piper_whisper_sonar",
+    "transcription_metrics_piper_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_piper_whisper_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_whisper_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_piper_whisper_sonar"
+    ],
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_whisper_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_piper_whisper_sonar"
     ]
    ]
   ],
@@ -19505,6 +22189,65 @@
     ]
    ]
   ],
+  "metrics_xtts_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_xtts_m4t",
+    "dataset_source",
+    "retrieval_metrics_xtts_m4t_sonar",
+    "retrieval_xtts_m4t_sonar",
+    "transcription_metrics_xtts_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_m4t_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_xtts_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_xtts_wav2vec2_jina": [
    "measure",
    "metrics",
@@ -19620,6 +22363,65 @@
     [
      "transcription_scores",
      "transcription_metrics_xtts_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "metrics_xtts_wav2vec2_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_xtts_wav2vec2",
+    "dataset_source",
+    "retrieval_metrics_xtts_wav2vec2_sonar",
+    "retrieval_xtts_wav2vec2_sonar",
+    "transcription_metrics_xtts_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_wav2vec2_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_wav2vec2_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_xtts_wav2vec2_sonar"
     ]
    ]
   ],
@@ -19741,6 +22543,65 @@
     ]
    ]
   ],
+  "metrics_xtts_whisper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "asr_xtts_whisper",
+    "dataset_source",
+    "retrieval_metrics_xtts_whisper_sonar",
+    "retrieval_xtts_whisper_sonar",
+    "transcription_metrics_xtts_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_cer",
+     "transcription_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "per_query_wer",
+     "transcription_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_whisper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_whisper_sonar"
+    ],
+    [
+     "transcription_scores",
+     "transcription_metrics_xtts_whisper_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_m4t_jina": [
    "search",
    "retrieval",
@@ -19804,6 +22665,39 @@
     [
      "vector_index",
      "vector_db_labse"
+    ]
+   ]
+  ],
+  "retrieval_m4t_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_m4t_m4t",
+    "dataset_source",
+    "text_embedding_m4t_m4t_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_m4t_m4t_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -19873,6 +22767,39 @@
     ]
    ]
   ],
+  "retrieval_m4t_wav2vec2_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_m4t_wav2vec2",
+    "dataset_source",
+    "text_embedding_m4t_wav2vec2_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_m4t_wav2vec2_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_whisper_jina": [
    "search",
    "retrieval",
@@ -19939,6 +22866,39 @@
     ]
    ]
   ],
+  "retrieval_m4t_whisper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_m4t_whisper",
+    "dataset_source",
+    "text_embedding_m4t_whisper_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_m4t_whisper_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_m4t_jina": [
    "measure",
    "retrieval_metrics",
@@ -19984,6 +22944,30 @@
     [
      "retrieved",
      "retrieval_m4t_m4t_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_m4t_sonar"
     ]
    ]
   ],
@@ -20035,6 +23019,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_m4t_wav2vec2_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_whisper_jina": [
    "measure",
    "retrieval_metrics",
@@ -20080,6 +23088,30 @@
     [
      "retrieved",
      "retrieval_m4t_whisper_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_whisper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_whisper_sonar"
     ]
    ]
   ],
@@ -20131,6 +23163,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_m4t_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_piper_wav2vec2_jina": [
    "measure",
    "retrieval_metrics",
@@ -20176,6 +23232,30 @@
     [
      "retrieved",
      "retrieval_piper_wav2vec2_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_piper_wav2vec2_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_wav2vec2_sonar"
     ]
    ]
   ],
@@ -20227,6 +23307,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_whisper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_whisper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_m4t_jina": [
    "measure",
    "retrieval_metrics",
@@ -20272,6 +23376,30 @@
     [
      "retrieved",
      "retrieval_xtts_m4t_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_m4t_sonar"
     ]
    ]
   ],
@@ -20323,6 +23451,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_xtts_wav2vec2_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_wav2vec2_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_wav2vec2_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_whisper_jina": [
    "measure",
    "retrieval_metrics",
@@ -20368,6 +23520,30 @@
     [
      "retrieved",
      "retrieval_xtts_whisper_labse"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_whisper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_whisper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_whisper_sonar"
     ]
    ]
   ],
@@ -20437,6 +23613,39 @@
     ]
    ]
   ],
+  "retrieval_piper_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_piper_m4t",
+    "dataset_source",
+    "text_embedding_piper_m4t_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_piper_m4t_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_piper_wav2vec2_jina": [
    "search",
    "retrieval",
@@ -20500,6 +23709,39 @@
     [
      "vector_index",
      "vector_db_labse"
+    ]
+   ]
+  ],
+  "retrieval_piper_wav2vec2_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_piper_wav2vec2",
+    "dataset_source",
+    "text_embedding_piper_wav2vec2_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_piper_wav2vec2_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -20569,6 +23811,39 @@
     ]
    ]
   ],
+  "retrieval_piper_whisper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_piper_whisper",
+    "dataset_source",
+    "text_embedding_piper_whisper_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_piper_whisper_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_m4t_jina": [
    "search",
    "retrieval",
@@ -20632,6 +23907,39 @@
     [
      "vector_index",
      "vector_db_labse"
+    ]
+   ]
+  ],
+  "retrieval_xtts_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_xtts_m4t",
+    "dataset_source",
+    "text_embedding_xtts_m4t_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_xtts_m4t_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -20701,6 +24009,39 @@
     ]
    ]
   ],
+  "retrieval_xtts_wav2vec2_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_xtts_wav2vec2",
+    "dataset_source",
+    "text_embedding_xtts_wav2vec2_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_xtts_wav2vec2_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_whisper_jina": [
    "search",
    "retrieval",
@@ -20767,6 +24108,39 @@
     ]
    ]
   ],
+  "retrieval_xtts_whisper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "asr_xtts_whisper",
+    "dataset_source",
+    "text_embedding_xtts_whisper_sonar",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "text_query_vectors",
+     "text_embedding_xtts_whisper_sonar"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "text_embedding_m4t_m4t_jina": [
    "embed",
    "text_embedding",
@@ -20824,6 +24198,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ]
+   ]
+  ],
+  "text_embedding_m4t_m4t_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_m4t_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -20899,6 +24308,41 @@
     ]
    ]
   ],
+  "text_embedding_m4t_wav2vec2_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_m4t_wav2vec2"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ]
+   ]
+  ],
   "text_embedding_m4t_whisper_jina": [
    "embed",
    "text_embedding",
@@ -20956,6 +24400,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ]
+   ]
+  ],
+  "text_embedding_m4t_whisper_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_m4t_whisper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -21031,6 +24510,41 @@
     ]
    ]
   ],
+  "text_embedding_piper_m4t_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_piper_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ]
+   ]
+  ],
   "text_embedding_piper_wav2vec2_jina": [
    "embed",
    "text_embedding",
@@ -21088,6 +24602,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ]
+   ]
+  ],
+  "text_embedding_piper_wav2vec2_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_piper_wav2vec2"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -21163,6 +24712,41 @@
     ]
    ]
   ],
+  "text_embedding_piper_whisper_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_piper_whisper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ]
+   ]
+  ],
   "text_embedding_xtts_m4t_jina": [
    "embed",
    "text_embedding",
@@ -21220,6 +24804,41 @@
     [
      "model",
      "'labse'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ]
+   ]
+  ],
+  "text_embedding_xtts_m4t_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_xtts_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -21295,6 +24914,41 @@
     ]
    ]
   ],
+  "text_embedding_xtts_wav2vec2_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_xtts_wav2vec2"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ]
+   ]
+  ],
   "text_embedding_xtts_whisper_jina": [
    "embed",
    "text_embedding",
@@ -21361,6 +25015,41 @@
     ]
    ]
   ],
+  "text_embedding_xtts_whisper_sonar": [
+   "embed",
+   "text_embedding",
+   [
+    "asr_xtts_whisper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'text'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ]
+   ]
+  ],
   "transcription_metrics_m4t_m4t_jina": [
    "measure",
    "transcription_metrics",
@@ -21390,6 +25079,34 @@
    ]
   ],
   "transcription_metrics_m4t_m4t_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_m4t_m4t",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_m4t_m4t_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -21473,6 +25190,34 @@
     ]
    ]
   ],
+  "transcription_metrics_m4t_wav2vec2_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_m4t_wav2vec2",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_m4t_whisper_jina": [
    "measure",
    "transcription_metrics",
@@ -21502,6 +25247,34 @@
    ]
   ],
   "transcription_metrics_m4t_whisper_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_m4t_whisper",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_m4t_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_m4t_whisper_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -21585,6 +25358,34 @@
     ]
    ]
   ],
+  "transcription_metrics_piper_m4t_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_piper_m4t",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_piper_wav2vec2_jina": [
    "measure",
    "transcription_metrics",
@@ -21614,6 +25415,34 @@
    ]
   ],
   "transcription_metrics_piper_wav2vec2_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_piper_wav2vec2",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_piper_wav2vec2_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -21697,6 +25526,34 @@
     ]
    ]
   ],
+  "transcription_metrics_piper_whisper_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_piper_whisper",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_piper_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_xtts_m4t_jina": [
    "measure",
    "transcription_metrics",
@@ -21726,6 +25583,34 @@
    ]
   ],
   "transcription_metrics_xtts_m4t_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_xtts_m4t",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_m4t"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_xtts_m4t_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -21809,6 +25694,34 @@
     ]
    ]
   ],
+  "transcription_metrics_xtts_wav2vec2_sonar": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_xtts_wav2vec2",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_wav2vec2"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
   "transcription_metrics_xtts_whisper_jina": [
    "measure",
    "transcription_metrics",
@@ -21838,6 +25751,34 @@
    ]
   ],
   "transcription_metrics_xtts_whisper_labse": [
+   "measure",
+   "transcription_metrics",
+   [
+    "asr_xtts_whisper",
+    "dataset_source"
+   ],
+   [
+    [
+     "family",
+     "'transcription'"
+    ]
+   ],
+   [
+    [
+     "query_text",
+     "asr_xtts_whisper"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "transcription_metrics_xtts_whisper_sonar": [
    "measure",
    "transcription_metrics",
    [
@@ -22015,6 +25956,25 @@
      "corpus_embedding_labse"
     ]
    ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
+    ]
+   ]
   ]
  },
  "pubmed_qa_tts_audioemb_cmp.yaml": {
@@ -22166,6 +26126,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "tts_m4t"
+    ]
+   ]
+  ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "tts_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -22332,6 +26327,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "tts_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "tts_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -22489,6 +26519,41 @@
     ]
    ]
   ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "tts_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "tts_xtts"
+    ]
+   ]
+  ],
   "corpus_embedding_apm_whisper": [
    "embed",
    "corpus_embedding",
@@ -22558,6 +26623,37 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
     ]
    ],
    [
@@ -22659,6 +26755,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -22731,6 +26851,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -22800,6 +26944,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -22926,6 +27094,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -23046,6 +27255,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -23172,6 +27422,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -23268,6 +27559,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -23337,6 +27660,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -23412,6 +27759,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -23481,6 +27852,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -23580,6 +27975,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -23673,6 +28100,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -23824,6 +28283,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -23986,6 +28464,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -24143,6 +28656,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -24291,6 +28839,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -24507,6 +29090,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -24599,6 +29213,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -24671,6 +29309,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -24740,6 +29402,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -24866,6 +29552,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -24986,6 +29713,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -25112,6 +29880,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -25208,6 +30017,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -25277,6 +30118,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -25352,6 +30217,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -25421,6 +30310,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -25520,6 +30433,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -25613,6 +30558,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -25764,6 +30741,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -25926,6 +30922,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -26083,6 +31114,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -26231,6 +31297,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -26447,6 +31548,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -26539,6 +31671,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -26611,6 +31767,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -26680,6 +31860,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -26806,6 +32010,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -26926,6 +32171,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -27052,6 +32338,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -27148,6 +32475,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -27217,6 +32576,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -27292,6 +32675,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -27361,6 +32768,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -27460,6 +32891,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -27553,6 +33016,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -27704,6 +33199,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -27866,6 +33380,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -28023,6 +33572,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -28171,6 +33755,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -28387,6 +34006,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -28479,6 +34129,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -28551,6 +34225,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -28620,6 +34318,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -28746,6 +34468,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -28866,6 +34629,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -28992,6 +34796,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -29088,6 +34933,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -29157,6 +35034,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -29232,6 +35133,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -29301,6 +35226,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -29400,6 +35349,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -29493,6 +35474,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -29644,6 +35657,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -29806,6 +35838,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -29963,6 +36030,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -30111,6 +36213,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -30327,6 +36464,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -30419,6 +36587,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -30491,6 +36683,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -30560,6 +36776,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -30686,6 +36926,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -30806,6 +37087,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -30932,6 +37254,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -31028,6 +37391,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -31097,6 +37492,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -31172,6 +37591,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -31241,6 +37684,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -31340,6 +37807,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -31433,6 +37932,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -31584,6 +38115,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -31746,6 +38296,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -31903,6 +38488,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -32051,6 +38671,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -32267,6 +38922,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -32359,6 +39045,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -32431,6 +39141,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -32500,6 +39234,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -32626,6 +39384,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -32746,6 +39545,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -32872,6 +39712,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -32968,6 +39849,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -33037,6 +39950,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -33112,6 +40049,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -33181,6 +40142,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -33280,6 +40265,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -33373,6 +40390,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -33524,6 +40573,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -33686,6 +40754,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -33843,6 +40946,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -33991,6 +41129,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -34207,6 +41380,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -34299,6 +41503,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -34371,6 +41599,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -34440,6 +41692,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -34566,6 +41842,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -34686,6 +42003,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -34812,6 +42170,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -34908,6 +42307,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -34977,6 +42408,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -35052,6 +42507,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -35121,6 +42600,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -35220,6 +42723,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -35313,6 +42848,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -35464,6 +43031,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -35626,6 +43212,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -35783,6 +43404,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -35931,6 +43587,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -36147,6 +43838,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -36239,6 +43961,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -36311,6 +44057,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -36380,6 +44150,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -36506,6 +44300,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -36626,6 +44461,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -36752,6 +44628,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -36848,6 +44765,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -36917,6 +44866,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -36992,6 +44965,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -37061,6 +45058,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -37160,6 +45181,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -37253,6 +45306,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -37404,6 +45489,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -37566,6 +45670,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -37723,6 +45862,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -37871,6 +46045,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -38087,6 +46296,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -38179,6 +46419,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -38251,6 +46515,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -38320,6 +46608,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -38446,6 +46758,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -38566,6 +46919,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -38692,6 +47086,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -38788,6 +47223,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -38857,6 +47324,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -38932,6 +47423,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -39001,6 +47516,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -39100,6 +47639,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -39193,6 +47764,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -39344,6 +47947,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]
@@ -39506,6 +48128,41 @@
     ]
    ]
   ],
+  "audio_embedding_m4t_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_m4t"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_m4t"
+    ]
+   ]
+  ],
   "audio_embedding_piper_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -39663,6 +48320,41 @@
     ]
    ]
   ],
+  "audio_embedding_piper_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_piper"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_piper"
+    ]
+   ]
+  ],
   "audio_embedding_xtts_apm_m4t": [
    "embed",
    "audio_embedding",
@@ -39811,6 +48503,41 @@
     [
      "size",
      "'v2-large'"
+    ]
+   ],
+   [
+    [
+     "query_audio",
+     "augment_xtts"
+    ]
+   ]
+  ],
+  "audio_embedding_xtts_sonar": [
+   "embed",
+   "audio_embedding",
+   [
+    "augment_xtts"
+   ],
+   [
+    [
+     "axis",
+     "'query'"
+    ],
+    [
+     "device",
+     "'cuda:0'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "modality",
+     "'audio'"
+    ],
+    [
+     "model",
+     "'sonar_speech'"
     ]
    ],
    [
@@ -40027,6 +48754,37 @@
     ]
    ]
   ],
+  "corpus_embedding_sonar": [
+   "embed",
+   "corpus_embedding",
+   [
+    "dataset_source"
+   ],
+   [
+    [
+     "axis",
+     "'corpus'"
+    ],
+    [
+     "device",
+     "'cuda:1'"
+    ],
+    [
+     "embedding_space",
+     "'sonar'"
+    ],
+    [
+     "model",
+     "'sonar'"
+    ]
+   ],
+   [
+    [
+     "corpus",
+     "dataset_source"
+    ]
+   ]
+  ],
   "dataset_source": [
    "source",
    "dataset_source",
@@ -40119,6 +48877,30 @@
     ]
    ]
   ],
+  "finalize_m4t_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_m4t_sonar",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "finalize_piper_apm_m4t": [
    "sink",
    "finalize",
@@ -40191,6 +48973,30 @@
     ]
    ]
   ],
+  "finalize_piper_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "finalize_xtts_apm_m4t": [
    "sink",
    "finalize",
@@ -40260,6 +49066,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "finalize_xtts_sonar": [
+   "sink",
+   "finalize",
+   [
+    "metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "target",
+     "'finalize'"
+    ]
+   ],
+   [
+    [
+     "metrics",
+     "metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -40386,6 +49216,47 @@
     ]
    ]
   ],
+  "metrics_m4t_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar",
+    "retrieval_metrics_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_m4t_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
+    ]
+   ]
+  ],
   "metrics_piper_apm_m4t": [
    "measure",
    "metrics",
@@ -40506,6 +49377,47 @@
     [
      "retrieved",
      "retrieval_piper_eam"
+    ]
+   ]
+  ],
+  "metrics_piper_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_piper_sonar",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_piper_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
     ]
    ]
   ],
@@ -40632,6 +49544,47 @@
     ]
    ]
   ],
+  "metrics_xtts_sonar": [
+   "measure",
+   "metrics",
+   [
+    "dataset_source",
+    "retrieval_metrics_xtts_sonar",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'report'"
+    ]
+   ],
+   [
+    [
+     "per_query_recall5",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "query_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieval_scores",
+     "retrieval_metrics_xtts_sonar"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
+    ]
+   ]
+  ],
   "retrieval_m4t_apm_m4t": [
    "search",
    "retrieval",
@@ -40728,6 +49681,38 @@
     ]
    ]
   ],
+  "retrieval_m4t_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_m4t_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_m4t_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_m4t_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -40797,6 +49782,30 @@
     [
      "retrieved",
      "retrieval_m4t_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_m4t_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_m4t_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_m4t_sonar"
     ]
    ]
   ],
@@ -40872,6 +49881,30 @@
     ]
    ]
   ],
+  "retrieval_metrics_piper_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_piper_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_piper_sonar"
+    ]
+   ]
+  ],
   "retrieval_metrics_xtts_apm_m4t": [
    "measure",
    "retrieval_metrics",
@@ -40941,6 +49974,30 @@
     [
      "retrieved",
      "retrieval_xtts_eam"
+    ]
+   ]
+  ],
+  "retrieval_metrics_xtts_sonar": [
+   "measure",
+   "retrieval_metrics",
+   [
+    "dataset_source",
+    "retrieval_xtts_sonar"
+   ],
+   [
+    [
+     "family",
+     "'retrieval'"
+    ]
+   ],
+   [
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "retrieved",
+     "retrieval_xtts_sonar"
     ]
    ]
   ],
@@ -41040,6 +50097,38 @@
     ]
    ]
   ],
+  "retrieval_piper_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_piper_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_piper_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
+    ]
+   ]
+  ],
   "retrieval_xtts_apm_m4t": [
    "search",
    "retrieval",
@@ -41133,6 +50222,38 @@
     [
      "vector_index",
      "vector_db_eam"
+    ]
+   ]
+  ],
+  "retrieval_xtts_sonar": [
+   "search",
+   "retrieval",
+   [
+    "audio_embedding_xtts_sonar",
+    "dataset_source",
+    "vector_db_sonar"
+   ],
+   [],
+   [
+    [
+     "audio_query_vectors",
+     "audio_embedding_xtts_sonar"
+    ],
+    [
+     "reference_text",
+     "dataset_source"
+    ],
+    [
+     "reference_transcription",
+     "dataset_source"
+    ],
+    [
+     "relevant_docs",
+     "dataset_source"
+    ],
+    [
+     "vector_index",
+     "vector_db_sonar"
     ]
    ]
   ],
@@ -41284,6 +50405,25 @@
     [
      "corpus_vectors",
      "corpus_embedding_eam"
+    ]
+   ]
+  ],
+  "vector_db_sonar": [
+   "index",
+   "vector_db",
+   [
+    "corpus_embedding_sonar"
+   ],
+   [
+    [
+     "store",
+     "'inmemory'"
+    ]
+   ],
+   [
+    [
+     "corpus_vectors",
+     "corpus_embedding_sonar"
     ]
    ]
   ]

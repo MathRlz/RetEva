@@ -6,11 +6,13 @@
 # chain (pubmed_qa_tts_audioemb_cmp) can at best match its own model's row here — the gap
 # is the cost of the speech round-trip.
 #
-# 3 variants:
+# 4 variants:
 #   jina  — jina_v4 (jinaai/jina-embeddings-v4), the space the APM audio embedders target
 #   labse — LaBSE (the second text axis of the tts/asr cmp)
 #   eam   — side/eam AlignmentModel TEXT side on both query and corpus (upper bound for
 #           the eam audio pair; needs EAM_CHECKPOINT_DIR)
+#   sonar — SONAR text encoder on both sides (upper bound for the sonar_speech audio
+#           pair; needs `pip install 'evaluator[sonar]'`)
 #
 # Only MEANINGFUL nodes written; retrieval_metrics/metrics/finalize auto-appended per
 # retrieval variant (complete_structural_plumbing).
@@ -95,6 +97,24 @@ graph:
   - id: retrieval_eam
     type: retrieval
 
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: text_embedding_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_sonar
+    type: retrieval
   edges:
   - {from: dataset_source, to: corpus_embedding_jina, input: corpus}
   - {from: corpus_embedding_jina, to: vector_db_jina, input: corpus_vectors}
@@ -120,6 +140,14 @@ graph:
   - {from: dataset_source, output: reference_text, to: retrieval_eam, input: query_text}
   - {from: dataset_source, to: retrieval_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_eam, input: relevant_docs}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: dataset_source, output: reference_text, to: text_embedding_sonar, input: query_text}
+  - {from: text_embedding_sonar, output: text_query_vectors, to: retrieval_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_sonar, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_sonar, input: relevant_docs}
 
 # Model lifecycle: lazy load; a node's model is parked warm in host RAM the MOMENT its
 # node finishes (on_use_soft_cpu: GPU holds only the running node's models; warm pool

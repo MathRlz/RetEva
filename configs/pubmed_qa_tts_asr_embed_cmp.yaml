@@ -1,10 +1,8 @@
 # Full TTS x ASR x text_embedding comparison on pubmed_qa (retrieval-only, no generation).
 #
-# 3 TTS (xtts_v2, m4t, piper) x 3 ASR (whisper, seamless_m4t, wav2vec2) x 2 text_embedding
-# (jina_v4, labse) = 18 leaf branches, full cartesian product. `sonar` was dropped: it
-# needs `sonar-space`/`fairseq2`, whose unconstrained resolution broke torch on the
-# machine this ran on (see pyproject.toml's `sonar` extra comment) — not worth requiring
-# it just for one axis of this comparison.
+# 3 TTS (xtts_v2, m4t, piper) x 3 ASR (whisper, seamless_m4t, wav2vec2) x 3 text_embedding
+# (jina_v4, labse, sonar) = 27 leaf branches, full cartesian product. `sonar` needs
+# `pip install 'evaluator[sonar]'` (sonar-space + fairseq2) on the run machine.
 #
 # Only the MEANINGFUL nodes are written here: dataset_source, tts, corpus_embedding,
 # vector_db, asr, text_embedding, retrieval. retrieval_metrics/transcription_metrics/
@@ -370,6 +368,106 @@ graph:
     type: retrieval
     params:
       k: 10
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: text_embedding_xtts_whisper_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_xtts_whisper_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_xtts_m4t_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_xtts_m4t_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_xtts_wav2vec2_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_xtts_wav2vec2_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_m4t_whisper_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_m4t_whisper_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_m4t_m4t_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_m4t_m4t_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_m4t_wav2vec2_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_m4t_wav2vec2_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_piper_whisper_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_piper_whisper_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_piper_m4t_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_piper_m4t_sonar
+    type: retrieval
+    params:
+      k: 10
+  - id: text_embedding_piper_wav2vec2_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_piper_wav2vec2_sonar
+    type: retrieval
+    params:
+      k: 10
   edges:
   - {from: dataset_source, to: tts_xtts, input: query_text}
   - {from: dataset_source, to: tts_m4t, input: query_text}
@@ -495,6 +593,62 @@ graph:
   - {from: asr_piper_wav2vec2, to: retrieval_piper_wav2vec2_labse, input: query_text}
   - {from: dataset_source, to: retrieval_piper_wav2vec2_labse, input: reference_transcription}
   - {from: dataset_source, to: retrieval_piper_wav2vec2_labse, input: relevant_docs}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: asr_xtts_whisper, to: text_embedding_xtts_whisper_sonar, input: query_text}
+  - {from: text_embedding_xtts_whisper_sonar, output: text_query_vectors, to: retrieval_xtts_whisper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_whisper_sonar, input: vector_index}
+  - {from: asr_xtts_whisper, to: retrieval_xtts_whisper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_whisper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_whisper_sonar, input: relevant_docs}
+  - {from: asr_xtts_m4t, to: text_embedding_xtts_m4t_sonar, input: query_text}
+  - {from: text_embedding_xtts_m4t_sonar, output: text_query_vectors, to: retrieval_xtts_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_m4t_sonar, input: vector_index}
+  - {from: asr_xtts_m4t, to: retrieval_xtts_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_m4t_sonar, input: relevant_docs}
+  - {from: asr_xtts_wav2vec2, to: text_embedding_xtts_wav2vec2_sonar, input: query_text}
+  - {from: text_embedding_xtts_wav2vec2_sonar, output: text_query_vectors, to: retrieval_xtts_wav2vec2_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_wav2vec2_sonar, input: vector_index}
+  - {from: asr_xtts_wav2vec2, to: retrieval_xtts_wav2vec2_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_wav2vec2_sonar, input: relevant_docs}
+  - {from: asr_m4t_whisper, to: text_embedding_m4t_whisper_sonar, input: query_text}
+  - {from: text_embedding_m4t_whisper_sonar, output: text_query_vectors, to: retrieval_m4t_whisper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_whisper_sonar, input: vector_index}
+  - {from: asr_m4t_whisper, to: retrieval_m4t_whisper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_whisper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_whisper_sonar, input: relevant_docs}
+  - {from: asr_m4t_m4t, to: text_embedding_m4t_m4t_sonar, input: query_text}
+  - {from: text_embedding_m4t_m4t_sonar, output: text_query_vectors, to: retrieval_m4t_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_m4t_sonar, input: vector_index}
+  - {from: asr_m4t_m4t, to: retrieval_m4t_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_m4t_sonar, input: relevant_docs}
+  - {from: asr_m4t_wav2vec2, to: text_embedding_m4t_wav2vec2_sonar, input: query_text}
+  - {from: text_embedding_m4t_wav2vec2_sonar, output: text_query_vectors, to: retrieval_m4t_wav2vec2_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_wav2vec2_sonar, input: vector_index}
+  - {from: asr_m4t_wav2vec2, to: retrieval_m4t_wav2vec2_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_wav2vec2_sonar, input: relevant_docs}
+  - {from: asr_piper_whisper, to: text_embedding_piper_whisper_sonar, input: query_text}
+  - {from: text_embedding_piper_whisper_sonar, output: text_query_vectors, to: retrieval_piper_whisper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_whisper_sonar, input: vector_index}
+  - {from: asr_piper_whisper, to: retrieval_piper_whisper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_whisper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_whisper_sonar, input: relevant_docs}
+  - {from: asr_piper_m4t, to: text_embedding_piper_m4t_sonar, input: query_text}
+  - {from: text_embedding_piper_m4t_sonar, output: text_query_vectors, to: retrieval_piper_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_m4t_sonar, input: vector_index}
+  - {from: asr_piper_m4t, to: retrieval_piper_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_m4t_sonar, input: relevant_docs}
+  - {from: asr_piper_wav2vec2, to: text_embedding_piper_wav2vec2_sonar, input: query_text}
+  - {from: text_embedding_piper_wav2vec2_sonar, output: text_query_vectors, to: retrieval_piper_wav2vec2_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_wav2vec2_sonar, input: vector_index}
+  - {from: asr_piper_wav2vec2, to: retrieval_piper_wav2vec2_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_wav2vec2_sonar, input: relevant_docs}
 
 runtime:
   cache:

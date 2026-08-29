@@ -20,7 +20,9 @@
 #        one side/eam AlignmentModel checkpoint, SAME model_path on both nodes so the
 #        loaded core is shared (see models/a2e/eam_alignment.py), shared eam_space.
 #
-# 3 TTS (xtts_v2, m4t, piper) x 3 pairs = 9 retrieval variants. Only MEANINGFUL nodes are
+# 3 TTS (xtts_v2, m4t, piper) x 4 pairs = 12 retrieval variants (4th: SONAR
+# speech encoder <-> SONAR text encoder, shared zero-shot 'sonar' space — needs
+# `pip install 'evaluator[sonar]'`). Only MEANINGFUL nodes are
 # written here; retrieval_metrics/metrics/finalize are auto-appended per retrieval variant
 # (complete_structural_plumbing) -- do not add them by hand.
 #
@@ -235,6 +237,40 @@ graph:
   - id: retrieval_piper_eam
     type: retrieval
 
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: audio_embedding_xtts_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_xtts_sonar
+    type: retrieval
+  - id: audio_embedding_m4t_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_m4t_sonar
+    type: retrieval
+  - id: audio_embedding_piper_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_piper_sonar
+    type: retrieval
   edges:
   - {from: dataset_source, to: tts_xtts, input: query_text}
   - {from: dataset_source, to: tts_m4t, input: query_text}
@@ -300,6 +336,26 @@ graph:
   - {from: dataset_source, output: reference_text, to: retrieval_piper_eam, input: query_text}
   - {from: dataset_source, to: retrieval_piper_eam, input: reference_transcription}
   - {from: dataset_source, to: retrieval_piper_eam, input: relevant_docs}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: augment_xtts, to: audio_embedding_xtts_sonar, input: query_audio}
+  - {from: audio_embedding_xtts_sonar, output: audio_query_vectors, to: retrieval_xtts_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_xtts_sonar, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_xtts_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_xtts_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_xtts_sonar, input: relevant_docs}
+  - {from: augment_m4t, to: audio_embedding_m4t_sonar, input: query_audio}
+  - {from: audio_embedding_m4t_sonar, output: audio_query_vectors, to: retrieval_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_sonar, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_sonar, input: relevant_docs}
+  - {from: augment_piper, to: audio_embedding_piper_sonar, input: query_audio}
+  - {from: audio_embedding_piper_sonar, output: audio_query_vectors, to: retrieval_piper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_piper_sonar, input: vector_index}
+  - {from: dataset_source, output: reference_text, to: retrieval_piper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_piper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_piper_sonar, input: relevant_docs}
 
 # Model lifecycle: lazy load; a node's model is parked warm in host RAM the MOMENT its
 # node finishes (on_use_soft_cpu: GPU holds only the running node's models; warm pool

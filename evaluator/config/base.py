@@ -43,12 +43,14 @@ MODEL_MEMORY_ESTIMATES_GB: Dict[str, Dict[str, float]] = {
         "nemotron": 3.0,
         "clip": 1.5,
         "eam_alignment": 6.0,  # SeamlessM4T-v2 text encoder fp32 + projection head
+        "sonar": 3.0,  # SONAR basic text encoder fp32 (~0.77B)
         "default": 3.0,
     },
     "audio_embedding": {
         "attention_pool": 4.0,  # whisper-large / M4T speech encoder fp32 + APM head
         "clap_style": 2.0,
         "eam_alignment": 6.0,  # SeamlessM4T-v2 speech encoder fp32 + projection head
+        "sonar_speech": 3.0,  # SONAR w2v-BERT speech encoder fp32 (~0.6B)
         "default": 3.0,
     },
     # TTS providers (keyed by provider name). A 0.0 entry marks a CPU-only provider the
