@@ -336,6 +336,7 @@ graph:
   - {from: retrieval_metrics_cascade_k1, to: metrics_cascade_k1, input: retrieval_scores}
   - {from: answer_metrics_cascade_k1, to: metrics_cascade_k1, input: answer_scores}
   - {from: retrieval_cascade_k1, to: metrics_cascade_k1, input: retrieved}
+  - {from: asr, to: metrics_cascade_k1, input: query_text}
   - {from: dataset_source, to: metrics_cascade_k1, input: reference_transcription}
   - {from: dataset_source, to: metrics_cascade_k1, input: relevant_docs}
   - {from: retrieval_metrics_cascade_k1, to: metrics_cascade_k1, input: per_query_recall5}
@@ -366,6 +367,7 @@ graph:
   - {from: retrieval_metrics_cascade_k3, to: metrics_cascade_k3, input: retrieval_scores}
   - {from: answer_metrics_cascade_k3, to: metrics_cascade_k3, input: answer_scores}
   - {from: retrieval_cascade_k3, to: metrics_cascade_k3, input: retrieved}
+  - {from: asr, to: metrics_cascade_k3, input: query_text}
   - {from: dataset_source, to: metrics_cascade_k3, input: reference_transcription}
   - {from: dataset_source, to: metrics_cascade_k3, input: relevant_docs}
   - {from: retrieval_metrics_cascade_k3, to: metrics_cascade_k3, input: per_query_recall5}
@@ -396,6 +398,7 @@ graph:
   - {from: retrieval_metrics_cascade_k5, to: metrics_cascade_k5, input: retrieval_scores}
   - {from: answer_metrics_cascade_k5, to: metrics_cascade_k5, input: answer_scores}
   - {from: retrieval_cascade_k5, to: metrics_cascade_k5, input: retrieved}
+  - {from: asr, to: metrics_cascade_k5, input: query_text}
   - {from: dataset_source, to: metrics_cascade_k5, input: reference_transcription}
   - {from: dataset_source, to: metrics_cascade_k5, input: relevant_docs}
   - {from: retrieval_metrics_cascade_k5, to: metrics_cascade_k5, input: per_query_recall5}

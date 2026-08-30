@@ -31,13 +31,41 @@ _SNAPSHOT_FIELDS = (
 )
 
 
+_CODE_FINGERPRINT: Optional[str] = None
+
+
+def _code_fingerprint() -> str:
+    """Fingerprint of the installed evaluator SOURCE (path + size + mtime of every .py,
+    ~3 ms, cached per process). Folded into ``run_key`` so a journal written by OLD code
+    is silently ignored after any code update: resuming such a journal skips the very
+    levels a fix changed, making the fix look broken (a run crashed under old handler
+    code, the handler was fixed, the rerun resumed PAST the fixed handler and crashed
+    identically — observed live). mtime-based on purpose: the journal is machine-local,
+    and a manual file copy (no git metadata) must also invalidate it."""
+    global _CODE_FINGERPRINT
+    if _CODE_FINGERPRINT is None:
+        from pathlib import Path
+
+        pkg = Path(__file__).resolve().parent.parent  # the evaluator package root
+        h = hashlib.sha256()
+        for p in sorted(pkg.rglob("*.py")):
+            try:
+                st = p.stat()
+                h.update(f"{p.relative_to(pkg)}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+            except OSError:
+                continue
+        _CODE_FINGERPRINT = h.hexdigest()[:16]
+    return _CODE_FINGERPRINT
+
+
 def run_key(config: Any, node_ids: Tuple[str, ...]) -> str:
-    """Stable id for a run: same config identity + same graph ⇒ same key (resumable)."""
+    """Stable id for a run: same config identity + same graph + same CODE ⇒ same key
+    (resumable). Any source change yields a new key, so stale journals never resume."""
     from .provenance import config_hash
 
     base = config_hash(config) if config is not None else "noconfig"
     return hashlib.sha256(
-        (base + "|" + ",".join(node_ids)).encode("utf-8")
+        (base + "|" + ",".join(node_ids) + "|" + _code_fingerprint()).encode("utf-8")
     ).hexdigest()[:16]
 
 
@@ -81,8 +109,26 @@ def try_restore(state: Any, blob: Dict[str, Any]) -> bool:
 class RunJournal:
     """Persists the latest resumable snapshot + last completed level for one ``run_key``."""
 
+    #: journals older than this are orphans (their code fingerprint / config no longer
+    #: exists) — pruned on journal setup so key rotation doesn't accumulate stale .pkl.
+    STALE_AFTER_S = 7 * 24 * 3600
+
     def __init__(self, checkpoints_dir: Path, key: str) -> None:
         self._path = Path(checkpoints_dir) / f"run_{key}.pkl"
+        self._prune_stale(Path(checkpoints_dir))
+
+    def _prune_stale(self, checkpoints_dir: Path) -> None:
+        """Best-effort removal of old sibling journals (code-fingerprinted keys rotate on
+        every source change, so orphans are expected, not exceptional)."""
+        import time
+
+        cutoff = time.time() - self.STALE_AFTER_S
+        try:
+            for p in checkpoints_dir.glob("run_*.pkl"):
+                if p != self._path and p.stat().st_mtime < cutoff:
+                    p.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def save(self, level_idx: int, blob: Dict[str, Any]) -> None:
         """Overwrite the single journal file with the latest state (best-effort)."""

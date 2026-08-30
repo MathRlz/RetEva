@@ -11380,6 +11380,10 @@
      "retrieval_cascade_k1"
     ],
     [
+     "query_text",
+     "asr"
+    ],
+    [
      "reference_transcription",
      "dataset_source"
     ],
@@ -11395,6 +11399,7 @@
    [],
    [
     "answer_metrics_cascade_k1",
+    "asr",
     "dataset_source",
     "retrieval_cascade_k1",
     "retrieval_metrics_cascade_k1"
@@ -11416,6 +11421,10 @@
      "retrieval_cascade_k3"
     ],
     [
+     "query_text",
+     "asr"
+    ],
+    [
      "reference_transcription",
      "dataset_source"
     ],
@@ -11431,6 +11440,7 @@
    [],
    [
     "answer_metrics_cascade_k3",
+    "asr",
     "dataset_source",
     "retrieval_cascade_k3",
     "retrieval_metrics_cascade_k3"
@@ -11452,6 +11462,10 @@
      "retrieval_cascade_k5"
     ],
     [
+     "query_text",
+     "asr"
+    ],
+    [
      "reference_transcription",
      "dataset_source"
     ],
@@ -11467,6 +11481,7 @@
    [],
    [
     "answer_metrics_cascade_k5",
+    "asr",
     "dataset_source",
     "retrieval_cascade_k5",
     "retrieval_metrics_cascade_k5"

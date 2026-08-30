@@ -343,6 +343,17 @@ def _stage_build_query_traces(s: RunState) -> None:
     # bus keyed by its own node id below. `s.results["query_traces"]` is written-then-read-back
     # as scratch space within this single call only (never read across nodes).
     results_with_scores, _, query_ids = _retrieved_or_text_ids(s)
+    if not query_ids:
+        # Nothing to key traces by — say WHY (which inputs this node is bound to and what
+        # was actually on the bus) instead of leaving the judge to fail 2 nodes later
+        # with "no traces were built".
+        bindings = list(getattr(s.current_node, "bindings", ()) or ())
+        logger.warning(
+            "build_query_traces '%s': no per-query ids — no retrieved artifact and no keyed "
+            "query_text/reference_transcription on the bus; publishing no traces. bindings=%s",
+            getattr(s.current_node, "id", "?"), bindings,
+        )
+        return
     _build_query_traces(
         s,
         s.results,
