@@ -9526,6 +9526,10 @@
      "retrieval_cascade"
     ],
     [
+     "query_text",
+     "asr"
+    ],
+    [
      "reference_transcription",
      "dataset_source"
     ],
@@ -9541,6 +9545,7 @@
    [],
    [
     "answer_metrics_cascade",
+    "asr",
     "dataset_source",
     "retrieval_cascade",
     "retrieval_metrics_cascade"

@@ -567,12 +567,18 @@ def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
     # Bus-first: the ASR hypothesis in ASR modes (query_text is immutable, so
     # this is the un-rewritten output `wer`/`cer` score); the spoken reference in audio modes
     # (legacy parity — there the "query" scored by text metrics is the GT).
+    # ``is_asr_text_retrieval`` is RUN-global (pipeline presence): in a mixed graph (one
+    # branch through ASR, siblings text-only/latent) a sibling's metrics node has no
+    # query_text binding at all — fall back to the reference for that node instead of
+    # crashing, which is exactly what a pure non-ASR run would use.
     reference = _reference_transcriptions(s)
     query_text = (
-        s.get_artifact("query_text")
+        s.get_artifact("query_text", default=None)
         if is_asr_text_retrieval(s)
-        else reference
+        else None
     )
+    if query_text is None:
+        query_text = reference
     _keyed(query_text, "query_text")
     # ASR-quality reference = the spoken transcription, never question_text (M1a guard).
     _keyed(reference, "reference_transcription")

@@ -293,6 +293,7 @@ graph:
   - {from: retrieval_metrics_cascade, to: metrics_cascade, input: retrieval_scores}
   - {from: answer_metrics_cascade, to: metrics_cascade, input: answer_scores}
   - {from: retrieval_cascade, to: metrics_cascade, input: retrieved}
+  - {from: asr, to: metrics_cascade, input: query_text}
   - {from: dataset_source, to: metrics_cascade, input: reference_transcription}
   - {from: dataset_source, to: metrics_cascade, input: relevant_docs}
   - {from: retrieval_metrics_cascade, to: metrics_cascade, input: per_query_recall5}
