@@ -164,7 +164,10 @@ def test_embedder_report_field_uses_the_branch_override_via_retrieval_forwarding
     )
     results = {}
     _record_model_info(results, s)
-    assert results["embedder"] == "JinaModel - jina-embeddings-v4"
+    # Graph truth: this metrics node has NO query_text bound from an asr producer, so the
+    # embedder reports under the honest "text_embedder" key (the legacy "embedder" key is
+    # reserved for branches actually fed by an ASR hypothesis).
+    assert results["text_embedder"] == "JinaModel - jina-embeddings-v4"
     assert _build_provenance(s)["text_emb"]["resolved"] == "JinaModel - jina-embeddings-v4"
 
     s.current_node = StageNode(
@@ -173,5 +176,5 @@ def test_embedder_report_field_uses_the_branch_override_via_retrieval_forwarding
     )
     results = {}
     _record_model_info(results, s)
-    assert results["embedder"] == default_text_emb.model.name()
+    assert results["text_embedder"] == default_text_emb.model.name()
     assert _build_provenance(s)["text_emb"]["resolved"] == default_text_emb.model.name()

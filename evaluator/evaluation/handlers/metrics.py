@@ -24,9 +24,7 @@ from ..executor.state import RunState
 from ..result_schema import RunResults
 from .retrieval import _retrieved_from_bus
 from ._common import (
-    asr_ran,
-    retrieval_ran,
-    is_asr_text_retrieval,
+    asr_hypothesis,
     _ctx_first,
     _reference_transcriptions,
     _relevant_from_bus,
@@ -363,10 +361,11 @@ def _stage_aggregate(s: RunState) -> None:
 
 
 def _asr_hypothesis(s: RunState) -> list:
-    """The ASR hypothesis from the bus (``query_text``). It is immutable — correction /
-    optimization publish distinct names — so this is always the un-rewritten ASR output
-    WER/CER score against (no raw_query_text snapshot needed since Phase 4)."""
-    return list(s.get_artifact("query_text", default=[]))
+    """The ASR hypothesis bound to THIS node (``query_text`` from an asr producer —
+    graph truth; empty for a node fed by dataset/reference text). It is immutable —
+    correction / optimization publish distinct names — so this is always the
+    un-rewritten ASR output WER/CER score against."""
+    return asr_hypothesis(s)
 
 
 def _wer_cer_pair(pair):
@@ -380,11 +379,12 @@ def _asr_item_scores(s: RunState):
     """Per-item raw-ASR WER/CER lists (consumed by the answer-gen / judge / trace stages).
 
     The per-item WER/CER map is a pure, CPU-bound, order-preserving fold."""
-    if not asr_ran(s):  # only ASR modes carry WER/CER
+    hyp = _asr_hypothesis(s)
+    if not hyp:  # only a node fed by an ASR hypothesis carries WER/CER
         return [], []
     from ..executor.cpu_parallel import run_per_item
 
-    pairs = list(zip(_reference_transcriptions(s), _asr_hypothesis(s)))
+    pairs = list(zip(_reference_transcriptions(s), hyp))
     scored = run_per_item(s, _wer_cer_pair, pairs)
     return [w for w, _ in scored], [c for _, c in scored]
 
@@ -492,7 +492,7 @@ def _stage_metrics(s: RunState) -> None:
 
     # Diagnostics the registry report does not carry, from the per-item score artifacts the
     # typed metric nodes publish (get_artifact unwraps them to their published-order lists).
-    if retrieval_ran(s) and retrieved_keys:
+    if retrieved_keys:
         _ir_diagnostics(
             results,
             s,
@@ -567,18 +567,11 @@ def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
     # Bus-first: the ASR hypothesis in ASR modes (query_text is immutable, so
     # this is the un-rewritten output `wer`/`cer` score); the spoken reference in audio modes
     # (legacy parity — there the "query" scored by text metrics is the GT).
-    # ``is_asr_text_retrieval`` is RUN-global (pipeline presence): in a mixed graph (one
-    # branch through ASR, siblings text-only/latent) a sibling's metrics node has no
-    # query_text binding at all — fall back to the reference for that node instead of
-    # crashing, which is exactly what a pure non-ASR run would use.
+    # Graph truth: the hypothesis this node is actually fed (query_text bound from an
+    # asr producer), else the reference — per node, so mixed graphs (ASR arm next to
+    # text/latent arms) score each branch by what really fed it.
     reference = _reference_transcriptions(s)
-    query_text = (
-        s.get_artifact("query_text", default=None)
-        if is_asr_text_retrieval(s)
-        else None
-    )
-    if query_text is None:
-        query_text = reference
+    query_text = asr_hypothesis(s) or reference
     _keyed(query_text, "query_text")
     # ASR-quality reference = the spoken transcription, never question_text (M1a guard).
     _keyed(reference, "reference_transcription")
@@ -622,7 +615,7 @@ def _attach_registry_report(
         return
     scores = _branch_scores(s, artifacts)
     if scores:
-        _derive_bare_keys(results, scores, asr_ran(s))
+        _derive_bare_keys(results, scores, bool(asr_hypothesis(s)))
         # The report branch key + ``pipeline_mode`` echo carry the run's mode *label* — the
         # executed graph's identity (``s.mode``), which the node set alone can't reconstruct
         # (audio_emb vs audio_text share a graph). Behavior is graph-derived; only the label is.

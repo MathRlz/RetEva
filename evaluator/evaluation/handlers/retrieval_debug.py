@@ -24,7 +24,6 @@ def log_retrieval_debug(
     all_hypotheses,
     all_query_ids,
     all_embeddings,
-    mode,
     k,
 ) -> None:
     """Verbose per-query retrieval inspection (dense + no-rerank only).
@@ -86,9 +85,10 @@ def log_retrieval_debug(
         else:
             gt_doc_id = str(all_ground_truth[i])
 
-        # query_text: what was actually searched (ASR output or reference)
-        if mode == "asr_text_retrieval" and i < len(all_hypotheses):
-            query_text = all_hypotheses[i]
+        # query_text: what was actually searched — the node's bound query_text chain
+        # when it published (ASR hypothesis / question text), else the reference.
+        if i < len(all_hypotheses) and all_hypotheses[i]:
+            query_text = str(all_hypotheses[i])
         elif i < len(all_ground_truth):
             query_text = str(all_ground_truth[i])
         else:
@@ -98,8 +98,8 @@ def log_retrieval_debug(
         gt_doc_text = _doc_text_lookup.get(gt_doc_id, "")
 
         logger.info(f"\nQuery {i+1}:")
-        logger.info(f"  ASR query text:        '{query_text[:120]}'")
-        if mode == "asr_text_retrieval" and i < len(all_ground_truth):
+        logger.info(f"  Query text:            '{query_text[:120]}'")
+        if i < len(all_ground_truth):
             ref = str(all_ground_truth[i])
             if ref != query_text:
                 logger.info(f"  Ground truth question: '{ref[:120]}'")

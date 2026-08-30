@@ -30,28 +30,30 @@ def publish_keyed_or_plain(
         s.put_artifact(name, values)
 
 
-# ── graph-derived run signals (graph-first Phase 3) ───────────────────────────────────
-# Behavioral branches read these instead of the ``pipeline_mode`` string, so the graph (what
-# pipelines/nodes actually run) drives behavior — a mode-less graph run behaves correctly too.
-# The report's mode *label* still rides ``s.mode`` (the executed graph's identity), since
-# audio_emb vs audio_text is a run policy the node set can't express (identical graphs).
-def retrieval_ran(s: Any) -> bool:
-    """A retrieval (search) pipeline is part of this run. Replaces the former
-    ``s.mode != 'asr_only'`` — ``asr_only`` is exactly the no-retrieval mode."""
-    return s.retrieval_pipeline is not None
+# ── node-local graph signals (graph-truth Phase 4) ────────────────────────────────────
+# Handlers ask about THIS node's bindings + the executed graph's node kinds, never about
+# run-global pipeline presence (the former retrieval_ran/asr_ran/is_asr_text_retrieval):
+# those answered a per-branch question with a whole-run answer and misfired in every mixed
+# graph (a text arm next to an ASR arm took the ASR code path and crashed). The mode string
+# ``s.mode`` survives ONLY as the report's label — behavioral reads of it are banned.
+def bound_producer_kind(s: Any, name: str) -> Any:
+    """The node KIND of the producer bound (and published) for input ``name`` on the
+    current node, or None. Pure graph truth: bindings say who feeds this node, the
+    executed graph's ``node_kinds`` map says what that producer is."""
+    kinds = getattr(s, "node_kinds", None) or {}
+    for pid in reversed(s._producers(name)):
+        if s.ctx.has(pid, name):
+            return kinds.get(pid)
+    return None
 
 
-def asr_ran(s: Any) -> bool:
-    """An ASR pipeline is part of this run (asr_text_retrieval / asr_only). Replaces
-    ``s.mode in ('asr_text_retrieval', 'asr_only')`` — the audio modes carry no ASR."""
-    return s.asr_pipeline is not None
-
-
-def is_asr_text_retrieval(s: Any) -> bool:
-    """ASR feeds retrieval → the effective query text is the ASR hypothesis (vs the spoken
-    reference in audio modes). Replaces ``s.mode == 'asr_text_retrieval'`` = ASR ran AND
-    retrieval ran (``asr_only`` has ASR but no retrieval)."""
-    return s.asr_pipeline is not None and s.retrieval_pipeline is not None
+def asr_hypothesis(s: Any) -> list:
+    """This node's bound ``query_text`` — but only when an ASR node produced it (the
+    hypothesis WER/CER score against). Empty for a node fed by dataset/reference text:
+    scoring reference-vs-reference would report a meaningless WER of 0."""
+    if bound_producer_kind(s, "query_text") != "asr":
+        return []
+    return list(s.get_artifact("query_text", default=[]))
 
 
 def _ctx_first(s: Any, name: str) -> Any:

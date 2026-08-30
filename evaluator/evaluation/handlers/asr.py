@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ..stage_registry import register_stage_handler
 from ._common import publish_keyed_or_plain
-from ._common import retrieval_ran
+
 from ...logging_config import get_logger
 from ..helpers import _build_relevant_from_item
 from ..executor.state import RunState
@@ -107,7 +107,8 @@ def _stage_asr(s: RunState) -> None:
         ) = _run_asr_step(
             audio_dataset,
             s.asr_pipeline,
-            retrieval_ran(s),  # asr_text_retrieval (retrieval ran) → build IR relevance
+            # build IR relevance when the executed graph retrieves at all (graph truth)
+            "retrieval" in set((getattr(s, "node_kinds", None) or {}).values()),
             oracle,
             s.batch_size,
             s.num_workers,

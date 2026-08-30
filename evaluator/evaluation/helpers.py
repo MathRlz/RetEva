@@ -54,7 +54,7 @@ def detect_graph_template(
         return "asr_only"
     if text_embedding_pipeline is not None and retrieval_pipeline is not None:
         # Text queries straight into retrieval (no voice front-end) — a legal graph: behavior
-        # branches read the pipelines (``retrieval_ran`` / ``asr_ran``), not this string, which
+        # branches read each node's own bindings (graph truth), not this string, which
         # is only the run's LABEL. Used by text-RAG graphs (question text → retrieve → answer).
         return "text_retrieval"
     raise ValueError(

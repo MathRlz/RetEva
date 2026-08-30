@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from ...logging_config import get_logger
-from ._common import _ctx_first, is_asr_text_retrieval
+from ._common import _ctx_first, bound_producer_kind
 
 logger = get_logger(__name__)
 
@@ -139,7 +139,9 @@ def _record_model_info(results: "Any", s: "Any") -> None:
     text_prov = s.sibling_artifact("retrieved", "query_text_embedder_model_provenance")
     text_name = _resolved_name(text_prov, s.text_embedding_pipeline)
     if text_name:
-        results["embedder" if is_asr_text_retrieval(s) else "text_embedder"] = text_name
+        # legacy key naming: an ASR-fed branch reported its text embedder as "embedder"
+        asr_fed = bound_producer_kind(s, "query_text") == "asr"
+        results["embedder" if asr_fed else "text_embedder"] = text_name
     # The embedding-alignment artifact is published only by the fusion node (audio_text);
     # its presence is the signal — no need to consult the mode.
     alignment = _ctx_first(s, "embedding_alignment")

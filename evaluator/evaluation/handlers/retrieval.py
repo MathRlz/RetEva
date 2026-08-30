@@ -15,7 +15,7 @@ from ..helpers import _search_results_to_keys
 from ..item_isolation import isolate_batch
 from ..executor.state import RunState
 from ..executor.node_pipeline import _node_reranking
-from ._common import publish_keyed_or_plain, is_asr_text_retrieval
+from ._common import publish_keyed_or_plain
 from .retrieval_debug import log_retrieval_debug as _log_retrieval_debug
 
 logger = get_logger(__name__)
@@ -27,29 +27,32 @@ def _publish_retrieved(s: RunState, results_list: list, query_ids: list) -> None
     publish_keyed_or_plain(s, "retrieved", results_list, query_ids)
 
 
-def _retrieval_query_texts(s: RunState, rp=None):
-    """Query texts feeding retrieval/rerank (mode-dependent); None for audio_emb.
+def _retrieval_query_texts(s: RunState, rp=None, vector_artifact: str = None):
+    """Query texts for sparse/hybrid lexical scoring — graph truth, no run-mode label.
 
-    Bus-only since M1d-2: the effective query text (asr modes) / spoken reference
-    (fusion mode) come from the ctx. ``rp`` is the pipeline actually used (the
-    vector_index artifact); falls back to the shared one."""
+    What the query IS is told by the vector stream that actually feeds THIS node
+    (``vector_artifact``, the resolved query_vectors artifact name):
+
+    * ``audio_query_vectors`` — a pure audio query has no text: dense only; sparse/
+      hybrid raises (using the bound reference here would be oracle leakage).
+    * text / fused stream — the node's own query_text chain (the ASR hypothesis when
+      one feeds it, the dataset question otherwise); a fused stream with no text on
+      the chain falls back to the spoken reference (the fusion text side's source).
+
+    Bus-only since M1d-2. ``rp`` is the pipeline actually used (the vector_index
+    artifact); falls back to the shared one."""
     rp = rp if rp is not None else s.retrieval_pipeline
-    if is_asr_text_retrieval(s):
-        # the effective (most-processed) query for sparse/hybrid scoring (QUERY_TEXT_CHAIN)
-        return s.input("query_text", default=None)
-    if s.audio_embedding_pipeline is not None:
-        # Audio query: the spoken reference can drive sparse/hybrid lexical scoring only in
-        # cross-modal audio↔text retrieval; pure audio-embedding self-retrieval has no text
-        # query and supports dense only. The audio_emb/audio_text split is a run policy the
-        # graph can't express (identical node sets), so it reads the run's mode label.
-        if s.mode == "audio_text_retrieval":
-            return s.get_artifact("reference_transcription", default=None)
-        if rp.strategy_config.core.mode != "dense":
+    if vector_artifact == "audio_query_vectors":
+        if rp is not None and rp.strategy_config.core.mode != "dense":
             raise ValueError(
-                "audio_emb_retrieval supports only retrieval_mode='dense'. "
-                "Sparse/hybrid requires query text unavailable in this path."
+                "an audio-embedded query supports only retrieval_mode='dense': "
+                "sparse/hybrid needs query text, and a pure audio stream has none."
             )
-    return None
+        return None
+    texts = s.input("query_text", default=None)
+    if texts:
+        return texts
+    return s.get_artifact("reference_transcription", default=None)
 
 
 def _finalize_retrieval(s: RunState, results_list, query_vectors, query_ids, rp=None) -> None:
@@ -73,7 +76,6 @@ def _finalize_retrieval(s: RunState, results_list, query_vectors, query_ids, rp=
         list(s.input("query_text", default=[])),
         query_ids,
         query_vectors,
-        s.mode,
         s.k,
     )
 
@@ -188,7 +190,7 @@ def _stage_retrieval(s: RunState) -> None:
     rmode = params.get("mode")
     node_id = getattr(s.current_node, "id", "retrieval")
     with TimingContext("Retrieval step", logger):
-        qtexts = _retrieval_query_texts(s, rp)
+        qtexts = _retrieval_query_texts(s, rp, vector_artifact=artifact_name)
         nq = len(query_vectors)
         # Per-item identity rides the keyed query_vectors ItemSet (M1d-2).
         keyed = s.keyed_items(vname) if vname else s.input_items("query_vectors")

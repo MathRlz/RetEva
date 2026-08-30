@@ -9,7 +9,7 @@ from the single-branch ``metrics`` node; values/functions are unchanged from the
 from __future__ import annotations
 
 from ...logging_config import get_logger
-from ._common import _reference_transcriptions, is_asr_text_retrieval
+from ._common import _reference_transcriptions, asr_hypothesis
 from ...metrics import (
     first_relevant_rank_distribution,
     wer_recall_correlation,
@@ -70,17 +70,9 @@ def _attach_failure_analysis(
     results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
 ) -> None:
     """Retrieval failure-mode decomposition (only when traces are enabled)."""
-    # ``is_asr_text_retrieval`` is RUN-global: in a mixed graph (ASR branch + text/latent
-    # siblings) a sibling's metrics node has no query_text binding — fall back to the
-    # reference for that node, as a pure non-ASR run would (same fix as
-    # metrics._build_keyed_artifacts).
-    query_texts = (
-        s.get_artifact("query_text", default=None)
-        if is_asr_text_retrieval(s)
-        else None
-    )
-    if not query_texts:
-        query_texts = _reference_transcriptions(s)
+    # Graph truth: this node's bound ASR hypothesis when one feeds it, else the
+    # reference — per node, correct in mixed graphs.
+    query_texts = asr_hypothesis(s) or _reference_transcriptions(s)
     details = [
         {
             "query": query_texts[i] if i < len(query_texts) else "",

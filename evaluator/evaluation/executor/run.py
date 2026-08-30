@@ -337,6 +337,12 @@ def _setup_execution_context(
         ),
         **_graph_shape_flags(stage_graph),
     )
+    # id → node kind for the executed graph: handlers answer "what produced this
+    # node's input" from bindings + this map (graph truth), never from a run-global
+    # mode label or pipeline presence.
+    state.node_kinds = {
+        n.id: _node_kind(n) for n in stage_graph.nodes
+    }
     # resolve every feature node's effective config ONCE (global ⊕ node params),
     # so handlers look theirs up instead of overlaying an allowlist at run time.
     from ..node_config import resolve_graph_node_configs
