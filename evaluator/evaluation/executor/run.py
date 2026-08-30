@@ -206,13 +206,24 @@ def _resolve_mode_and_graph(
         # node kinds (audio_emb vs audio_text hinges on corpus_embedding vs text_embedding),
         # which presence-detection alone can't tell apart.
         configured_mode = resolve_template_label(eval_config)
-    mode = detect_graph_template(
-        context.retrieval_pipeline,
-        context.asr_pipeline,
-        context.text_embedding_pipeline,
-        context.audio_embedding_pipeline,
-        configured_mode=configured_mode,
-    )
+    try:
+        mode = detect_graph_template(
+            context.retrieval_pipeline,
+            context.asr_pipeline,
+            context.text_embedding_pipeline,
+            context.audio_embedding_pipeline,
+            configured_mode=configured_mode,
+        )
+    except ValueError:
+        # No query head anywhere: no label from the graph's node kinds AND no pipelines
+        # to detect from. Legal for an explicit graph — e.g. the no-retrieval RAG
+        # baseline (dataset_source -> answer_gen -> judge, generator answers from
+        # parametric knowledge). The mode string is only the run's label; handlers
+        # branch on what actually ran.
+        explicit = getattr(eval_config, "graph_override", None) or graph_override
+        if not (explicit or {}).get("nodes"):
+            raise
+        mode = "custom"
     logger.info("Evaluation template: %s (DAG)", GRAPH_TEMPLATES.get(mode, mode))
     stage_graph = build_run_graph(
         mode,
