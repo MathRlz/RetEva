@@ -1,0 +1,171 @@
+# Admed TEXT self-retrieval sanity ceiling: the reference transcription is BOTH
+# the query and its own corpus doc — every embedder should score ~1.0; anything
+# below flags a broken space/id join, not model quality. 4 variants: jina, labse,
+# eam (admed-native), sonar (pol_Latn).
+# Env vars (export before running):
+#   ADMED_VOICE_PATH -- admed_voice dataset root
+#   EAM_CHECKPOINT_DIR -- eam_alignment.pt + model.json
+#
+# Dataset: admed_voice (POLISH clinical speech, real recordings — no TTS anywhere).
+# SELF-RETRIEVAL: dataset_source's corpus is the reference transcriptions; a query's
+# relevant doc is its own reference. APM/EAM checkpoints are admed-trained (native
+# domain); SONAR runs its Polish speech encoder / pol_Latn tokenizer.
+experiment:
+  name: admed_text_embed_baseline
+  output_dir: evaluation_results
+
+dataset:
+  id: admed_voice
+  path: ${ADMED_VOICE_PATH}
+  split: test
+  batch_size: 32
+
+data:
+  num_workers: 4
+  test_size: 0.3
+
+graph:
+  nodes:
+  - dataset_source
+  - id: corpus_embedding_jina
+    type: corpus_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: vector_db_jina
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_labse
+    type: corpus_embedding
+    params:
+      model: labse
+      embedding_space: labse_space
+      device: "cuda:1"
+  - id: vector_db_labse
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_eam
+    type: corpus_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:1"
+  - id: vector_db_eam
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: text_embedding_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: retrieval_jina
+    type: retrieval
+  - id: text_embedding_labse
+    type: text_embedding
+    params:
+      model: labse
+      embedding_space: labse_space
+      device: "cuda:1"
+  - id: retrieval_labse
+    type: retrieval
+  - id: text_embedding_eam
+    type: text_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:1"
+  - id: retrieval_eam
+    type: retrieval
+  - id: text_embedding_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_sonar
+    type: retrieval
+
+  edges:
+  - {from: dataset_source, to: corpus_embedding_jina, input: corpus}
+  - {from: corpus_embedding_jina, to: vector_db_jina, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_labse, input: corpus}
+  - {from: corpus_embedding_labse, to: vector_db_labse, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_eam, input: corpus}
+  - {from: corpus_embedding_eam, to: vector_db_eam, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: dataset_source, output: reference_text, to: text_embedding_jina, input: query_text}
+  - {from: text_embedding_jina, output: text_query_vectors, to: retrieval_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_jina, input: vector_index}
+  - {from: dataset_source, to: retrieval_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_jina, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: text_embedding_labse, input: query_text}
+  - {from: text_embedding_labse, output: text_query_vectors, to: retrieval_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_labse, input: vector_index}
+  - {from: dataset_source, to: retrieval_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_labse, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: text_embedding_eam, input: query_text}
+  - {from: text_embedding_eam, output: text_query_vectors, to: retrieval_eam, input: query_vectors}
+  - {from: vector_db_eam, to: retrieval_eam, input: vector_index}
+  - {from: dataset_source, to: retrieval_eam, input: query_text}
+  - {from: dataset_source, to: retrieval_eam, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_eam, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: text_embedding_sonar, input: query_text}
+  - {from: text_embedding_sonar, output: text_query_vectors, to: retrieval_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_sonar, input: vector_index}
+  - {from: dataset_source, to: retrieval_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_sonar, input: relevant_docs}
+
+# Model lifecycle: lazy load; a node's model is parked warm in host RAM the MOMENT its
+# node finishes (on_use_soft_cpu: GPU holds only the running node's models; warm pool
+# gives fast CPU->GPU reuse across branches). Memory-aware GPU placement, LRU eviction.
+service_runtime:
+  startup_mode: lazy
+  offload_policy: on_use_soft_cpu
+  soft_offload_max_warm: 6
+
+device_pool:
+  available_devices: ["auto"]
+  memory_buffer_percent: 0.1
+  allow_gpu_eviction: true
+  allow_cpu_fallback: true
+
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

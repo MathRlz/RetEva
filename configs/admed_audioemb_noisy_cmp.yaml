@@ -1,0 +1,178 @@
+# Admed audio-embedding SELF-RETRIEVAL comparison — white noise @ SNR 15 dB + speed perturbation.
+# 4 cross-modal pairs: apm_whisper/apm_m4t (jina space), eam, sonar (Polish).
+# One augment node perturbs the REAL recordings (seeded per item, n_variants=1)
+# before every embedder — ids stay 1:1 comparable with admed_audioemb_cmp.
+# Env vars (export before running):
+#   ADMED_VOICE_PATH -- admed_voice dataset root
+#   APM_CHECKPOINT_DIR -- admed-trained APM checkpoints
+#   EAM_CHECKPOINT_DIR -- eam_alignment.pt + model.json
+#
+# Dataset: admed_voice (POLISH clinical speech, real recordings — no TTS anywhere).
+# SELF-RETRIEVAL: dataset_source's corpus is the reference transcriptions; a query's
+# relevant doc is its own reference. APM/EAM checkpoints are admed-trained (native
+# domain); SONAR runs its Polish speech encoder / pol_Latn tokenizer.
+experiment:
+  name: admed_audioemb_noisy_cmp
+  output_dir: evaluation_results
+
+dataset:
+  id: admed_voice
+  path: ${ADMED_VOICE_PATH}
+  split: test
+  batch_size: 32
+
+data:
+  num_workers: 4
+  test_size: 0.3
+
+graph:
+  nodes:
+  - dataset_source
+  - id: augment
+    type: augment_audio
+    params:
+      add_noise: True
+      noise_type: white
+      snr_db: 15.0
+      speed_perturbation: True
+      n_variants: 1
+  - id: corpus_embedding_jina
+    type: corpus_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: vector_db_jina
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_eam
+    type: corpus_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:1"
+  - id: vector_db_eam
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: audio_embedding_apm_whisper
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: whisper
+      encoder-size: large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_whisper_jina_admed_voice.pt"
+      device: "cuda:0"
+  - id: retrieval_apm_whisper
+    type: retrieval
+  - id: audio_embedding_apm_m4t
+    type: audio_embedding
+    params:
+      model: attention_pool
+      encoder: m4t
+      encoder-size: v2-large
+      dim: 2048
+      embedding_space: jina_v4_space
+      params: {pooling: attention}
+      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt"
+      device: "cuda:0"
+  - id: retrieval_apm_m4t
+    type: retrieval
+  - id: audio_embedding_eam
+    type: audio_embedding
+    params:
+      model: eam_alignment
+      size: v2-large
+      model_path: "${EAM_CHECKPOINT_DIR}/eam_alignment.pt"
+      config_path: "${EAM_CHECKPOINT_DIR}/model.json"
+      embedding_space: eam_space
+      device: "cuda:0"
+  - id: retrieval_eam
+    type: retrieval
+  - id: audio_embedding_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      name: sonar_speech_encoder_pol
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_sonar
+    type: retrieval
+
+  edges:
+  - {from: dataset_source, to: augment, input: query_audio}
+  - {from: dataset_source, to: corpus_embedding_jina, input: corpus}
+  - {from: corpus_embedding_jina, to: vector_db_jina, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_eam, input: corpus}
+  - {from: corpus_embedding_eam, to: vector_db_eam, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: augment, to: audio_embedding_apm_whisper, input: query_audio}
+  - {from: audio_embedding_apm_whisper, output: audio_query_vectors, to: retrieval_apm_whisper, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_apm_whisper, input: vector_index}
+  - {from: dataset_source, to: retrieval_apm_whisper, input: query_text}
+  - {from: dataset_source, to: retrieval_apm_whisper, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_apm_whisper, input: relevant_docs}
+  - {from: augment, to: audio_embedding_apm_m4t, input: query_audio}
+  - {from: audio_embedding_apm_m4t, output: audio_query_vectors, to: retrieval_apm_m4t, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_apm_m4t, input: vector_index}
+  - {from: dataset_source, to: retrieval_apm_m4t, input: query_text}
+  - {from: dataset_source, to: retrieval_apm_m4t, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_apm_m4t, input: relevant_docs}
+  - {from: augment, to: audio_embedding_eam, input: query_audio}
+  - {from: audio_embedding_eam, output: audio_query_vectors, to: retrieval_eam, input: query_vectors}
+  - {from: vector_db_eam, to: retrieval_eam, input: vector_index}
+  - {from: dataset_source, to: retrieval_eam, input: query_text}
+  - {from: dataset_source, to: retrieval_eam, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_eam, input: relevant_docs}
+  - {from: augment, to: audio_embedding_sonar, input: query_audio}
+  - {from: audio_embedding_sonar, output: audio_query_vectors, to: retrieval_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_sonar, input: vector_index}
+  - {from: dataset_source, to: retrieval_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_sonar, input: relevant_docs}
+
+# Model lifecycle: lazy load; a node's model is parked warm in host RAM the MOMENT its
+# node finishes (on_use_soft_cpu: GPU holds only the running node's models; warm pool
+# gives fast CPU->GPU reuse across branches). Memory-aware GPU placement, LRU eviction.
+service_runtime:
+  startup_mode: lazy
+  offload_policy: on_use_soft_cpu
+  soft_offload_max_warm: 6
+
+device_pool:
+  available_devices: ["auto"]
+  memory_buffer_percent: 0.1
+  allow_gpu_eviction: true
+  allow_cpu_fallback: true
+
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

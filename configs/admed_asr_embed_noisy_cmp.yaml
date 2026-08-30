@@ -1,0 +1,310 @@
+# Admed ASR-path SELF-RETRIEVAL comparison — white noise @ SNR 15 dB + speed perturbation.
+# 4 ASR (whisper large-v2, seamless_m4t tgt=pol, wav2vec2-xlsr-polish, whisper
+# MEDIUM + admed LoRA) x 3 text embedders (jina, labse, sonar pol_Latn) = 12 leaves.
+# One augment node perturbs the REAL recordings before every ASR (seeded per
+# item, n_variants=1) — ids stay 1:1 comparable with admed_asr_embed_cmp.
+# Env vars (export before running):
+#   ADMED_VOICE_PATH -- admed_voice dataset root
+#   ADMED_WHISPER_LORA_PATH -- admed whisper LoRA adapter (base: whisper MEDIUM)
+#
+# Dataset: admed_voice (POLISH clinical speech, real recordings — no TTS anywhere).
+# SELF-RETRIEVAL: dataset_source's corpus is the reference transcriptions; a query's
+# relevant doc is its own reference. APM/EAM checkpoints are admed-trained (native
+# domain); SONAR runs its Polish speech encoder / pol_Latn tokenizer.
+experiment:
+  name: admed_asr_embed_noisy_cmp
+  output_dir: evaluation_results
+
+dataset:
+  id: admed_voice
+  path: ${ADMED_VOICE_PATH}
+  split: test
+  batch_size: 8
+
+data:
+  num_workers: 4
+  test_size: 0.3
+
+graph:
+  nodes:
+  - dataset_source
+  - id: augment
+    type: augment_audio
+    params:
+      add_noise: True
+      noise_type: white
+      snr_db: 15.0
+      speed_perturbation: True
+      n_variants: 1
+  - id: corpus_embedding_jina
+    type: corpus_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: vector_db_jina
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_labse
+    type: corpus_embedding
+    params:
+      model: labse
+      embedding_space: labse_space
+      device: "cuda:1"
+  - id: vector_db_labse
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: asr_whisper
+    type: asr
+    params:
+      model: whisper
+      size: large-v2
+      device: "cuda:0"
+  - id: text_embedding_whisper_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: retrieval_whisper_jina
+    type: retrieval
+  - id: text_embedding_whisper_labse
+    type: text_embedding
+    params:
+      model: labse
+      embedding_space: labse_space
+      device: "cuda:1"
+  - id: retrieval_whisper_labse
+    type: retrieval
+  - id: text_embedding_whisper_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_whisper_sonar
+    type: retrieval
+  - id: asr_m4t
+    type: asr
+    params:
+      model: seamless_m4t
+      params: {tgt_lang: pol}
+      device: "cuda:0"
+  - id: text_embedding_m4t_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: retrieval_m4t_jina
+    type: retrieval
+  - id: text_embedding_m4t_labse
+    type: text_embedding
+    params:
+      model: labse
+      embedding_space: labse_space
+      device: "cuda:1"
+  - id: retrieval_m4t_labse
+    type: retrieval
+  - id: text_embedding_m4t_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_m4t_sonar
+    type: retrieval
+  - id: asr_wav2vec2
+    type: asr
+    params:
+      model: wav2vec2
+      name: jonatasgrosman/wav2vec2-large-xlsr-53-polish
+      device: "cuda:0"
+  - id: text_embedding_wav2vec2_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: retrieval_wav2vec2_jina
+    type: retrieval
+  - id: text_embedding_wav2vec2_labse
+    type: text_embedding
+    params:
+      model: labse
+      embedding_space: labse_space
+      device: "cuda:1"
+  - id: retrieval_wav2vec2_labse
+    type: retrieval
+  - id: text_embedding_wav2vec2_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_wav2vec2_sonar
+    type: retrieval
+  - id: asr_whisper_lora
+    type: asr
+    params:
+      model: whisper
+      size: medium
+      adapter: ${ADMED_WHISPER_LORA_PATH}
+      device: "cuda:0"
+  - id: text_embedding_whisper_lora_jina
+    type: text_embedding
+    params:
+      model: jina_v4
+      name: jinaai/jina-embeddings-v4
+      embedding_space: jina_v4_space
+      device: "cuda:1"
+  - id: retrieval_whisper_lora_jina
+    type: retrieval
+  - id: text_embedding_whisper_lora_labse
+    type: text_embedding
+    params:
+      model: labse
+      embedding_space: labse_space
+      device: "cuda:1"
+  - id: retrieval_whisper_lora_labse
+    type: retrieval
+  - id: text_embedding_whisper_lora_sonar
+    type: text_embedding
+    params:
+      model: sonar
+      params: {source_lang: pol_Latn}
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: retrieval_whisper_lora_sonar
+    type: retrieval
+
+  edges:
+  - {from: dataset_source, to: augment, input: query_audio}
+  - {from: dataset_source, to: corpus_embedding_jina, input: corpus}
+  - {from: corpus_embedding_jina, to: vector_db_jina, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_labse, input: corpus}
+  - {from: corpus_embedding_labse, to: vector_db_labse, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: augment, to: asr_whisper, input: query_audio}
+  - {from: asr_whisper, to: text_embedding_whisper_jina, input: query_text}
+  - {from: text_embedding_whisper_jina, output: text_query_vectors, to: retrieval_whisper_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_whisper_jina, input: vector_index}
+  - {from: asr_whisper, to: retrieval_whisper_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_jina, input: relevant_docs}
+  - {from: asr_whisper, to: text_embedding_whisper_labse, input: query_text}
+  - {from: text_embedding_whisper_labse, output: text_query_vectors, to: retrieval_whisper_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_whisper_labse, input: vector_index}
+  - {from: asr_whisper, to: retrieval_whisper_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_labse, input: relevant_docs}
+  - {from: asr_whisper, to: text_embedding_whisper_sonar, input: query_text}
+  - {from: text_embedding_whisper_sonar, output: text_query_vectors, to: retrieval_whisper_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_whisper_sonar, input: vector_index}
+  - {from: asr_whisper, to: retrieval_whisper_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_sonar, input: relevant_docs}
+  - {from: augment, to: asr_m4t, input: query_audio}
+  - {from: asr_m4t, to: text_embedding_m4t_jina, input: query_text}
+  - {from: text_embedding_m4t_jina, output: text_query_vectors, to: retrieval_m4t_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_m4t_jina, input: vector_index}
+  - {from: asr_m4t, to: retrieval_m4t_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_jina, input: relevant_docs}
+  - {from: asr_m4t, to: text_embedding_m4t_labse, input: query_text}
+  - {from: text_embedding_m4t_labse, output: text_query_vectors, to: retrieval_m4t_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_m4t_labse, input: vector_index}
+  - {from: asr_m4t, to: retrieval_m4t_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_labse, input: relevant_docs}
+  - {from: asr_m4t, to: text_embedding_m4t_sonar, input: query_text}
+  - {from: text_embedding_m4t_sonar, output: text_query_vectors, to: retrieval_m4t_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_m4t_sonar, input: vector_index}
+  - {from: asr_m4t, to: retrieval_m4t_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_m4t_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_m4t_sonar, input: relevant_docs}
+  - {from: augment, to: asr_wav2vec2, input: query_audio}
+  - {from: asr_wav2vec2, to: text_embedding_wav2vec2_jina, input: query_text}
+  - {from: text_embedding_wav2vec2_jina, output: text_query_vectors, to: retrieval_wav2vec2_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_wav2vec2_jina, input: vector_index}
+  - {from: asr_wav2vec2, to: retrieval_wav2vec2_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_wav2vec2_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_wav2vec2_jina, input: relevant_docs}
+  - {from: asr_wav2vec2, to: text_embedding_wav2vec2_labse, input: query_text}
+  - {from: text_embedding_wav2vec2_labse, output: text_query_vectors, to: retrieval_wav2vec2_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_wav2vec2_labse, input: vector_index}
+  - {from: asr_wav2vec2, to: retrieval_wav2vec2_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_wav2vec2_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_wav2vec2_labse, input: relevant_docs}
+  - {from: asr_wav2vec2, to: text_embedding_wav2vec2_sonar, input: query_text}
+  - {from: text_embedding_wav2vec2_sonar, output: text_query_vectors, to: retrieval_wav2vec2_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_wav2vec2_sonar, input: vector_index}
+  - {from: asr_wav2vec2, to: retrieval_wav2vec2_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_wav2vec2_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_wav2vec2_sonar, input: relevant_docs}
+  - {from: augment, to: asr_whisper_lora, input: query_audio}
+  - {from: asr_whisper_lora, to: text_embedding_whisper_lora_jina, input: query_text}
+  - {from: text_embedding_whisper_lora_jina, output: text_query_vectors, to: retrieval_whisper_lora_jina, input: query_vectors}
+  - {from: vector_db_jina, to: retrieval_whisper_lora_jina, input: vector_index}
+  - {from: asr_whisper_lora, to: retrieval_whisper_lora_jina, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_lora_jina, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_lora_jina, input: relevant_docs}
+  - {from: asr_whisper_lora, to: text_embedding_whisper_lora_labse, input: query_text}
+  - {from: text_embedding_whisper_lora_labse, output: text_query_vectors, to: retrieval_whisper_lora_labse, input: query_vectors}
+  - {from: vector_db_labse, to: retrieval_whisper_lora_labse, input: vector_index}
+  - {from: asr_whisper_lora, to: retrieval_whisper_lora_labse, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_lora_labse, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_lora_labse, input: relevant_docs}
+  - {from: asr_whisper_lora, to: text_embedding_whisper_lora_sonar, input: query_text}
+  - {from: text_embedding_whisper_lora_sonar, output: text_query_vectors, to: retrieval_whisper_lora_sonar, input: query_vectors}
+  - {from: vector_db_sonar, to: retrieval_whisper_lora_sonar, input: vector_index}
+  - {from: asr_whisper_lora, to: retrieval_whisper_lora_sonar, input: query_text}
+  - {from: dataset_source, to: retrieval_whisper_lora_sonar, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_whisper_lora_sonar, input: relevant_docs}
+
+# Model lifecycle: lazy load; a node's model is parked warm in host RAM the MOMENT its
+# node finishes (on_use_soft_cpu: GPU holds only the running node's models; warm pool
+# gives fast CPU->GPU reuse across branches). Memory-aware GPU placement, LRU eviction.
+service_runtime:
+  startup_mode: lazy
+  offload_policy: on_use_soft_cpu
+  soft_offload_max_warm: 6
+
+device_pool:
+  available_devices: ["auto"]
+  memory_buffer_percent: 0.1
+  allow_gpu_eviction: true
+  allow_cpu_fallback: true
+
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_asr_features: true
+    cache_transcriptions: true
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG
