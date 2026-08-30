@@ -4,7 +4,7 @@
 # (${PUBMED_QA_DATASET}) — measures CROSS-LINGUAL retrieval (pl query -> en docs).
 # Query-side models run Polish; corpus-side stays English (sonar corpus: eng_Latn default).
 #
-# 3 TTS (xtts_v2, m4t, piper) x 3 ASR (whisper, seamless_m4t, wav2vec2) x 3 text_embedding (+ a 4th ASR arm: whisper large-v2 with the admed LoRA adapter
+# 3 TTS (xtts_v2, m4t, piper) x 3 ASR (whisper, seamless_m4t, wav2vec2) x 3 text_embedding (+ a 4th ASR arm: whisper MEDIUM with the admed LoRA adapter (base must match the adapter's training base)
 # from ${ADMED_WHISPER_LORA_PATH} — export it before running)
 # (jina_v4, labse, sonar) = 27 leaf branches, full cartesian product. `sonar` needs
 # `pip install 'evaluator[sonar]'` (sonar-space + fairseq2) on the run machine.
@@ -490,7 +490,7 @@ graph:
     type: asr
     params:
       model: whisper
-      size: large-v2
+      size: medium
       adapter: ${ADMED_WHISPER_LORA_PATH}
       device: "cuda:0"
   - id: text_embedding_xtts_whisper_lora_jina
@@ -527,7 +527,7 @@ graph:
     type: asr
     params:
       model: whisper
-      size: large-v2
+      size: medium
       adapter: ${ADMED_WHISPER_LORA_PATH}
       device: "cuda:0"
   - id: text_embedding_m4t_whisper_lora_jina
@@ -564,7 +564,7 @@ graph:
     type: asr
     params:
       model: whisper
-      size: large-v2
+      size: medium
       adapter: ${ADMED_WHISPER_LORA_PATH}
       device: "cuda:0"
   - id: text_embedding_piper_whisper_lora_jina
