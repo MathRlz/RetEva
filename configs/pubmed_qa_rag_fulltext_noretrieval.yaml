@@ -1,0 +1,100 @@
+# RAG measurement 2: the NO-RETRIEVAL baseline — the generator answers PubMedQA from
+# parametric knowledge alone (no retrieval node; `retrieved` is an optional input of
+# answer_gen). Without this floor, "how much does RAG contribute" is unanswerable:
+# the LLM may have seen these articles in training. Same model, same answer format,
+# same decision-accuracy / ROUGE metrics as the RAG arms.
+#
+# Reproducibility caveat as in answer_cmp: llm.concurrency: 1 for a quotable run.
+experiment:
+  name: pubmed_qa_rag_fulltext_noretrieval
+  output_dir: evaluation_results
+# PUBMED_QA_FULLTEXT_DATASET -- dir with the 115-question FULL-TEXT set (questions.json +
+# corpus.json; build: scripts/build_pubmed_campaign.py --full-text). Export before running.
+dataset:
+  id: pubmed_qa
+  questions: ${PUBMED_QA_FULLTEXT_DATASET}/questions.json
+  corpus: ${PUBMED_QA_FULLTEXT_DATASET}/corpus.json
+  trace_limit: 0        # every question runs and is traced (the judge needs traces)
+  batch_size: 8
+data:
+  num_workers: 0
+graph:
+  nodes:
+  - dataset_source
+  - id: answer_gen
+    type: answer_gen
+    params:
+      method: simple
+      max_cases: 0
+      # NO-RETRIEVAL baseline: the model answers from parametric knowledge alone. Same
+      # answer format as the RAG arms so decision accuracy / ROUGE stay comparable.
+      system_prompt: |-
+        You are a concise medical research assistant. Answer from your own knowledge. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Question: {question}
+
+        Short Answer:
+      compute_rouge: true
+      reference_metadata_field: long_answer
+  - answer_metrics
+  - metrics
+  - build_query_traces
+  - id: answer_judge
+    type: answer_judge
+    params:
+      max_cases: 0     # judge EVERY trace
+      system_prompt: |-
+        You are an expert evaluator for a medical question-answering retrieval system. Score each requested aspect from 0.0 (worst) to 1.0 (best). Be strict and consistent. Respond with STRICT JSON only — no prose, no markdown.
+  - finalize
+
+  edges:
+  - {from: dataset_source, output: reference_text, to: answer_gen, input: query_text}
+  - {from: dataset_source, to: answer_gen, input: short_answers}
+  - {from: dataset_source, to: answer_gen, input: relevant_docs}
+  - {from: answer_gen, to: answer_metrics, input: generated_answers}
+  - {from: dataset_source, to: answer_metrics, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics, input: short_answers}
+  - {from: answer_metrics, to: metrics, input: answer_scores}
+  - {from: dataset_source, to: metrics, input: reference_transcription}
+  - {from: dataset_source, to: metrics, input: relevant_docs}
+  - {from: answer_gen, to: build_query_traces, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces, input: relevant_docs}
+  - {from: build_query_traces, to: answer_judge, input: query_traces}
+  - {from: answer_gen, to: answer_judge, input: generated_answers}
+  - {from: dataset_source, to: answer_judge, input: relevant_docs}
+  - {from: metrics, to: finalize, input: metrics}
+  - {from: build_query_traces, to: finalize, input: query_traces}
+  - {from: answer_gen, to: finalize, input: generated_answers}
+  - {from: answer_judge, to: finalize, input: judge_scores}
+  - {from: answer_judge, to: finalize, input: judge_pass}
+  - {from: answer_judge, to: finalize, input: judge_aspect_accuracy}
+  - {from: answer_judge, to: finalize, input: judge_aspect_clarity}
+  - {from: answer_judge, to: finalize, input: judge_aspect_completeness}
+  - {from: answer_judge, to: finalize, input: judge_aspect_correctness}
+  - {from: answer_judge, to: finalize, input: judge_aspect_factuality}
+  - {from: answer_judge, to: finalize, input: judge_aspect_faithfulness}
+  - {from: answer_judge, to: finalize, input: judge_aspect_relevance}
+
+llm:
+  model: gemma4:latest
+  use_local_server: true
+  local_server_url: http://localhost:11434/v1/chat/completions
+  api_key_env: DUMMY_KEY
+  temperature: 0.0
+  # set concurrency: 1 for a run you will quote (bit-reproducibility; see rag_fulltext.yaml)
+  concurrency: 2
+  seed: 42
+  timeout_s: 600
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG

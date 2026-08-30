@@ -18,10 +18,12 @@
 experiment:
   name: pubmed_qa_rag_fulltext
   output_dir: evaluation_results
+# PUBMED_QA_FULLTEXT_DATASET -- dir with the 115-question FULL-TEXT set (questions.json +
+# corpus.json; build: scripts/build_pubmed_campaign.py --full-text). Export before running.
 dataset:
   id: pubmed_qa
-  questions: examples/data/pubmed_qa_fulltext/questions.json
-  corpus: examples/data/pubmed_qa_fulltext/corpus.json
+  questions: ${PUBMED_QA_FULLTEXT_DATASET}/questions.json
+  corpus: ${PUBMED_QA_FULLTEXT_DATASET}/corpus.json
   trace_limit: 0        # 0 = no limit: every question runs and every one is traced
   batch_size: 8         # no ASR in the graph, so batching is embed-bound only
 data:

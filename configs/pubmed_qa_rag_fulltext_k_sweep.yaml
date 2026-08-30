@@ -1,0 +1,520 @@
+# RAG measurement 3: how many documents to hand the generator. k in {1, 3, 5} for the
+# cascade (ASR->labse) and latent (sonar_speech) retrievers; answer_gen's context_docs
+# tracks k, so the PROMPT grows with k (median article 3286 words -> k is the direct
+# cost lever). Expectation from the ranking numbers: cascade Recall@1 ~0.98 means k=1
+# may already saturate answers at a fraction of the cost; sonar's weaker Recall@1 should
+# need larger k. NO judge here (6 arms x every question — answer_metrics' decision
+# accuracy + ROUGE + coverage carry this measurement; the judge lives in answer_cmp).
+#
+# Reproducibility caveat as in answer_cmp: llm.concurrency: 1 for a quotable run.
+experiment:
+  name: pubmed_qa_rag_fulltext_k_sweep
+  output_dir: evaluation_results
+# PUBMED_QA_FULLTEXT_DATASET -- dir with the 115-question FULL-TEXT set (questions.json +
+# corpus.json; build: scripts/build_pubmed_campaign.py --full-text). Export before running.
+dataset:
+  id: pubmed_qa
+  questions: ${PUBMED_QA_FULLTEXT_DATASET}/questions.json
+  corpus: ${PUBMED_QA_FULLTEXT_DATASET}/corpus.json
+  trace_limit: 0        # every question runs and is traced (the judge needs traces)
+  batch_size: 8
+data:
+  num_workers: 0
+graph:
+  nodes:
+  - dataset_source
+  - id: tts
+    type: tts
+    params:
+      provider: xtts_v2
+      language: en
+      sample_rate: 16000
+      seed: 42
+      output_dir: evaluation_results/pubmed_qa_rag_fulltext_k_sweep/audio
+      device: "cuda:0"
+  - id: asr
+    type: asr
+    params:
+      model: whisper
+      size: large-v2
+      device: "cuda:0"
+  - id: corpus_embedding_labse
+    type: corpus_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+  - id: vector_db_labse
+    type: vector_db
+    params:
+      store: inmemory
+  - id: corpus_embedding_sonar
+    type: corpus_embedding
+    params:
+      model: sonar
+      embedding_space: sonar
+      device: "cuda:1"
+  - id: vector_db_sonar
+    type: vector_db
+    params:
+      store: inmemory
+  - id: text_embedding_cascade
+    type: text_embedding
+    params:
+      model: labse
+      device: "cuda:1"
+  - id: audio_embedding_sonar
+    type: audio_embedding
+    params:
+      model: sonar_speech
+      embedding_space: sonar
+      device: "cuda:0"
+  - id: retrieval_cascade_k1
+    type: retrieval
+    params:
+      k: 1
+  - id: answer_gen_cascade_k1
+    type: answer_gen
+    params:
+      method: simple
+      max_cases: 0       # 0 = generate for every query
+      # ONE prompt, ONE model across every arm and config in this measurement set —
+      # the experiment varies RETRIEVAL only (spelled out so code-default changes
+      # cannot silently alter a reported run).
+      system_prompt: |-
+        You are a concise medical research assistant. Answer based ONLY on the provided context. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Context:
+        {context}
+
+        Question: {question}
+
+        Short Answer:
+      compute_rouge: true
+      reference_metadata_field: long_answer
+      context_source: full_text
+      context_chunk_chars: 1200
+      context_chunks: 4
+      context_docs: 1
+  - id: retrieval_metrics_cascade_k1
+    type: retrieval_metrics
+  - id: answer_metrics_cascade_k1
+    type: answer_metrics
+  - id: metrics_cascade_k1
+    type: metrics
+  - id: build_query_traces_cascade_k1
+    type: build_query_traces
+  - id: finalize_cascade_k1
+    type: finalize
+  - id: retrieval_cascade_k3
+    type: retrieval
+    params:
+      k: 3
+  - id: answer_gen_cascade_k3
+    type: answer_gen
+    params:
+      method: simple
+      max_cases: 0       # 0 = generate for every query
+      # ONE prompt, ONE model across every arm and config in this measurement set —
+      # the experiment varies RETRIEVAL only (spelled out so code-default changes
+      # cannot silently alter a reported run).
+      system_prompt: |-
+        You are a concise medical research assistant. Answer based ONLY on the provided context. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Context:
+        {context}
+
+        Question: {question}
+
+        Short Answer:
+      compute_rouge: true
+      reference_metadata_field: long_answer
+      context_source: full_text
+      context_chunk_chars: 1200
+      context_chunks: 4
+      context_docs: 3
+  - id: retrieval_metrics_cascade_k3
+    type: retrieval_metrics
+  - id: answer_metrics_cascade_k3
+    type: answer_metrics
+  - id: metrics_cascade_k3
+    type: metrics
+  - id: build_query_traces_cascade_k3
+    type: build_query_traces
+  - id: finalize_cascade_k3
+    type: finalize
+  - id: retrieval_cascade_k5
+    type: retrieval
+    params:
+      k: 5
+  - id: answer_gen_cascade_k5
+    type: answer_gen
+    params:
+      method: simple
+      max_cases: 0       # 0 = generate for every query
+      # ONE prompt, ONE model across every arm and config in this measurement set —
+      # the experiment varies RETRIEVAL only (spelled out so code-default changes
+      # cannot silently alter a reported run).
+      system_prompt: |-
+        You are a concise medical research assistant. Answer based ONLY on the provided context. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Context:
+        {context}
+
+        Question: {question}
+
+        Short Answer:
+      compute_rouge: true
+      reference_metadata_field: long_answer
+      context_source: full_text
+      context_chunk_chars: 1200
+      context_chunks: 4
+      context_docs: 5
+  - id: retrieval_metrics_cascade_k5
+    type: retrieval_metrics
+  - id: answer_metrics_cascade_k5
+    type: answer_metrics
+  - id: metrics_cascade_k5
+    type: metrics
+  - id: build_query_traces_cascade_k5
+    type: build_query_traces
+  - id: finalize_cascade_k5
+    type: finalize
+  - id: retrieval_sonar_k1
+    type: retrieval
+    params:
+      k: 1
+  - id: answer_gen_sonar_k1
+    type: answer_gen
+    params:
+      method: simple
+      max_cases: 0       # 0 = generate for every query
+      # ONE prompt, ONE model across every arm and config in this measurement set —
+      # the experiment varies RETRIEVAL only (spelled out so code-default changes
+      # cannot silently alter a reported run).
+      system_prompt: |-
+        You are a concise medical research assistant. Answer based ONLY on the provided context. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Context:
+        {context}
+
+        Question: {question}
+
+        Short Answer:
+      compute_rouge: true
+      reference_metadata_field: long_answer
+      context_source: full_text
+      context_chunk_chars: 1200
+      context_chunks: 4
+      context_docs: 1
+  - id: retrieval_metrics_sonar_k1
+    type: retrieval_metrics
+  - id: answer_metrics_sonar_k1
+    type: answer_metrics
+  - id: metrics_sonar_k1
+    type: metrics
+  - id: build_query_traces_sonar_k1
+    type: build_query_traces
+  - id: finalize_sonar_k1
+    type: finalize
+  - id: retrieval_sonar_k3
+    type: retrieval
+    params:
+      k: 3
+  - id: answer_gen_sonar_k3
+    type: answer_gen
+    params:
+      method: simple
+      max_cases: 0       # 0 = generate for every query
+      # ONE prompt, ONE model across every arm and config in this measurement set —
+      # the experiment varies RETRIEVAL only (spelled out so code-default changes
+      # cannot silently alter a reported run).
+      system_prompt: |-
+        You are a concise medical research assistant. Answer based ONLY on the provided context. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Context:
+        {context}
+
+        Question: {question}
+
+        Short Answer:
+      compute_rouge: true
+      reference_metadata_field: long_answer
+      context_source: full_text
+      context_chunk_chars: 1200
+      context_chunks: 4
+      context_docs: 3
+  - id: retrieval_metrics_sonar_k3
+    type: retrieval_metrics
+  - id: answer_metrics_sonar_k3
+    type: answer_metrics
+  - id: metrics_sonar_k3
+    type: metrics
+  - id: build_query_traces_sonar_k3
+    type: build_query_traces
+  - id: finalize_sonar_k3
+    type: finalize
+  - id: retrieval_sonar_k5
+    type: retrieval
+    params:
+      k: 5
+  - id: answer_gen_sonar_k5
+    type: answer_gen
+    params:
+      method: simple
+      max_cases: 0       # 0 = generate for every query
+      # ONE prompt, ONE model across every arm and config in this measurement set —
+      # the experiment varies RETRIEVAL only (spelled out so code-default changes
+      # cannot silently alter a reported run).
+      system_prompt: |-
+        You are a concise medical research assistant. Answer based ONLY on the provided context. Be brief and direct.
+        Reply in exactly this format, nothing before it:
+        Short Answer: yes or no or maybe
+        Long Answer: <your detailed answer>
+      prompt_template: |-
+        Context:
+        {context}
+
+        Question: {question}
+
+        Short Answer:
+      compute_rouge: true
+      reference_metadata_field: long_answer
+      context_source: full_text
+      context_chunk_chars: 1200
+      context_chunks: 4
+      context_docs: 5
+  - id: retrieval_metrics_sonar_k5
+    type: retrieval_metrics
+  - id: answer_metrics_sonar_k5
+    type: answer_metrics
+  - id: metrics_sonar_k5
+    type: metrics
+  - id: build_query_traces_sonar_k5
+    type: build_query_traces
+  - id: finalize_sonar_k5
+    type: finalize
+
+  edges:
+  - {from: dataset_source, to: tts, input: query_text}
+  - {from: tts, to: asr, input: query_audio}
+  - {from: dataset_source, to: corpus_embedding_labse, input: corpus}
+  - {from: corpus_embedding_labse, to: vector_db_labse, input: corpus_vectors}
+  - {from: dataset_source, to: corpus_embedding_sonar, input: corpus}
+  - {from: corpus_embedding_sonar, to: vector_db_sonar, input: corpus_vectors}
+  - {from: asr, to: text_embedding_cascade, input: query_text}
+  - {from: tts, to: audio_embedding_sonar, input: query_audio}
+  - {from: text_embedding_cascade, output: text_query_vectors, to: retrieval_cascade_k1, input: query_vectors}
+  - {from: asr, to: retrieval_cascade_k1, input: query_text}
+  - {from: vector_db_labse, to: retrieval_cascade_k1, input: vector_index}
+  - {from: dataset_source, to: retrieval_cascade_k1, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_cascade_k1, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: answer_gen_cascade_k1, input: query_text}
+  - {from: retrieval_cascade_k1, to: answer_gen_cascade_k1, input: retrieved}
+  - {from: dataset_source, to: answer_gen_cascade_k1, input: short_answers}
+  - {from: dataset_source, to: answer_gen_cascade_k1, input: relevant_docs}
+  - {from: retrieval_cascade_k1, to: retrieval_metrics_cascade_k1, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_cascade_k1, input: relevant_docs}
+  - {from: answer_gen_cascade_k1, to: answer_metrics_cascade_k1, input: generated_answers}
+  - {from: retrieval_cascade_k1, to: answer_metrics_cascade_k1, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_cascade_k1, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_cascade_k1, input: short_answers}
+  - {from: retrieval_metrics_cascade_k1, to: metrics_cascade_k1, input: retrieval_scores}
+  - {from: answer_metrics_cascade_k1, to: metrics_cascade_k1, input: answer_scores}
+  - {from: retrieval_cascade_k1, to: metrics_cascade_k1, input: retrieved}
+  - {from: dataset_source, to: metrics_cascade_k1, input: reference_transcription}
+  - {from: dataset_source, to: metrics_cascade_k1, input: relevant_docs}
+  - {from: retrieval_metrics_cascade_k1, to: metrics_cascade_k1, input: per_query_recall5}
+  - {from: retrieval_cascade_k1, to: build_query_traces_cascade_k1, input: retrieved}
+  - {from: answer_gen_cascade_k1, to: build_query_traces_cascade_k1, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_cascade_k1, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_cascade_k1, input: relevant_docs}
+  - {from: retrieval_metrics_cascade_k1, to: build_query_traces_cascade_k1, input: per_query_recall5}
+  - {from: metrics_cascade_k1, to: finalize_cascade_k1, input: metrics}
+  - {from: build_query_traces_cascade_k1, to: finalize_cascade_k1, input: query_traces}
+  - {from: answer_gen_cascade_k1, to: finalize_cascade_k1, input: generated_answers}
+  - {from: retrieval_cascade_k1, to: finalize_cascade_k1, input: retrieved}
+  - {from: text_embedding_cascade, output: text_query_vectors, to: retrieval_cascade_k3, input: query_vectors}
+  - {from: asr, to: retrieval_cascade_k3, input: query_text}
+  - {from: vector_db_labse, to: retrieval_cascade_k3, input: vector_index}
+  - {from: dataset_source, to: retrieval_cascade_k3, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_cascade_k3, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: answer_gen_cascade_k3, input: query_text}
+  - {from: retrieval_cascade_k3, to: answer_gen_cascade_k3, input: retrieved}
+  - {from: dataset_source, to: answer_gen_cascade_k3, input: short_answers}
+  - {from: dataset_source, to: answer_gen_cascade_k3, input: relevant_docs}
+  - {from: retrieval_cascade_k3, to: retrieval_metrics_cascade_k3, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_cascade_k3, input: relevant_docs}
+  - {from: answer_gen_cascade_k3, to: answer_metrics_cascade_k3, input: generated_answers}
+  - {from: retrieval_cascade_k3, to: answer_metrics_cascade_k3, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_cascade_k3, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_cascade_k3, input: short_answers}
+  - {from: retrieval_metrics_cascade_k3, to: metrics_cascade_k3, input: retrieval_scores}
+  - {from: answer_metrics_cascade_k3, to: metrics_cascade_k3, input: answer_scores}
+  - {from: retrieval_cascade_k3, to: metrics_cascade_k3, input: retrieved}
+  - {from: dataset_source, to: metrics_cascade_k3, input: reference_transcription}
+  - {from: dataset_source, to: metrics_cascade_k3, input: relevant_docs}
+  - {from: retrieval_metrics_cascade_k3, to: metrics_cascade_k3, input: per_query_recall5}
+  - {from: retrieval_cascade_k3, to: build_query_traces_cascade_k3, input: retrieved}
+  - {from: answer_gen_cascade_k3, to: build_query_traces_cascade_k3, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_cascade_k3, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_cascade_k3, input: relevant_docs}
+  - {from: retrieval_metrics_cascade_k3, to: build_query_traces_cascade_k3, input: per_query_recall5}
+  - {from: metrics_cascade_k3, to: finalize_cascade_k3, input: metrics}
+  - {from: build_query_traces_cascade_k3, to: finalize_cascade_k3, input: query_traces}
+  - {from: answer_gen_cascade_k3, to: finalize_cascade_k3, input: generated_answers}
+  - {from: retrieval_cascade_k3, to: finalize_cascade_k3, input: retrieved}
+  - {from: text_embedding_cascade, output: text_query_vectors, to: retrieval_cascade_k5, input: query_vectors}
+  - {from: asr, to: retrieval_cascade_k5, input: query_text}
+  - {from: vector_db_labse, to: retrieval_cascade_k5, input: vector_index}
+  - {from: dataset_source, to: retrieval_cascade_k5, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_cascade_k5, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: answer_gen_cascade_k5, input: query_text}
+  - {from: retrieval_cascade_k5, to: answer_gen_cascade_k5, input: retrieved}
+  - {from: dataset_source, to: answer_gen_cascade_k5, input: short_answers}
+  - {from: dataset_source, to: answer_gen_cascade_k5, input: relevant_docs}
+  - {from: retrieval_cascade_k5, to: retrieval_metrics_cascade_k5, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_cascade_k5, input: relevant_docs}
+  - {from: answer_gen_cascade_k5, to: answer_metrics_cascade_k5, input: generated_answers}
+  - {from: retrieval_cascade_k5, to: answer_metrics_cascade_k5, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_cascade_k5, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_cascade_k5, input: short_answers}
+  - {from: retrieval_metrics_cascade_k5, to: metrics_cascade_k5, input: retrieval_scores}
+  - {from: answer_metrics_cascade_k5, to: metrics_cascade_k5, input: answer_scores}
+  - {from: retrieval_cascade_k5, to: metrics_cascade_k5, input: retrieved}
+  - {from: dataset_source, to: metrics_cascade_k5, input: reference_transcription}
+  - {from: dataset_source, to: metrics_cascade_k5, input: relevant_docs}
+  - {from: retrieval_metrics_cascade_k5, to: metrics_cascade_k5, input: per_query_recall5}
+  - {from: retrieval_cascade_k5, to: build_query_traces_cascade_k5, input: retrieved}
+  - {from: answer_gen_cascade_k5, to: build_query_traces_cascade_k5, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_cascade_k5, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_cascade_k5, input: relevant_docs}
+  - {from: retrieval_metrics_cascade_k5, to: build_query_traces_cascade_k5, input: per_query_recall5}
+  - {from: metrics_cascade_k5, to: finalize_cascade_k5, input: metrics}
+  - {from: build_query_traces_cascade_k5, to: finalize_cascade_k5, input: query_traces}
+  - {from: answer_gen_cascade_k5, to: finalize_cascade_k5, input: generated_answers}
+  - {from: retrieval_cascade_k5, to: finalize_cascade_k5, input: retrieved}
+  - {from: audio_embedding_sonar, output: audio_query_vectors, to: retrieval_sonar_k1, input: query_vectors}
+  - {from: dataset_source, output: reference_text, to: retrieval_sonar_k1, input: query_text}
+  - {from: vector_db_sonar, to: retrieval_sonar_k1, input: vector_index}
+  - {from: dataset_source, to: retrieval_sonar_k1, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_sonar_k1, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: answer_gen_sonar_k1, input: query_text}
+  - {from: retrieval_sonar_k1, to: answer_gen_sonar_k1, input: retrieved}
+  - {from: dataset_source, to: answer_gen_sonar_k1, input: short_answers}
+  - {from: dataset_source, to: answer_gen_sonar_k1, input: relevant_docs}
+  - {from: retrieval_sonar_k1, to: retrieval_metrics_sonar_k1, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_sonar_k1, input: relevant_docs}
+  - {from: answer_gen_sonar_k1, to: answer_metrics_sonar_k1, input: generated_answers}
+  - {from: retrieval_sonar_k1, to: answer_metrics_sonar_k1, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_sonar_k1, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_sonar_k1, input: short_answers}
+  - {from: retrieval_metrics_sonar_k1, to: metrics_sonar_k1, input: retrieval_scores}
+  - {from: answer_metrics_sonar_k1, to: metrics_sonar_k1, input: answer_scores}
+  - {from: retrieval_sonar_k1, to: metrics_sonar_k1, input: retrieved}
+  - {from: dataset_source, to: metrics_sonar_k1, input: reference_transcription}
+  - {from: dataset_source, to: metrics_sonar_k1, input: relevant_docs}
+  - {from: retrieval_metrics_sonar_k1, to: metrics_sonar_k1, input: per_query_recall5}
+  - {from: retrieval_sonar_k1, to: build_query_traces_sonar_k1, input: retrieved}
+  - {from: answer_gen_sonar_k1, to: build_query_traces_sonar_k1, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_sonar_k1, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_sonar_k1, input: relevant_docs}
+  - {from: retrieval_metrics_sonar_k1, to: build_query_traces_sonar_k1, input: per_query_recall5}
+  - {from: metrics_sonar_k1, to: finalize_sonar_k1, input: metrics}
+  - {from: build_query_traces_sonar_k1, to: finalize_sonar_k1, input: query_traces}
+  - {from: answer_gen_sonar_k1, to: finalize_sonar_k1, input: generated_answers}
+  - {from: retrieval_sonar_k1, to: finalize_sonar_k1, input: retrieved}
+  - {from: audio_embedding_sonar, output: audio_query_vectors, to: retrieval_sonar_k3, input: query_vectors}
+  - {from: dataset_source, output: reference_text, to: retrieval_sonar_k3, input: query_text}
+  - {from: vector_db_sonar, to: retrieval_sonar_k3, input: vector_index}
+  - {from: dataset_source, to: retrieval_sonar_k3, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_sonar_k3, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: answer_gen_sonar_k3, input: query_text}
+  - {from: retrieval_sonar_k3, to: answer_gen_sonar_k3, input: retrieved}
+  - {from: dataset_source, to: answer_gen_sonar_k3, input: short_answers}
+  - {from: dataset_source, to: answer_gen_sonar_k3, input: relevant_docs}
+  - {from: retrieval_sonar_k3, to: retrieval_metrics_sonar_k3, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_sonar_k3, input: relevant_docs}
+  - {from: answer_gen_sonar_k3, to: answer_metrics_sonar_k3, input: generated_answers}
+  - {from: retrieval_sonar_k3, to: answer_metrics_sonar_k3, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_sonar_k3, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_sonar_k3, input: short_answers}
+  - {from: retrieval_metrics_sonar_k3, to: metrics_sonar_k3, input: retrieval_scores}
+  - {from: answer_metrics_sonar_k3, to: metrics_sonar_k3, input: answer_scores}
+  - {from: retrieval_sonar_k3, to: metrics_sonar_k3, input: retrieved}
+  - {from: dataset_source, to: metrics_sonar_k3, input: reference_transcription}
+  - {from: dataset_source, to: metrics_sonar_k3, input: relevant_docs}
+  - {from: retrieval_metrics_sonar_k3, to: metrics_sonar_k3, input: per_query_recall5}
+  - {from: retrieval_sonar_k3, to: build_query_traces_sonar_k3, input: retrieved}
+  - {from: answer_gen_sonar_k3, to: build_query_traces_sonar_k3, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_sonar_k3, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_sonar_k3, input: relevant_docs}
+  - {from: retrieval_metrics_sonar_k3, to: build_query_traces_sonar_k3, input: per_query_recall5}
+  - {from: metrics_sonar_k3, to: finalize_sonar_k3, input: metrics}
+  - {from: build_query_traces_sonar_k3, to: finalize_sonar_k3, input: query_traces}
+  - {from: answer_gen_sonar_k3, to: finalize_sonar_k3, input: generated_answers}
+  - {from: retrieval_sonar_k3, to: finalize_sonar_k3, input: retrieved}
+  - {from: audio_embedding_sonar, output: audio_query_vectors, to: retrieval_sonar_k5, input: query_vectors}
+  - {from: dataset_source, output: reference_text, to: retrieval_sonar_k5, input: query_text}
+  - {from: vector_db_sonar, to: retrieval_sonar_k5, input: vector_index}
+  - {from: dataset_source, to: retrieval_sonar_k5, input: reference_transcription}
+  - {from: dataset_source, to: retrieval_sonar_k5, input: relevant_docs}
+  - {from: dataset_source, output: reference_text, to: answer_gen_sonar_k5, input: query_text}
+  - {from: retrieval_sonar_k5, to: answer_gen_sonar_k5, input: retrieved}
+  - {from: dataset_source, to: answer_gen_sonar_k5, input: short_answers}
+  - {from: dataset_source, to: answer_gen_sonar_k5, input: relevant_docs}
+  - {from: retrieval_sonar_k5, to: retrieval_metrics_sonar_k5, input: retrieved}
+  - {from: dataset_source, to: retrieval_metrics_sonar_k5, input: relevant_docs}
+  - {from: answer_gen_sonar_k5, to: answer_metrics_sonar_k5, input: generated_answers}
+  - {from: retrieval_sonar_k5, to: answer_metrics_sonar_k5, input: retrieved}
+  - {from: dataset_source, to: answer_metrics_sonar_k5, input: relevant_docs}
+  - {from: dataset_source, to: answer_metrics_sonar_k5, input: short_answers}
+  - {from: retrieval_metrics_sonar_k5, to: metrics_sonar_k5, input: retrieval_scores}
+  - {from: answer_metrics_sonar_k5, to: metrics_sonar_k5, input: answer_scores}
+  - {from: retrieval_sonar_k5, to: metrics_sonar_k5, input: retrieved}
+  - {from: dataset_source, to: metrics_sonar_k5, input: reference_transcription}
+  - {from: dataset_source, to: metrics_sonar_k5, input: relevant_docs}
+  - {from: retrieval_metrics_sonar_k5, to: metrics_sonar_k5, input: per_query_recall5}
+  - {from: retrieval_sonar_k5, to: build_query_traces_sonar_k5, input: retrieved}
+  - {from: answer_gen_sonar_k5, to: build_query_traces_sonar_k5, input: generated_answers}
+  - {from: dataset_source, to: build_query_traces_sonar_k5, input: reference_transcription}
+  - {from: dataset_source, to: build_query_traces_sonar_k5, input: relevant_docs}
+  - {from: retrieval_metrics_sonar_k5, to: build_query_traces_sonar_k5, input: per_query_recall5}
+  - {from: metrics_sonar_k5, to: finalize_sonar_k5, input: metrics}
+  - {from: build_query_traces_sonar_k5, to: finalize_sonar_k5, input: query_traces}
+  - {from: answer_gen_sonar_k5, to: finalize_sonar_k5, input: generated_answers}
+  - {from: retrieval_sonar_k5, to: finalize_sonar_k5, input: retrieved}
+
+llm:
+  model: gemma4:latest
+  use_local_server: true
+  local_server_url: http://localhost:11434/v1/chat/completions
+  api_key_env: DUMMY_KEY
+  temperature: 0.0
+  # set concurrency: 1 for a run you will quote (bit-reproducibility; see rag_fulltext.yaml)
+  concurrency: 2
+  seed: 42
+  timeout_s: 600
+runtime:
+  cache:
+    enabled: true
+    cache_dir: .cache
+    cache_embeddings: true
+    cache_vector_db: true
+  logging:
+    console_level: INFO
+    file_level: DEBUG
