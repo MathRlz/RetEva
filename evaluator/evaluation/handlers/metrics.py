@@ -529,7 +529,7 @@ def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
     from ..item_set import ItemSet
 
     # Per-item identity rides the keyed bus artifacts (M1d-2): the effective query text
-    # in ASR modes, the spoken reference in audio modes. A plain (non-keyed) publish
+    # when an asr node feeds this branch, the spoken reference otherwise. A plain (non-keyed) publish
     # means ids did not align — same no-op condition as the legacy all_query_ids check.
     keyed = s.keyed_items("query_text")
     if keyed is None:
@@ -564,9 +564,9 @@ def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
             )
         artifacts[name] = ItemSet(ids, list(values)[:n])
 
-    # Bus-first: the ASR hypothesis in ASR modes (query_text is immutable, so
-    # this is the un-rewritten output `wer`/`cer` score); the spoken reference in audio modes
-    # (legacy parity — there the "query" scored by text metrics is the GT).
+    # Bus-first: the ASR hypothesis when an asr node feeds this branch (query_text is
+    # immutable, so this is the un-rewritten output `wer`/`cer` score); the spoken
+    # reference otherwise (there the "query" scored by text metrics is the GT).
     # Graph truth: the hypothesis this node is actually fed (query_text bound from an
     # asr producer), else the reference — per node, so mixed graphs (ASR arm next to
     # text/latent arms) score each branch by what really fed it.
