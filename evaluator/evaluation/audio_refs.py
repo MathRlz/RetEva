@@ -32,12 +32,19 @@ class RefAudioDatasetView:
         self._paths = {str(i): str(v) for i, v in zip(refs.ids, refs.values)}
         # id → (owning base, index). First base wins; extra bases (multi-source /
         # union graphs) fill the rest so a unioned ref set resolves metadata too.
+        # Question-based datasets expose ``questions`` (question_id); sample-based ones
+        # (AudioSamplesQueryDataset — admed_voice) expose ``samples`` (sample_id).
         self._owner: dict = {}
         for b in [base, *(extra_bases or [])]:
             if b is None:
                 continue
-            for i, q in enumerate(getattr(b, "questions", None) or []):
-                qid = str(getattr(q, "question_id", i))
+            rows = getattr(b, "questions", None) or getattr(b, "samples", None) or []
+            for i, q in enumerate(rows):
+                qid = str(
+                    getattr(q, "question_id", None)
+                    or getattr(q, "sample_id", None)
+                    or i
+                )
                 self._owner.setdefault(qid, (b, i))
 
     def __len__(self) -> int:
@@ -67,16 +74,27 @@ class RefAudioDatasetView:
         "has no audio_path" — even though the refs held all the audio needed.
         """
         base, i = owner
-        q = base.questions[i]
-        text = getattr(q, "question_text", None)
+        rows = getattr(base, "questions", None) or getattr(base, "samples", None)
+        q = rows[i]
+        # question-based rows carry question_text; sample-based rows (admed_voice) carry
+        # the transcription as the text.
+        text = getattr(q, "question_text", None) or getattr(q, "transcription", None)
+        meta = getattr(q, "metadata", None) or {}
         return {
             "transcription": text,
             "question_text": text,
-            "question_id": getattr(q, "question_id", i),
-            "groundtruth_doc_ids": getattr(q, "groundtruth_doc_ids", None),
-            "relevance_grades": getattr(q, "relevance_grades", None),
+            "question_id": (
+                getattr(q, "question_id", None) or getattr(q, "sample_id", None) or i
+            ),
+            "groundtruth_doc_ids": (
+                getattr(q, "groundtruth_doc_ids", None)
+                or meta.get("groundtruth_doc_ids")
+            ),
+            "relevance_grades": (
+                getattr(q, "relevance_grades", None) or meta.get("relevance_grades")
+            ),
             "language": getattr(q, "language", None),
-            "metadata": getattr(q, "metadata", None),
+            "metadata": meta,
         }
 
     # Some consumers introspect questions (e.g. relevance derivation) — expose base's.

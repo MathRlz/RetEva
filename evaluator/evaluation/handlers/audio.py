@@ -29,9 +29,14 @@ def _augment_audio_one(id_path, *, augmenter, n_variants, base_seed, node_id, ou
     from ...datasets.core import load_audio_file
     from ..provenance import item_seed
 
-    qid, path = id_path
-    waveform, sr = load_audio_file(path)
-    audio = np.asarray(waveform.squeeze().numpy(), dtype=np.float32)
+    qid, payload = id_path
+    if isinstance(payload, tuple):
+        # in-memory source (a sample-based dataset with no on-disk refs): (array, sr)
+        raw, sr = payload
+        audio = np.asarray(raw, dtype=np.float32).squeeze()
+    else:
+        waveform, sr = load_audio_file(payload)
+        audio = np.asarray(waveform.squeeze().numpy(), dtype=np.float32)
     pairs = []
     for variant in range(n_variants):
         perturbed = augmenter.augment(
@@ -42,6 +47,35 @@ def _augment_audio_one(id_path, *, augmenter, n_variants, base_seed, node_id, ou
         sf.write(out_path, perturbed, int(sr))
         pairs.append((vid, out_path))
     return pairs
+
+
+def _inmemory_audio_refs(s: "RunState"):
+    """ItemSet of ``(question_id → (audio_array, sampling_rate))`` from a dataset whose
+    items carry decoded audio (AudioSamplesQueryDataset — admed_voice etc.). None when the
+    dataset has no such items. The tuples ride the same per-item pipeline as path refs
+    (``_augment_audio_one`` handles both payload shapes)."""
+    from ..item_set import ItemSet
+
+    ds = s.dataset
+    if ds is None:
+        return None
+    try:
+        n = len(ds)
+        if n == 0:
+            return None
+        first = ds[0]
+        if not isinstance(first, dict) or "audio_array" not in first:
+            return None
+        ids, values = [], []
+        for i in range(n):
+            item = ds[i]
+            ids.append(str(item.get("question_id", i)))
+            values.append((item["audio_array"], int(item.get("sampling_rate", 16000))))
+    except (TypeError, KeyError, IndexError, ValueError):
+        return None
+    if len(set(ids)) != len(ids):
+        return None
+    return ItemSet(ids, values)
 
 
 def _stage_augment_audio(s: RunState) -> None:
@@ -65,15 +99,18 @@ def _stage_augment_audio(s: RunState) -> None:
     if not isinstance(refs, ItemSet) or not refs.ids or not all(
         isinstance(v, str) for v in refs.values
     ):
-        # An augment node with no input refs is an upstream failure (its bound tts/source
-        # never published), not a benign no-op: passing silently here hands downstream
-        # audio consumers NO refs, and they crash later on the raw dataset with a
-        # misleading "no audio_path" error. Fail the branch at the real boundary.
-        raise RuntimeError(
-            f"augment_audio '{getattr(s.current_node, 'id', '?')}': no query_audio refs "
-            f"from its bound producer — the upstream tts/dataset node did not publish "
-            f"audio refs (check its log for unsynthesized questions)"
-        )
+        # No path refs on the bus. A sample-based dataset (admed_voice: real recordings
+        # decoded in memory, no audio_path) legitimately publishes none — feed the
+        # augmenter the in-memory audio instead. Only when the dataset has none either
+        # is it a real upstream failure (a tts node that failed to publish).
+        refs = _inmemory_audio_refs(s)
+        if refs is None:
+            raise RuntimeError(
+                f"augment_audio '{getattr(s.current_node, 'id', '?')}': no query_audio refs "
+                f"from its bound producer and no in-memory dataset audio — the upstream "
+                f"tts/dataset node did not publish audio refs (check its log for "
+                f"unsynthesized questions)"
+            )
     node_id = getattr(s.current_node, "id", "augment_audio")
     # Resolved before execution: global ⊕ node params; the node's presence ⇒ enabled.
     from ..node_config import resolve_node_config
