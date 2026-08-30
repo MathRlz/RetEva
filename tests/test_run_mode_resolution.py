@@ -26,3 +26,28 @@ def test_headless_explicit_graph_gets_custom_mode():
     mode, graph = _resolve_mode_and_graph(_Ctx(), _Features(), cfg, cfg.graph_override)
     assert mode == "custom"
     assert any(n.id == "answer_gen" for n in graph.nodes)
+
+
+def test_retrieved_or_text_ids_falls_back_to_query_text():
+    # No-retrieval graph: per-query identity comes from the keyed query_text ItemSet,
+    # with empty per-query result lists (empty context is the point of that baseline).
+    from types import SimpleNamespace
+
+    from evaluator.evaluation.handlers.rag import _retrieved_or_text_ids
+    from evaluator.evaluation.item_set import ItemSet
+
+    class _State:
+        def get_artifact(self, name, default=None):
+            return default
+
+        def keyed_items(self, name, default=None):
+            if name == "retrieved":
+                return None
+            if name == "query_text":
+                return ItemSet(["q1", "q2"], ["what?", "why?"])
+            return default
+
+    results, keys, ids = _retrieved_or_text_ids(_State())
+    assert ids == ["q1", "q2"]
+    assert results == [[], []]
+    assert keys == [[], []]

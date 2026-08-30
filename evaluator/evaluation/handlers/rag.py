@@ -17,7 +17,7 @@ from ..helpers import _payload_to_key
 from ..answer_gen import generate_answers
 from ..executor.state import RunState
 from .retrieval import _retrieved_from_bus
-from ._common import _relevant_from_bus, publish_keyed_or_plain, retrieval_ran
+from ._common import _relevant_from_bus, publish_keyed_or_plain
 
 logger = get_logger(__name__)
 
@@ -241,15 +241,31 @@ def _run_judge(
     return out
 
 
+def _retrieved_or_text_ids(s: "RunState"):
+    """``_retrieved_from_bus``, with a query_text fallback for retrieval-free graphs.
+
+    The no-retrieval baseline (dataset_source → answer_gen → judge: the generator answers
+    from parametric knowledge) has no ``retrieved`` artifact to carry per-query identity —
+    fall back to the keyed ``query_text`` ItemSet for ids, with empty result lists (empty
+    context is exactly what that graph means). A graph WITH retrieval is unaffected."""
+    results_with_scores, retrieved_keys, query_ids = _retrieved_from_bus(s)
+    if results_with_scores or query_ids:
+        return results_with_scores, retrieved_keys, query_ids
+    qt = s.keyed_items("query_text")
+    if qt is None:
+        return results_with_scores, retrieved_keys, query_ids
+    ids = [str(i) for i in qt.ids]
+    return [[] for _ in ids], [[] for _ in ids], ids
+
+
 @register_stage_handler("generate", self_timed=True)
 def _stage_generate(s: RunState) -> None:
-    """Answer-generation node: RAG answer generation only (retrieval modes). Writes
-    ``answer_generation`` into ``s.results`` and publishes the per-query detail map as the
-    ``generated_answers`` ItemSet, which the trace node id-joins. Conditional on
-    ``answer_generation.enabled``."""
-    if not retrieval_ran(s):
-        return
-    results_with_scores, _, query_ids = _retrieved_from_bus(s)
+    """Answer-generation node: generate answers for every query — with the retrieved docs
+    as context in RAG graphs, or with NO context in a retrieval-free graph (the parametric
+    no-retrieval baseline). Writes ``answer_generation`` into ``s.results`` and publishes
+    the per-query detail map as the ``generated_answers`` ItemSet, which the trace node
+    id-joins. Conditional on ``answer_generation.enabled``."""
+    results_with_scores, _, query_ids = _retrieved_or_text_ids(s)
     detail_by_qid = _generate_answer_details(
         s, s.results, _relevant_from_bus(s), results_with_scores, query_ids
     )
@@ -284,7 +300,7 @@ def _stage_answer_metrics(s: RunState) -> None:
     answer_results = s.sibling_artifact("generated_answers", "answer_generation")
     if not isinstance(answer_results, dict) or not answer_results.get("details"):
         return
-    results_with_scores, _, query_ids = _retrieved_from_bus(s)
+    results_with_scores, _, query_ids = _retrieved_or_text_ids(s)
     score_answers(
         answer_results,
         traces_data=(query_ids, _relevant_from_bus(s), results_with_scores),
@@ -319,13 +335,11 @@ def _stage_build_query_traces(s: RunState) -> None:
     ran) and the per-item WER/recall score artifacts — all id-joined off the bus.
     Always present in retrieval modes when tracing is on — so the judge + report read the
     traces without the old ``traces_built`` state machine."""
-    if not retrieval_ran(s):
-        return
     # No dedup-by-shared-key guard here (R4/multi-variant): a graph with N build_query_traces
     # nodes (one per compared variant) must build ALL N — each publishes its own traces on the
     # bus keyed by its own node id below. `s.results["query_traces"]` is written-then-read-back
     # as scratch space within this single call only (never read across nodes).
-    results_with_scores, _, query_ids = _retrieved_from_bus(s)
+    results_with_scores, _, query_ids = _retrieved_or_text_ids(s)
     _build_query_traces(
         s,
         s.results,
@@ -344,12 +358,10 @@ def _stage_build_query_traces(s: RunState) -> None:
 def _stage_answer_judge(s: RunState) -> None:
     """LLM-judge comparison node: scores the query traces (built upstream) vs the judge
     rubric + calibrates against IR metrics. Present only when the judge is enabled."""
-    if not retrieval_ran(s):
-        return
     cfg = s.resolved_config(default=s.judge_config)
     if cfg is not None and not cfg.enabled:
         return  # a per-branch {enabled: false} judge node — skip this branch's judging
-    _, retrieved_keys, _ids = _retrieved_from_bus(s)
+    _, retrieved_keys, _ids = _retrieved_or_text_ids(s)
     judge_out = _run_judge(
         s, _relevant_from_bus(s),
         list(s.get_artifact("per_query_recall5", default=[])), retrieved_keys, cfg,
