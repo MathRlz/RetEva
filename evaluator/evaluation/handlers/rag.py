@@ -251,11 +251,14 @@ def _retrieved_or_text_ids(s: "RunState"):
     results_with_scores, retrieved_keys, query_ids = _retrieved_from_bus(s)
     if results_with_scores or query_ids:
         return results_with_scores, retrieved_keys, query_ids
-    qt = s.keyed_items("query_text")
-    if qt is None:
-        return results_with_scores, retrieved_keys, query_ids
-    ids = [str(i) for i in qt.ids]
-    return [[] for _ in ids], [[] for _ in ids], ids
+    # Whichever per-query keyed stream THIS node has bound (answer_gen binds query_text;
+    # build_query_traces / answer_metrics / judge bind reference_transcription).
+    for name in ("query_text", "reference_transcription"):
+        keyed = s.keyed_items(name)
+        if keyed is not None and keyed.ids:
+            ids = [str(i) for i in keyed.ids]
+            return [[] for _ in ids], [[] for _ in ids], ids
+    return results_with_scores, retrieved_keys, query_ids
 
 
 @register_stage_handler("generate", self_timed=True)
