@@ -135,7 +135,17 @@ def _determinism_state() -> Dict[str, Any]:
 
 
 def config_hash(config: Any) -> str:
-    """Stable short hash over the identity-bearing config (models, data, retrieval)."""
+    """Stable short hash over the identity-bearing config (models, data, retrieval).
+
+    Folds in ``graph_override`` (T6 fix): a graph-mode config (``graph.nodes`` with
+    per-node ``params`` — e.g. an ``augment_audio`` node's ``snr_db``/``noise_type``)
+    carries its identity entirely in that override, since ``model``/``vector_db`` stay
+    empty for these configs. Without it, every config in a node-param sweep (a noise-SNR
+    or noise-color sweep, say) collapsed to the SAME hash — same ``run_key`` — so the
+    run-journal checkpoint/resume (run_journal.py) would silently resume one config's run
+    from a DIFFERENT config's leftover checkpoint after any crash, cross-contaminating
+    results between sweep points (observed live: an SNR sweep whose runs shared a stale
+    journal came back with identical metrics across several SNR values)."""
     model = getattr(config, "model", None)
     vdb = getattr(config, "vector_db", None)
     data = getattr(config, "data", None)
@@ -149,6 +159,7 @@ def config_hash(config: Any) -> str:
         "retrieval_mode": getattr(vdb, "retrieval_mode", None),
         "k": getattr(vdb, "k", None),
         "dataset": getattr(data, "dataset_name", None),
+        "graph_override": getattr(config, "graph_override", None),
     }
     blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
