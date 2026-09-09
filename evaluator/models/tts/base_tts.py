@@ -1,9 +1,6 @@
-"""Shared base + helpers for TTS providers.
-
-Keeps the common bits (config storage, the synthesize interface, the
-torch/transformers import guard, sample-rate extraction) in one place without
-forcing providers with different backends (Coqui XTTS, Piper) into a single
-loading template.
+"""Shared base + helpers for TTS providers: config storage, the synthesize interface,
+the torch/transformers import guard, and sample-rate extraction — kept separate so
+providers with different backends (Coqui XTTS, Piper) aren't forced into one loading template.
 """
 import logging
 
@@ -23,10 +20,10 @@ class BaseTTSModel:
         raise NotImplementedError
 
     def to(self, device: str) -> "BaseTTSModel":
-        """Move the underlying model to ``device``. No-op default for providers with no
-        GPU concept (piper: an external CPU-only subprocess binary) — a provider that
-        DOES support a device (m4t, mms: transformers; xtts_v2: Coqui TTS) overrides
-        this to actually move its model, so callers can treat every provider uniformly."""
+        """No-op default for providers with no GPU concept (piper: an external CPU-only
+        subprocess binary) — a provider that DOES support a device (m4t, mms: transformers;
+        xtts_v2: Coqui TTS) overrides this to actually move its model, so callers can treat
+        every provider uniformly."""
         return self
 
 

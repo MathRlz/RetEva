@@ -12,33 +12,21 @@ def export_to_csv(results: Dict[str, Any], output_path: str) -> None:
     """Export metrics to CSV format.
 
     Creates a flat CSV with one row per metric.
-
-    Args:
-        results: Results dictionary with metric names as keys.
-        output_path: Path to output CSV file.
-
-    Example output:
-        metric,value
-        MRR,0.85
-        Recall@5,0.92
     """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Separate metadata from metrics
     skip_keys = {"asr", "embedder", "per_sample", "details", "config",
                  "metadata", "pipeline_mode", "phased", "audio_embedder",
                  "text_embedder"}
 
     rows = []
 
-    # Add metadata rows first
     for key in ["asr", "embedder", "audio_embedder", "text_embedder",
                 "pipeline_mode"]:
         if key in results:
             rows.append({"metric": key, "value": str(results[key])})
 
-    # Add numeric metrics
     for key, value in results.items():
         if key in skip_keys:
             continue
@@ -165,25 +153,6 @@ def export_to_latex(
     """Generate LaTeX table from results.
 
     Creates a booktabs-style table with proper formatting.
-
-    Args:
-        results: Results dictionary with metric names as keys.
-        output_path: Path to output .tex file.
-        caption: Table caption.
-
-    Example output:
-        \\begin{table}[htbp]
-        \\centering
-        \\caption{Evaluation Results}
-        \\begin{tabular}{lr}
-        \\toprule
-        Metric & Value \\\\
-        \\midrule
-        MRR & 0.8500 \\\\
-        Recall@5 & 0.9200 \\\\
-        \\bottomrule
-        \\end{tabular}
-        \\end{table}
     """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,7 +161,6 @@ def export_to_latex(
                  "metadata", "pipeline_mode", "phased", "audio_embedder",
                  "text_embedder"}
 
-    # Collect metrics
     metrics = []
     for key, value in results.items():
         if key in skip_keys:
@@ -200,7 +168,6 @@ def export_to_latex(
         if isinstance(value, (int, float)):
             metrics.append((key, value))
 
-    # Build LaTeX table
     lines = []
     lines.append("\\begin{table}[htbp]")
     lines.append("\\centering")
@@ -236,15 +203,6 @@ def compare_experiments_to_latex(
 
     Creates a table with experiments as columns and metrics as rows.
 
-    Args:
-        results_list: List of result dictionaries.
-        names: List of experiment names (same order as results_list).
-        output_path: Optional path to save the .tex file.
-        caption: Table caption.
-
-    Returns:
-        LaTeX table string.
-
     Raises:
         ValueError: If results_list and names have different lengths.
     """
@@ -261,7 +219,6 @@ def compare_experiments_to_latex(
                  "metadata", "pipeline_mode", "phased", "audio_embedder",
                  "text_embedder"}
 
-    # Find common numeric metrics
     all_metrics = set()
     for results in results_list:
         for key, value in results.items():
@@ -274,11 +231,9 @@ def compare_experiments_to_latex(
     n_experiments = len(results_list)
     col_spec = "l" + "r" * n_experiments
 
-    # Build header row
     escaped_names = [_escape_latex(name) for name in names]
     header = "Metric & " + " & ".join(escaped_names) + " \\\\"
 
-    # Build LaTeX table
     lines = []
     lines.append("\\begin{table}[htbp]")
     lines.append("\\centering")
@@ -323,10 +278,6 @@ def export_sample_results(results: Dict[str, Any], output_path: str) -> None:
 
     Creates a CSV with one row per sample, including all available metrics.
 
-    Args:
-        results: Results dictionary containing 'per_sample' or 'details'.
-        output_path: Path to output CSV file.
-
     Raises:
         ValueError: If no per-sample data is available.
     """
@@ -363,7 +314,6 @@ def export_sample_results(results: Dict[str, Any], output_path: str) -> None:
         if not details or not isinstance(details[0], dict):
             raise ValueError("details must be a list of dictionaries")
 
-        # Get all column names from all items
         all_keys = set()
         for item in details:
             all_keys.update(item.keys())
@@ -381,6 +331,6 @@ def export_sample_results(results: Dict[str, Any], output_path: str) -> None:
         )
 
 
-# load_results + _escape_latex now live in ._common (B1/F14); re-exported here so existing
+# load_results + _escape_latex live in ._common; re-exported here so existing
 # importers (cli/export.py, analysis.__init__) keep working.
 from ._common import _escape_latex, load_results  # noqa: E402,F401

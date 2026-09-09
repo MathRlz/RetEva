@@ -1,10 +1,5 @@
-"""
-LLM Server components for the evaluator.
-
-This package provides:
-- Ollama server implementation (the only local-LLM backend)
-- Curated local-model list for the picker
-"""
+"""LLM Server components for the evaluator: the Ollama local-LLM backend and a curated
+local-model list for the picker."""
 
 from .ollama import OllamaServer, ServerHealth, ServerStatus
 from .registry import CURATED_LOCAL_MODELS

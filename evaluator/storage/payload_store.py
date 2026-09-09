@@ -1,11 +1,8 @@
-"""On-disk payload store for off-RAM corpora (Roadmap 3b).
+"""On-disk payload store for off-RAM corpora.
 
-Backs the N corpus payloads with an Arrow/Parquet file so retrieval fetches docs by row id on
-demand — one row group resident at a time — instead of holding the whole corpus in RAM. Pairs
-with a memory-mapped vector index (``FaissMmapVectorStore``) so neither the index nor the
-payloads are bounded by one box's RAM. Payloads are JSON-encoded per row, so an arbitrary
-dict/str doc round-trips unchanged.
-"""
+Backs corpus payloads with an Arrow/Parquet file so retrieval fetches docs by row id on demand
+(one row group resident at a time) instead of holding the whole corpus in RAM; pairs with a
+memory-mapped vector index so neither is bounded by one box's RAM."""
 
 from __future__ import annotations
 
@@ -58,8 +55,3 @@ class ParquetPayloadStore:
             self._cache_rows = col.to_pylist()
             self._cache_rg = rg
         return json.loads(self._cache_rows[idx - rg * self._rg_size])
-
-    def get_many(self, indices: Sequence[int]) -> List[Any]:
-        """Fetch a set of row ids (fetch-by-id-set), aligned 1:1 with ``indices``. Adjacent ids
-        in the same row group reuse the cache, so a sorted id set reads each group once."""
-        return [self.get(int(i)) for i in indices]

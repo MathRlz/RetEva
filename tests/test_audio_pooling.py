@@ -152,8 +152,8 @@ def test_load_weights_raises_on_unmatched_encoder(monkeypatch, tmp_path):
 
 
 def test_load_weights_raises_on_missing_projection(monkeypatch, tmp_path):
-    # Projection keys under the wrong prefix (proj.* not proj.proj.*) used to silently leave the
-    # head at random init — now it must raise.
+    # Projection keys under the wrong prefix (proj.* not proj.proj.*) must raise, not silently
+    # leave the head at random init.
     monkeypatch.setattr(ap, "_select_backend", lambda name: _FakeBackend(4))
     model = ap.AttentionPoolAudioModel(emb_dim=6, pooling="mean")
     sd = {f"proj.{k.split('.', 1)[1]}": v for k, v in model.projection_head.state_dict().items()}
@@ -186,3 +186,17 @@ def test_load_weights_no_encoder_keys_keeps_hf_encoder(monkeypatch, tmp_path):
     torch.save(sd, ckpt)
     model._load_weights(str(ckpt))
     assert torch.allclose(model.backend.encoder.weight, before)  # encoder unchanged
+
+
+def test_hubert_and_wavlm_share_the_encoder_base():
+    from evaluator.models.a2e._hf_ssl import HFSpeechEncoderEmbedding
+    from evaluator.models.a2e.hubert import HuBERTAudioModel
+    from evaluator.models.a2e.wavlm import WavLMAudioModel
+    assert issubclass(HuBERTAudioModel, HFSpeechEncoderEmbedding)
+    assert issubclass(WavLMAudioModel, HFSpeechEncoderEmbedding)
+    assert HuBERTAudioModel.HF_MODEL_CLASS == "HubertModel"
+    assert WavLMAudioModel.HF_MODEL_CLASS == "WavLMModel"
+    assert HuBERTAudioModel.Params.SIZES["base"] == "facebook/hubert-base-ls960"
+    assert WavLMAudioModel.Params.SIZES["base-plus"] == "microsoft/wavlm-base-plus"
+    assert HuBERTAudioModel.Params.CHOICES == {"pooling": ["mean", "cls"]}
+    assert WavLMAudioModel.Params.CHOICES == {"pooling": ["mean", "cls"]}

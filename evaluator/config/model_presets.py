@@ -1,15 +1,7 @@
 """File-based evaluation presets.
 
-Presets are the YAML configs in the repo ``configs/`` directory: any ``*.yaml`` there
-that parses as a valid :class:`EvaluationConfig` is offered as a preset, named by its
-file stem. The hardcoded preset dicts were removed so the runnable example configs and
-the preset list are a single source of truth.
-
-The configs directory is resolved lazily, first hit wins: the
-``EVALUATOR_CONFIGS_DIR`` environment variable → ``configs/`` at the repo root (source
-checkout / editable install) → ``configs/`` under the current working directory (a
-pip-installed package run from the repo — the install path puts this file under
-site-packages, where no repo-relative ``configs/`` exists).
+Presets are the YAML configs in the repo ``configs/`` directory; any ``*.yaml`` that
+parses as a valid :class:`EvaluationConfig` is offered as a preset, named by its file stem.
 """
 
 import os
@@ -17,10 +9,13 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import yaml
+from .base import get_available_gpu_count
+from .graph_config import build_evaluation_config_kwargs
 
 
 def _configs_dir() -> Path:
-    """Resolve the presets directory (lazy — env var honored per call, see module doc)."""
+    """Resolve the presets directory (lazy — env var honored per call): ``EVALUATOR_CONFIGS_DIR``
+    → ``configs/`` at the repo root → ``configs/`` under the cwd (first hit wins)."""
     env = os.environ.get("EVALUATOR_CONFIGS_DIR")
     if env:
         return Path(env)
@@ -39,13 +34,10 @@ def _preset_paths() -> Dict[str, Path]:
 
 
 def _is_valid_preset(path: Path) -> bool:
-    """A preset is any config that builds an EvaluationConfig (structure only).
-
-    ``validate=False`` skips the run-time checks (file existence, registries) so a
-    config still counts as a preset even when its dataset/corpus files aren't present;
-    grid/ablation YAMLs that aren't a single EvaluationConfig fail here and are excluded.
-    """
-    from .evaluation import EvaluationConfig
+    """A preset is any config that builds an EvaluationConfig (structure only —
+    ``validate=False`` skips run-time checks like file existence); grid/ablation YAMLs
+    that aren't a single EvaluationConfig fail here and are excluded."""
+    from .evaluation import EvaluationConfig  # cycle: evaluation builds via loading
 
     try:
         EvaluationConfig.from_yaml(str(path), validate=False)
@@ -56,7 +48,6 @@ def _is_valid_preset(path: Path) -> bool:
 
 def _apply_auto_devices(preset: Dict[str, Any]) -> None:
     """Override the preset's model device fields based on available GPUs."""
-    from . import get_available_gpu_count
 
     model = preset.setdefault("model", {})
     gpu_count = get_available_gpu_count()
@@ -90,9 +81,8 @@ def get_preset(name: str, auto_devices: bool = True) -> Dict[str, Any]:
     """Load preset ``name`` (``configs/<name>.yaml``) as a config dict.
 
     Args:
-        name: Preset name — the YAML file stem under ``configs/``.
-        auto_devices: If True (default), override model device fields for the
-            available hardware. Set False to keep the file's device assignments.
+        auto_devices: True (default) overrides model device fields for the available
+            hardware; False keeps the file's device assignments.
 
     Returns:
         The parsed config dict (a fresh object each call).
@@ -105,7 +95,6 @@ def get_preset(name: str, auto_devices: bool = True) -> Dict[str, Any]:
         raise ValueError(
             f"Unknown preset '{name}'. Available presets: {', '.join(list_presets())}"
         )
-    from .graph_config import build_evaluation_config_kwargs
 
     with open(path, "r", encoding="utf-8") as handle:
         raw: Dict[str, Any] = yaml.safe_load(handle) or {}

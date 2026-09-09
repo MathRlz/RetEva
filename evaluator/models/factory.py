@@ -12,9 +12,9 @@ def _quantization_into_params(
     model_type: str, model_class, quantization: Optional[str], extra_params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """Fold a ``quantization`` strategy into a model's constructor params when the model
-    supports it — its ``__init__`` takes a ``quantization`` arg or ``**kwargs`` (Roadmap §8
-    1a). Opt-in, like model params: a model that doesn't support it gets a clear warning and
-    loads full precision instead of a cryptic constructor error. No-op when unset."""
+    supports it — its ``__init__`` takes a ``quantization`` arg or ``**kwargs``. Opt-in,
+    like model params: a model that doesn't support it gets a clear warning and loads full
+    precision instead of a cryptic constructor error. No-op when unset."""
     if not quantization:
         return extra_params
     try:
@@ -78,20 +78,8 @@ def create_asr_model(model_type: str, model_name: Optional[str] = None,
                      adapter_path: Optional[str] = None, device: str = "cuda:0",
                      quantization: Optional[str] = None,
                      **extra_params):
-    """
-    Factory function to create ASR models.
-
-    Args:
-        model_type: Type of ASR model (e.g., 'whisper', 'wav2vec2')
-        model_name: Optional model name/path (wins over size)
-        size: Optional size shorthand (e.g., 'large-v3') resolved via Params.SIZES
-        adapter_path: Optional path to adapter weights
-        device: Device to load model on
-        **extra_params: Forwarded to model constructor (e.g., compute_type)
-
-    Returns:
-        ASRModel instance
-    """
+    """Factory function to create ASR models. ``model_name`` wins over ``size``
+    (resolved via ``Params.SIZES``); ``**extra_params`` is forwarded to the constructor."""
     model_class = asr_registry.get(model_type)
     name = asr_registry.resolve_model_name(model_type, size=size, model_name=model_name)
     extra_params = _quantization_into_params(model_type, model_class, quantization, extra_params)
@@ -104,19 +92,8 @@ def create_text_embedding_model(model_type: str, model_name: Optional[str] = Non
                                 size: Optional[str] = None,
                                 device: str = "cuda:0",
                                 quantization: Optional[str] = None, **extra_params):
-    """
-    Factory function to create text embedding models.
-
-    Args:
-        model_type: Type of text embedding model (e.g., 'labse', 'jina_v4', 'clip')
-        model_name: Optional model name/path (wins over size)
-        size: Optional size shorthand resolved via Params.SIZES
-        device: Device to load model on
-        **extra_params: Forwarded to model constructor
-
-    Returns:
-        TextEmbeddingModel instance or None for special cases
-    """
+    """Factory function to create text embedding models. ``model_name`` wins over ``size``
+    (via ``Params.SIZES``); returns None for the special-cased 'clap_text' type."""
     if model_type == "clap_text":
         return None
 
@@ -235,26 +212,13 @@ def create_audio_embedding_model(model_type: str, model_name: Optional[str] = No
                                  emb_dim: int = 2048,
                                  device: str = "cuda:0",
                                  quantization: Optional[str] = None, **extra_params):
-    """
-    Factory function to create audio embedding models.
-
-    Args:
-        model_type: Type of audio embedding model (e.g., 'attention_pool', 'clap_style')
-        model_name: Optional audio encoder name/path (wins over size)
-        size: Optional size shorthand resolved via Params.SIZES
-        model_path: Path to pre-trained model weights
-        emb_dim: Embedding dimension
-        device: Device to load model on
-        **extra_params: Forwarded to builder
-
-    Returns:
-        AudioEmbeddingModel instance
-    """
+    """Factory function to create audio embedding models; dispatches to a per-type builder
+    registered via ``register_audio_embedding_builder`` when one exists, else falls back
+    to a generic constructor call."""
     model_class = audio_embedding_registry.get(model_type)
     extra_params = _quantization_into_params(model_type, model_class, quantization, extra_params)
     builder = _AUDIO_EMBEDDING_BUILDERS.get(model_type)
     if builder is None:
-        # Generic fallback: resolve name, construct with model_name kwarg
         name = audio_embedding_registry.resolve_model_name(model_type, size=size, model_name=model_name)
         _check_extra_params(model_type, model_class, extra_params)
         return model_class(model_name=name, **extra_params).to(torch.device(device))
@@ -277,19 +241,8 @@ def create_reranker(
     batch_size: int = 32,
     max_length: int = 512,
 ):
-    """
-    Factory function to create reranker models.
-
-    Args:
-        model_type: Type of reranker model (e.g., 'cross_encoder')
-        model_name: Optional model name/path (uses registry default if None)
-        device: Device to load model on (auto-detect if None)
-        batch_size: Batch size for scoring
-        max_length: Maximum sequence length for tokenization
-
-    Returns:
-        Reranker instance
-    """
+    """Factory function to create reranker models; uses the registry default name
+    when model_name is None."""
     model_class = reranker_registry.get(model_type)
     name = model_name or reranker_registry.get_default_name(model_type)
 

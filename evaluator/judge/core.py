@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..llm_client.client import LLMClient
+from ..llm_client.parallel import map_completions
 
 logger = logging.getLogger("evaluator.judge")
 
@@ -180,7 +181,6 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
     """Run the multi-aspect LLM judge over the (first ``max_cases``) traces. One failed trace is
     dropped-and-logged so the stage never aborts. Returns the aggregate report incl. per-case
     ``details`` ([{query_id, judge:{overall, aspect_scores, verdict, reason}}])."""
-    from ..llm_client.parallel import map_completions
 
     max_cases = getattr(judge_config, "max_cases", 0)
     if max_cases < 0:
@@ -196,7 +196,7 @@ def run_llm_judging(traces: List[Dict[str, Any]], judge_config) -> Dict[str, Any
     def _one(trace: Dict[str, Any]):
         try:
             verdict = judge_trace(trace, client=client, config=judge_config)
-        except Exception as exc:  # noqa: BLE001 — drop-and-log one bad case, keep the rest (M3)
+        except Exception as exc:  # noqa: BLE001 — drop-and-log one bad case, keep the rest
             logger.warning(
                 "judge failed for query_id=%s (%s: %s); skipping this case",
                 trace.get("query_id"), type(exc).__name__, exc,

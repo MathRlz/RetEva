@@ -1,4 +1,4 @@
-"""Roadmap §7 — observability: failure attribution, typed ProgressEvent, artifact dump."""
+"""Observability: failure attribution, typed ProgressEvent, artifact dump."""
 
 import json
 

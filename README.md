@@ -19,8 +19,6 @@ and registries are domain-general; end-to-end validation covers the spoken-clini
 | Document | What it covers |
 |---|---|
 | **[`evaluator-architecture.md`](evaluator-architecture.md)** | the full design reference (15 sections: principles, artifact algebra, metrics, statistical rigor, execution, config schema, authoring guide) |
-| **[`configs/campaign/RUNBOOK.md`](configs/campaign/RUNBOOK.md)** | how to run the thesis experiment campaign on a machine with the datasets/checkpoints |
-| **[`baselines/README.md`](baselines/README.md)** | the byte-parity gate and how to re-baseline |
 | **[`tests/README.md`](tests/README.md)** | what the test suite guards, and the rules for adding to it |
 
 ---
@@ -39,10 +37,15 @@ Python ≥ 3.10. Model weights download on first use (HuggingFace cache).
 ## Quickstart
 
 ```bash
-python3 -m pytest -q                                      # unit suite — no models needed
-evaluator graph --config configs/e2e_pubmed_qa_small.yaml  # print the DAG, load nothing
-evaluator run   --config configs/e2e_pubmed_qa_small.yaml  # real e2e (downloads Whisper + LaBSE)
+python3 -m pytest -q                                          # unit suite — no models needed
+evaluator graph --config tests/data/configs/e2e_mini.yaml     # print the DAG, load nothing
+evaluator run   --config tests/data/configs/e2e_mini.yaml     # real e2e (downloads whisper-base + LaBSE)
 ```
+
+The thesis configs under `configs/` read their dataset paths from an environment variable —
+`configs/pubmed_qa_rag_fulltext.yaml` wants `PUBMED_QA_FULLTEXT_DATASET` pointing at a directory
+holding `questions.json` + `corpus.json`. Export it before `graph`/`run` on one of those, or the
+load fails on the unresolved path.
 
 The report lands in the config's `experiment.output_dir` as JSON, beside a
 `…config_resolved.yaml` sidecar (the exact DAG that ran) and a `leaderboard.sqlite`.
@@ -60,10 +63,6 @@ The report lands in the config's `experiment.output_dir` as JSON, beside a
   drops or fans out items (augmentation variants, `multi_query`) never corrupts alignment
   downstream — consumers join by id, and variants roll up to their lineage parent before any
   statistic is computed.
-- **Branches + auto-CSE.** Declare `graph.branches` (ref / asr / corrected / per-corrector …);
-  the builder expands per-branch node copies and collapses identical subgraphs, so the shared
-  prefix runs **once** and divergence starts exactly at the first differing node. The terminal
-  `aggregate` node computes paired cross-branch deltas.
 - **Metrics are nodes, and the registry is the single scalar source.** A metric declares the
   artifacts it consumes and is auto-injected wherever they exist; the flat headline keys
   (`WER`, `MRR`, `Recall@5`, …) are derived aliases of the keyed report.
@@ -76,8 +75,8 @@ Full detail: architecture doc §1–§9.
 experiment: {name: demo, output_dir: evaluation_results/demo}
 dataset:
   id: pubmed_qa
-  questions: examples/data/pubmed_qa_small/questions.json
-  corpus: examples/data/pubmed_qa_small/corpus.json
+  questions: tests/data/pubmed_qa_mini/questions.json
+  corpus: tests/data/pubmed_qa_mini/corpus.json
   trace_limit: 200          # caps the dataset AND gates per-query traces (see the note below)
 graph:
   nodes: [dataset_source, tts, corpus_embedding, vector_db, asr, text_embedding,
@@ -147,8 +146,11 @@ axes:
     values: [whisper, wav2vec2]
 ```
 
-Then expand it against a base config (which must already have explicit `graph.edges` —
-`evaluator graph --config X --emit-edges --write` generates them if missing):
+Then expand it against a base config that already has explicit `graph.edges` — `evaluator
+graph --config X --emit-edges` needs a config that loads, and the loader rejects a
+`graph.nodes` list with no `edges:` at all, so add an empty `edges: []` first if the base
+config doesn't have one yet, or generate the block from scratch in Python via `emit_edges` +
+`write_edges_block` (`pipeline/graph/wiring.py`, `cli/main.py`):
 
 ```bash
 evaluator sweep --base configs/pubmed_qa_rag_fulltext.yaml --axes axes.yaml --dry-run
@@ -180,35 +182,26 @@ reuse, token budget, and cross-run quality-vs-cost. **Every chart carries a data
 (the accessible, copy-pasteable equivalent) and explains itself in a sentence when its inputs
 are missing. Plus a visual **graph builder** (`/ui/builder`) and **Config & Run** forms. The builder is
 registry-driven end to end — node ports, model choices and each model's parameter schema come
-from the registries, nothing about a model is hardcoded in the UI. Saved builder graphs persist
-via `/api/graphs`. See architecture doc §12/§12.1.
+from the registries, nothing about a model is hardcoded in the UI. Saved-graph persistence exists
+as an API (`/api/graphs` CRUD), but the builder page has no Save/Load control wired to it — it
+offers Import config / Export config instead, so a canvas round-trips through YAML.
+See architecture doc §12/§12.1.
 
 ## Running experiments
 
-Committed data (`examples/data/pubmed_qa_small`, 20 q) is for demos and the parity gate. For
-real campaigns use the 200-question set and the campaign configs:
-
-```bash
-python3 scripts/build_pubmed_campaign.py -n 200        # writes examples/data/pubmed_qa_campaign
-evaluator run --config configs/campaign/pubmed200_3branch.yaml
-```
+Committed data (`tests/data/pubmed_qa_mini`) is for demos and the unit suite.
+`scripts/build_pubmed_campaign.py` builds a larger PubMed-QA sample for real runs.
 
 > **`trace_limit` does two jobs, and both bite.** It caps the dataset *and* gates
-> per-query trace building. The gate configs' tiny `trace_limit: 5` (their baselines depend
-> on it) is for parity, never for results. But `0` is not the campaign answer either: it
-> means "whole dataset, **no traces**", which silently disables failure analysis, the
-> per-speaker breakdown, the per-query charts, and the judge. Set it to the dataset size
-> (200 for the campaign set).
-
-**[`configs/campaign/RUNBOOK.md`](configs/campaign/RUNBOOK.md)** is the entry point for the full
-campaign: the three arms (branch comparison, APM/cross-modal embedding variants, LLM arms), the
-env vars each needs, and the post-run artifact commands.
+> per-query trace building. `0` means "whole dataset, **no traces**", which silently disables
+> failure analysis, the per-speaker breakdown, the per-query charts, and the judge — set it to
+> the dataset size when you want those.
 
 LLM arms (judge, answer generation, the `llm` corrector) need a local endpoint:
 
 ```bash
 ollama serve & ; ollama pull mistral:7b-instruct
-evaluator run --config configs/campaign/pubmed200_rag_answer.yaml
+evaluator run --config <your-config>.yaml
 ```
 
 ## What a run produces
@@ -233,7 +226,7 @@ Cross-branch deltas carry `mean_delta`, honest paired denominators (`n_paired` /
 ## Thesis / paper artifacts
 
 ```bash
-R=evaluation_results/campaign/results_pubmed200_3branch_*.json
+R=evaluation_results/<run>/results_*.json
 evaluator branch-report "$R" --out-dir figures/ --plot-format pdf   # LaTeX table + vector delta plot
 evaluator export "$R" -f provenance    -o figures/provenance.tex    # reproducibility table
 evaluator export "$R" -f metrics-table -o figures/metrics.csv       # tidy branch×metric rows
@@ -246,7 +239,7 @@ From Python / notebooks:
 
 ```python
 from evaluator import evaluate_from_config
-results = evaluate_from_config("configs/campaign/pubmed200_3branch.yaml")
+results = evaluate_from_config("configs/pubmed_qa_rag_fulltext.yaml")
 results.get_metric("MRR")     # flat headline scalars
 results.metrics["report"]     # branches, deltas, provenance
 results.to_dataframe()        # tidy (branch, metric, mean, ci_lower, ci_upper, n)
@@ -254,26 +247,19 @@ results.to_dataframe()        # tidy (branch, metric, mean, ci_lower, ci_upper, 
 
 ## Verification
 
-Two independent gates, because they catch different things:
-
 ```bash
-python3 -m pytest -q                                                     # unit suite, model-free
-python3 m1c_check.py configs/e2e_pubmed_qa_small.yaml   baselines/m1c_baseline_small.json
-python3 m1c_check.py configs/e2e_pubmed_qa_3branch.yaml baselines/m1c_baseline_3branch.json
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 python3 -m pytest -q   # unit suite, model-free — the offline flags keep it from reaching HuggingFace
 ```
 
 - **Unit suite** — fast and model-free (heavy models are mocked). Includes the golden-graph
   harness that freezes every repo config's built graph, an IR cross-check against `pytrec_eval`
-  to 1e-9 per query, and the expressiveness suite proving every documented experiment shape is
-  authorable.
-- **Parity gate** — runs real models and diffs the report against a committed baseline. A
-  behavior-preserving change must print `PARITY OK` on both configs. The unit suite cannot see
-  report-level drift; this is what catches it.
+  to 1e-9 per query, the expressiveness suite proving every documented experiment shape is
+  authorable, and `test_import_layering.py`, which pins the package import order.
 
 Contributing rules that matter: a **new config** needs `python3 scripts/regen_graph_golden.py`
 and the golden diff must be **strictly additive** (a changed existing entry means the refactor
-moved a graph); anything touching **handlers, metrics, wiring, or config resolution** needs the
-parity gate before commit.
+moved a graph); anything touching **handlers, metrics, wiring, or config resolution** needs a
+green unit suite before commit.
 
 ## Extending
 
@@ -293,7 +279,7 @@ Worked examples: architecture doc §15.
 
 | Path | Contents |
 |---|---|
-| `evaluator/pipeline/graph/` | node registry, operator catalogue, wiring, CSE, templates, DOT export |
+| `evaluator/pipeline/` | node registry, operator catalogue, wiring, CSE, DOT export; corpus index, model provider |
 | `evaluator/evaluation/` | executor, run state + artifact bus, stage handlers, metric registry, aggregation |
 | `evaluator/models/` | five model registries + implementations (asr, t2e, a2e, tts, retrieval, llm) |
 | `evaluator/config/` | the dataclass config tree + node-centric→internal translation |
@@ -302,7 +288,6 @@ Worked examples: architecture doc §15.
 | `evaluator/analysis/` | significance, Pareto, exports, error/branch reports |
 | `evaluator/judge/`, `llm_client/`, `tracking/` | LLM-as-judge trace scoring; shared OpenAI-compatible LLM client + cost accounting; MLflow / no-op trackers |
 | `evaluator/benchmarks/`, `core/` | hardware-fit model/retrieval benchmarking (off-DAG); shared core dataclasses |
-| `evaluator/services/`, `devices/`, `storage/` | execution core, GPU pool, cache + vector stores + leaderboard |
+| `evaluator/services/`, `devices/`, `storage/` | orchestrator, GPU pool, cache + vector stores + leaderboard |
 | `evaluator/webapi/` | FastAPI routers + server-rendered UI + visual builder |
-| `configs/`, `configs/campaign/` | experiment configs; campaign configs + runbook |
-| `baselines/`, `m1c_check.py` | parity baselines and the gate |
+| `configs/` | experiment configs |

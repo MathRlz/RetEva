@@ -1,7 +1,6 @@
 """Query-side stage handlers: correction, augmentation, LLM optimization.
 
-Each handler
-registers itself via ``@register_stage_handler`` at import time.
+Each handler registers itself via ``@register_stage_handler`` at import time.
 """
 
 from __future__ import annotations
@@ -24,6 +23,22 @@ from ...models.retrieval.query.optimization import (
     generate_multi_queries,
     combine_retrieval_results,
 )
+from ..provenance import item_seed, DEFAULT_SEED
+from .audio import _stage_augment_audio
+from ._dispatch import dispatch_operator
+from ...models.retrieval.query.correction import (
+    correct_one_text_status,
+    resolve_correction_client,
+    correction_diff,
+)
+from ..executor.cpu_parallel import run_per_item
+from ..executor.engine import _STAGE_TIMES_LOCK
+from ...pipeline.text_augmentation import TextAugmentConfig, TextAugmenter
+from ..item_set import ItemSet
+from ...config.query_optimization import QueryOptimizationConfig
+from ._common import _publish_retrieved
+from ...models.retrieval.query import optimization
+from ...llm_client.parallel import map_completions
 
 logger = get_logger(__name__)
 
@@ -31,28 +46,21 @@ logger = get_logger(__name__)
 def _augment_one_text(id_text, *, augmenter, base_seed, node_id):
     """One ``(id, text)`` → its deterministically-perturbed text. Top-level + picklable for the
     process backend."""
-    from ..provenance import item_seed
 
     qid, text = id_text
     return augmenter.augment(text, seed=item_seed(base_seed, qid, node_id, 0))
 
 
 def _node_correction_config(s: "RunState") -> Any:
-    """The correction config for the current node — resolved before execution:
-    the GLOBAL config with this node's params overlaid, so a branch that overrides only
-    e.g. `method` keeps the global LLM backend. Every QueryCorrectionConfig field is
-    overridable by construction (the allowlist is the dataclass), and the operator's
-    discriminator fields ({op: correct, axis: query}) never overlay."""
+    """The correction config for the current node — the GLOBAL config with this node's
+    params overlaid, so a branch that overrides only e.g. `method` keeps the global LLM
+    backend."""
     return s.resolved_config(default=s.query_correction_config)
 
 
 @register_stage_handler("transform", time_key="query_opt_s")
 def _stage_transform(s: "RunState") -> None:
-    """The ``transform`` operator (type-preserving X→X): dispatch by op to query
-    correction / optimization / refine / text-augment / audio-augment. Bodies unchanged;
-    augment_audio lives in the audio handlers."""
-    from .audio import _stage_augment_audio
-    from ._dispatch import dispatch_operator
+    """The ``transform`` operator (type-preserving X→X): dispatches by op to the typed handler."""
 
     return dispatch_operator("transform", {
         "query_correction": _stage_query_correction,
@@ -64,26 +72,17 @@ def _stage_transform(s: "RunState") -> None:
 
 
 def _stage_query_correction(s: "RunState") -> None:
-    """Post-ASR query correction node (domain repair). Does NOT mutate ``query_text``:
-    it publishes the corrected text under the distinct ``corrected_query_text`` artifact
-    (plus a per-query ``correction_diff``), and downstream consumers (query optimization /
-    text embedding) pick it up via QUERY_TEXT_CHAIN.
-
-    Per-branch divergence (R2): a node's ``params`` build a transient ``QueryCorrectionConfig``
-    so correction can be enabled on *one* branch only (the `corr` branch) while others no-op.
-    """
+    """Post-ASR query correction node (domain repair). Does NOT mutate ``query_text``: it
+    publishes the corrected text under ``corrected_query_text`` (plus a per-query
+    ``correction_diff``), read downstream via QUERY_TEXT_CHAIN. Per-branch divergence: a
+    node's ``params`` build a transient ``QueryCorrectionConfig``, so correction can be
+    enabled on one branch only."""
     cfg = _node_correction_config(s)
     # Stash for the (separate) metrics node's `corrected_metrics` opt-in check — see
     # `evaluation/handlers/metrics.py:_corrected_metrics_enabled`.
     s.query_correction_resolved_config = cfg
     if cfg is None or not getattr(cfg, "enabled", False):
         return
-    from ..query_correction import (
-        correct_one_text_status,
-        resolve_correction_client,
-        correction_diff,
-    )
-    from ..executor.cpu_parallel import run_per_item
 
     items = s.input_items("query_text")
     texts = list(items.values) if items is not None else list(s.input("query_text"))
@@ -96,8 +95,6 @@ def _stage_query_correction(s: "RunState") -> None:
     if fallbacks:
         # Surfaced in report.provenance.correction_fallbacks — a dead LLM endpoint must
         # not read as "correction ran and changed nothing" (mirrors optimization_fallbacks).
-        from ..executor.engine import _STAGE_TIMES_LOCK
-
         with _STAGE_TIMES_LOCK:
             s.correction_fallbacks += fallbacks
         logger.warning(
@@ -106,16 +103,15 @@ def _stage_query_correction(s: "RunState") -> None:
             fallbacks, len(results),
         )
     n_changed = sum(1 for a, b in zip(texts, corrected) if a != b)
-    # Publish the corrected text under a DISTINCT name (no query_text mutation); downstream
-    # reads it via QUERY_TEXT_CHAIN. Per-item identity rides the incoming ItemSet (M1d-2).
+    # Per-item identity rides the incoming ItemSet.
     ids = (
         [str(i) for i in items.ids]
         if items is not None
         else [str(i) for i in range(len(corrected))]
     )
     publish_keyed_or_plain(s, "corrected_query_text", corrected, ids)
-    # Correction-diff artifact (C1): what the corrector changed, per query — the evidence
-    # behind the asr-vs-asr+correction comparison.
+    # Correction-diff artifact: what the corrector changed, per query — evidence for the
+    # asr-vs-asr+correction comparison.
     publish_keyed_or_plain(s, "correction_diff", correction_diff(texts, corrected), ids)
     logger.info(
         "Query correction complete: %d/%d texts changed", n_changed, len(corrected)
@@ -123,14 +119,10 @@ def _stage_query_correction(s: "RunState") -> None:
 
 
 def _stage_augmenter(s: "RunState") -> None:
-    """Robustness perturbation node (C2): corrupt each query text deterministically (seeded per
-    item) — ASR-confusion homophones + dangerous dose/unit swaps — then republish ``query_text``
-    so downstream embeds the corrupted query. A branch-divergence source: one branch clean, one
-    augmented, and the cross-branch delta quantifies robustness. Params (per node/branch) drive
-    which perturbations apply."""
-    from ...pipeline.text_augmentation import TextAugmentConfig, TextAugmenter
-    from ..item_set import ItemSet
-    from ..provenance import DEFAULT_SEED
+    """Robustness perturbation node: corrupt each query text deterministically (seeded per
+    item) — ASR-confusion homophones + dangerous dose/unit swaps — then republish
+    ``query_text`` so downstream embeds the corrupted query. A branch-divergence source: one
+    branch clean, one augmented, and the cross-branch delta quantifies robustness."""
 
     params = s.node_params
     node_id = getattr(s.current_node, "id", "augmenter")
@@ -145,14 +137,12 @@ def _stage_augmenter(s: "RunState") -> None:
     base_seed = int(seed) if seed is not None else DEFAULT_SEED
 
     if params.get("axis") == "docs":
-        # Corpus axis (§4.1 T2): perturb each DOCUMENT's text, republish `corpus` —
-        # downstream corpus_embedding reads the newest producer. Same per-item
-        # determinism, seeded by doc_id.
+        # Corpus axis: perturb each DOCUMENT's text, republish `corpus` — downstream
+        # corpus_embedding reads the newest producer (same per-item determinism, seeded by doc_id).
         corpus_items = s.keyed_items("corpus")  # corpus is always keyed
         if not isinstance(corpus_items, ItemSet):
             logger.warning("augmenter '%s' (docs axis): no corpus on the bus", node_id)
             return
-        from ..executor.cpu_parallel import run_per_item
 
         perturbed = [
             dict(d) if isinstance(d, dict) else {"text": str(d)}
@@ -182,8 +172,6 @@ def _stage_augmenter(s: "RunState") -> None:
         texts = list(s.input("query_text"))
         ids = [str(i) for i in range(len(texts))]
 
-    from ..executor.cpu_parallel import run_per_item
-
     augmented = run_per_item(
         s, _augment_one_text, list(zip(ids, texts)),
         augmenter=augmenter, base_seed=base_seed, node_id=node_id,
@@ -200,12 +188,10 @@ def _stage_augmenter(s: "RunState") -> None:
 
 
 def _optimize_one_text(q, *, fn, cfg):
-    """Per-item query optimization (rewrite / HyDE) — the 4b ``parallel_map`` unit. A bad query
-    falls back to its original (one failure never kills the map). Returns ``(text, ok)`` so the
-    caller can count fallbacks — an unreachable LLM would otherwise yield a complete,
-    plausible-looking report in which optimization silently did nothing. Top-level + picklable
-    so the ``process`` backend can run it (which is also why the count is returned, not
-    accumulated in shared state)."""
+    """Per-item query optimization (rewrite / HyDE) — the ``parallel_map`` unit. A bad query
+    falls back to its original (one failure never kills the map); returns ``(text, ok)`` so
+    the caller can count fallbacks instead of accumulating in shared state (this must stay
+    picklable for the ``process`` backend)."""
     try:
         return fn(q, cfg), True
     except Exception as exc:  # noqa: BLE001 — a bad query falls back to the original
@@ -229,10 +215,7 @@ def _stage_query_optimization(s: "RunState") -> None:
         else [str(i) for i in range(len(texts))]
     )
     s.cb("step_1_5_query_opt", 0, s.total, f"Step 1.5: Query optimization ({cfg.method})")
-    # rewrite/HyDE are I/O-bound LLM calls (thread is the right backend); the per-item unit falls
-    # back to the original query on failure.
-    from ..executor.cpu_parallel import run_per_item
-
+    # rewrite/HyDE are I/O-bound LLM calls, so thread is the right run_per_item backend.
     results = run_per_item(s, _optimize_one_text, texts, fn=fn, cfg=cfg)
     optimized = [text for text, _ok in results]
     fallbacks = sum(1 for _text, ok in results if not ok)
@@ -241,8 +224,6 @@ def _stage_query_optimization(s: "RunState") -> None:
         # Surfaced in report.provenance.optimization_fallbacks — a run whose LLM endpoint was
         # unreachable must not read as "optimization ran and changed nothing".
         # _SHARED field: lock the read-modify-write like engine.py does for stage_times.
-        from ..executor.engine import _STAGE_TIMES_LOCK
-
         with _STAGE_TIMES_LOCK:
             s.optimization_fallbacks += fallbacks
         logger.warning(
@@ -260,13 +241,11 @@ def _stage_multi_query_retrieval(s: "RunState") -> None:
     count is runtime-variable per query, so it is an explicit composite node rather than
     static DAG instances — but it is honestly a ``retrieved`` producer (no bypass flag)."""
     from dataclasses import replace
-    from ...config.query_optimization import QueryOptimizationConfig
-    from .retrieval import _publish_retrieved
 
     method = s.node_params.get("method", "multi_query")
     # Resolved per-node (global ⊕ this node's own params — llm backend/model/combine_strategy/…
-    # can now diverge per multi_query_retrieval node, not just method/k); method always wins as
-    # this node kind's own default/override, applied after resolution.
+    # can diverge per node); method always wins as this node kind's own override, applied
+    # after resolution.
     base = _node_query_opt_config(s) or QueryOptimizationConfig(enabled=True, method=method)
     cfg = replace(base, enabled=True, method=method)
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
@@ -308,7 +287,7 @@ def _stage_multi_query_retrieval(s: "RunState") -> None:
 def _node_query_opt_config(s: "RunState") -> Any:
     """The optimization config for the current node — resolved before execution:
     the global config with this node's params overlaid (per-branch divergence — branch A
-    rewrite vs branch B HyDE). Was a hand-rolled overlay with its own key list + casts."""
+    rewrite vs branch B HyDE)."""
     return s.resolved_config(default=s.query_opt_config)
 
 
@@ -331,9 +310,6 @@ def _stage_query_refine(s: "RunState") -> None:
     query + the retrieved docs and emit ``refined_query_text`` (top of the query-text chain),
     so a later hop's text_embedding embeds the improved query. Pure text transform — does NOT
     retrieve."""
-    from ...models.retrieval.query.optimization import refine_query
-    from ...config.query_optimization import QueryOptimizationConfig
-    from ...llm_client.parallel import map_completions
 
     params = s.node_params
     method = params.get("method", "rewrite_with_context")
@@ -363,7 +339,9 @@ def _stage_query_refine(s: "RunState") -> None:
     def _one(idx: int) -> str:
         results = retrieved[idx] if idx < len(retrieved) else []
         doc_texts = _retrieved_doc_texts(results, top_k)
-        return refine_query(q_list[idx], doc_texts, cfg, method=method, context_top_k=top_k)
+        return optimization.refine_query(
+            q_list[idx], doc_texts, cfg, method=method, context_top_k=top_k
+        )
 
     # One LLM call per query, so it gets the same concurrency treatment as generation and
     # judging — measured at 78s for 8 queries serially, the most expensive node in the run.

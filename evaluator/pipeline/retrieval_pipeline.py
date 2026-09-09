@@ -1,11 +1,7 @@
 """Retrieval orchestration: vector store + strategy modules glued into one pipeline.
 
-Strategy logic lives in ``models/retrieval/`` (``sparse`` BM25, ``refine``
-rerank/MMR/threshold, ``fusion_registry`` hybrid fusion, ``scoring`` shared
-primitives); this module only sequences index build → candidate fetch →
-refinement, mapping the DAG's ``retrieval``/``rerank`` nodes onto
-:meth:`RetrievalPipeline.retrieve_candidates` / :meth:`refine_candidates`.
-"""
+Strategy logic lives in ``models/retrieval/``; this module only sequences index build,
+candidate fetch, and refinement."""
 
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -21,6 +17,7 @@ from ..models.retrieval.fusion_registry import fuse_hybrid_results
 from ..models.retrieval.rag.strategies import DistanceMetric
 from ..models.retrieval.refine import apply_mmr, apply_threshold, rerank_results
 from ..models.retrieval.sparse import SparseBM25Index
+from ..models.embedding_space import assert_spaces_compatible
 
 if TYPE_CHECKING:
     from ..models.retrieval.rag.reranker import CrossEncoderReranker
@@ -29,23 +26,8 @@ logger = get_logger(__name__)
 
 
 class RetrievalPipeline:
-    """
-    Pipeline for vector database operations and retrieval.
-
-    Handles building vector DB from embeddings and performing searches.
-    Supports dense, sparse (BM25), and hybrid retrieval modes.
-
-    Hybrid mode supports two fusion strategies:
-    - "weighted": Linear combination with min-max normalization
-    - "rrf": Reciprocal Rank Fusion
-
-    Supports optional cross-encoder reranking after initial retrieval.
-
-    Advanced features:
-    - MMR (Maximal Marginal Relevance) for diverse results
-    - Similarity threshold filtering for quality control
-    - Configurable distance metrics (cosine, euclidean, dot_product)
-    """
+    """Pipeline for vector database operations and retrieval: dense, sparse (BM25), and hybrid
+    modes, with optional cross-encoder reranking, MMR diversity, and threshold filtering."""
 
     def __init__(
         self,
@@ -54,12 +36,8 @@ class RetrievalPipeline:
         strategy_config: Optional[RetrievalStrategyConfig] = None,
         reranker: Optional["CrossEncoderReranker"] = None,
     ) -> None:
-        """Build the pipeline from a :class:`RetrievalStrategyConfig`.
-
-        ``strategy_config`` is the sole knob source (D2/F7: the old per-knob legacy kwargs
-        were a dead path — every caller passes a config). ``None`` falls back to an
-        all-defaults config (dense, no rerank, cosine), identical to the old kwarg defaults.
-        """
+        """Build the pipeline from a :class:`RetrievalStrategyConfig` (the sole knob source);
+        ``None`` falls back to an all-defaults config (dense, no rerank, cosine)."""
         self.vector_store = vector_store
         self.cache = cache_manager
         self.reranker = reranker
@@ -74,7 +52,7 @@ class RetrievalPipeline:
         # Store embeddings for MMR (populated during build_index)
         self._index_embeddings: Optional[np.ndarray] = None
         self._index_payloads: Optional[List[Any]] = None
-        # Embedding space the index holds (2b). Tagged at index build from the corpus vectors'
+        # Embedding space the index holds. Tagged at index build from the corpus vectors'
         # resolved space; None = unknown (the runtime space guard then no-ops).
         self.index_space_id: Optional[str] = None
 
@@ -117,13 +95,6 @@ class RetrievalPipeline:
     def build_index(
         self, embeddings: np.ndarray, metadata: Optional[List[Any]] = None
     ) -> None:
-        """
-        Build the retrieval index from embeddings.
-
-        Args:
-            embeddings: Array of embedding vectors
-            metadata: Optional list of metadata/payloads for each embedding
-        """
         with TimingContext(
             f"Building vector index ({len(embeddings)} vectors)", logger
         ):
@@ -136,16 +107,13 @@ class RetrievalPipeline:
             if self.sparse_index is not None:
                 self.sparse_index.build(payloads)
 
-            # Store embeddings and payloads for MMR
         if self.strategy_config.post_processing.use_mmr:
             self._index_embeddings = np.asarray(embeddings, dtype=np.float32)
             self._index_payloads = payloads
 
     def assert_query_space(self, query_space: Optional[str]) -> None:
-        """Runtime space guard (2b): raise if a query embedded in ``query_space`` would be
-        dotted against an index that holds an incompatible space. No-op when either space is
-        unknown — a defense-in-depth backstop behind the pre-flight validators."""
-        from ..models.embedding_space import assert_spaces_compatible
+        """Runtime space guard: raise if ``query_space`` is incompatible with the index's space.
+        No-op when either is unknown — a defense-in-depth backstop behind pre-flight validators."""
 
         assert_spaces_compatible(
             self.index_space_id, query_space, where="retrieval"
@@ -154,17 +122,9 @@ class RetrievalPipeline:
     def search(
         self, query_embedding: np.ndarray, k: int = 10
     ) -> List[Tuple[Any, float]]:
-        """
-        Search for similar items using a single query embedding.
+        """Search for similar items using a single query embedding.
 
         Only supports dense mode. For sparse/hybrid, use search_batch.
-
-        Args:
-            query_embedding: Query embedding vector
-            k: Number of results to return
-
-        Returns:
-            List of (payload, score) tuples
         """
         if self.strategy_config.core.mode != "dense":
             raise ValueError(
@@ -195,14 +155,9 @@ class RetrievalPipeline:
         results: List[Tuple[Any, float]],
         k: int,
     ) -> List[Tuple[Any, float]]:
-        """Apply similarity threshold then MMR diversity to results.
-
-        Order: threshold FIRST, then MMR (M6). ``min_similarity_threshold`` means "drop
-        low-confidence *retrievals*"; MMR replaces the score with ``λ·rel − (1−λ)·div``,
-        which isn't comparable to a similarity cutoff — so thresholding must run on the
-        original retrieval scores, before MMR rewrites them. Threshold trims the candidate
-        pool MMR then diversifies over.
-        """
+        """Apply similarity threshold then MMR diversity: threshold must run on the original
+        retrieval scores first, since MMR replaces the score with ``λ·rel − (1−λ)·div``, not
+        comparable to a similarity cutoff."""
         post = self.strategy_config.post_processing
         # Confidence filter on the original retrieval scores (no-op when threshold unset).
         results = apply_threshold(results, post=post)
@@ -254,12 +209,10 @@ class RetrievalPipeline:
         query_texts: Optional[List[str]] = None,
         mode: Optional[str] = None,
     ) -> List[List[Tuple[Any, float]]]:
-        """Stage 1 of retrieval: raw dense/sparse/hybrid candidates (pre-refinement).
-
-        Fetches ``fetch_k`` candidates (enough for downstream rerank/MMR); the dense
-        fast path returns top-k directly when no refinement applies. ``mode`` overrides
-        the configured retrieval mode (so the hybrid DAG runs the dense + sparse arms as
-        separate retrieval nodes). Pair with :meth:`refine_candidates`."""
+        """Stage 1 of retrieval: raw dense/sparse/hybrid candidates (pre-refinement); the dense
+        fast path returns top-k directly when no refinement applies. ``mode`` overrides the
+        configured mode (so the hybrid DAG runs dense+sparse as separate nodes). Pair with
+        :meth:`refine_candidates`."""
         memory_manager = get_memory_manager()
         candidates: List[List[Tuple[Any, float]]] = []
         fetch_k = self._fetch_k(k)
@@ -350,7 +303,7 @@ class RetrievalPipeline:
                     refined = self._rerank(query_texts[idx], refined, fetch_k)
             else:
                 # sparse/hybrid call _rerank unconditionally (no-op truncate when no
-                # reranker) with the historical top_k argument.
+                # reranker) with the top_k argument.
                 top = fetch_k if self._needs_advanced() else k
                 refined = self._rerank(query_texts[idx], cand, top)
             results.append(
@@ -358,11 +311,8 @@ class RetrievalPipeline:
             )
         return results
 
-    # ── refine sub-steps, exposed as the rerank / mmr / threshold nodes ──────────
-    # `refine_candidates` is the bundled (rerank → MMR/[:k] → threshold) path; these are
-    # the same operations as independent steps so the DAG can compose them. ``k`` is the
-    # single consistent target (the retrieve node's k); rerank keeps the larger fetch_k pool
-    # only when MMR follows (MMR re-selects k diverse from it).
+    # `refine_candidates` bundled (rerank -> MMR/[:k] -> threshold) as independent steps so
+    # the DAG can compose them; rerank keeps the larger fetch_k pool only when MMR follows.
     def rerank_only(
         self, candidates, query_texts, k: int
     ) -> List[List[Tuple[Any, float]]]:
@@ -377,7 +327,6 @@ class RetrievalPipeline:
         self, candidates, query_embeddings, k: int
     ) -> List[List[Tuple[Any, float]]]:
         """MMR-select ``k`` diverse results per query (the MMR stage alone)."""
-        from ..models.retrieval.refine import apply_mmr
 
         post = self.strategy_config.post_processing
         return [
@@ -395,7 +344,6 @@ class RetrievalPipeline:
 
     def threshold_only(self, candidates, k: int) -> List[List[Tuple[Any, float]]]:
         """Truncate to ``k`` then drop below the similarity threshold per query."""
-        from ..models.retrieval.refine import apply_threshold
 
         post = self.strategy_config.post_processing
         return [apply_threshold(cand[:k], post=post) for cand in candidates]
@@ -406,20 +354,13 @@ class RetrievalPipeline:
         k: int = 10,
         query_texts: Optional[List[str]] = None,
     ) -> List[List[Tuple[Any, float]]]:
-        """Search with multiple query embeddings → per-query (payload, score) lists.
-
-        Composition of :meth:`retrieve_candidates` then :meth:`refine_candidates`
-        (the two halves the DAG runs as the ``retrieval`` and ``rerank`` nodes)."""
+        """Search with multiple query embeddings -> per-query (payload, score) lists;
+        composition of :meth:`retrieve_candidates` then :meth:`refine_candidates` (the two
+        halves the DAG runs as the ``retrieval`` and ``rerank`` nodes)."""
         candidates = self.retrieve_candidates(query_embeddings, k, query_texts)
         return self.refine_candidates(candidates, query_embeddings, k, query_texts)
 
     def get_cache_stats(self) -> Dict[str, Any]:
-        """
-        Get index/cache statistics.
-
-        Returns:
-            Dictionary with index statistics including vector count
-        """
         return {
             "vector_count": (
                 len(self.vector_store.embeddings)

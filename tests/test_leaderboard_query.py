@@ -1,4 +1,4 @@
-"""C3/F25: leaderboard pre_limit is a bound `?` parameter (not f-string-interpolated SQL).
+"""leaderboard pre_limit is a bound `?` parameter (not f-string-interpolated SQL).
 
 Functional guard: query_leaderboard still returns the right rows ordered by metric, the
 pre-limit binding executes, and a value-bearing filter survives the round-trip.

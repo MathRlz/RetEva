@@ -1,4 +1,4 @@
-"""A4 pins (CRITIQUE.md): asymmetric per-branch drops mark the paired delta drop-biased.
+"""Asymmetric per-branch drops mark the paired delta drop-biased.
 
 The paired delta is computed over the id intersection; items usually leave it because a
 branch dropped them, and hard items fail more (not-missing-at-random). Beyond

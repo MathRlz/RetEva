@@ -1,17 +1,16 @@
 """Vector-store registry — the OCP extension point for storage backends.
 
-Each backend registers a factory ``(vector_db_config, embedding_dim) -> VectorStore`` under its
-type name; :func:`create_vector_store` dispatches by ``vector_db_config.type``. This mirrors the
-model / node / handler / metric registries, so a plugin can add a store without editing the
-pipeline factory. Optional-dependency backends (chromadb, qdrant) register an import guard
-(package + install hint) that :func:`check_store_dependency` verifies at config-validation time,
-so a missing package fails fast with a hint instead of mid-run.
-
-The built-in stores are registered at import time below; the factories lazy-import their classes,
-so importing this module never force-loads faiss / chromadb / qdrant.
-"""
+Each backend registers a factory under its type name; optional backends (chromadb, qdrant)
+register an import guard so :func:`check_store_dependency` fails fast with an install hint
+instead of mid-run. Importing this module never force-loads faiss, chromadb, or qdrant."""
 
 from typing import Any, Callable, Dict, NamedTuple, Optional
+from .vector_store import (
+    FaissGpuVectorStore,
+    FaissMmapVectorStore,
+    FaissVectorStore,
+    InMemoryVectorStore,
+)
 
 
 class _StoreSpec(NamedTuple):
@@ -83,31 +82,23 @@ def create_vector_store(vector_db_config, embedding_dim: Optional[int] = None):
     return spec.factory(vector_db_config, embedding_dim)
 
 
-# ── Built-in store factories (lazy-import their classes) ──────────────────────────────
+# ── Built-in store factories ──────────────────────────────────────────────────────────
 
 
 def _make_inmemory(cfg, dim):
-    from .vector_store import InMemoryVectorStore
-
     return InMemoryVectorStore()
 
 
 def _make_faiss(cfg, dim):
-    from .vector_store import FaissVectorStore
-
     return FaissVectorStore(dim)
 
 
 def _make_faiss_mmap(cfg, dim):
-    # Off-RAM corpus/index (3b): mmap index + Parquet payloads.
-    from .vector_store import FaissMmapVectorStore
-
+    # Off-RAM corpus/index: mmap index + Parquet payloads.
     return FaissMmapVectorStore(dim)
 
 
 def _make_faiss_gpu(cfg, dim):
-    from .vector_store import FaissGpuVectorStore
-
     gpu = getattr(cfg, "gpu_id", 0)
     return FaissGpuVectorStore(dim, gpu_id=gpu if isinstance(gpu, int) else 0)
 

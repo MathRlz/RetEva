@@ -1,16 +1,13 @@
-"""Human-readable node labels for the DAG view (operator-abstraction Phase 1).
+"""Human-readable node labels for the DAG view.
 
 `display_label(stage, params)` turns a node's type + fields into the friendly name shown in
-the graph preview, the CLI ``graph`` print and the web builder — so the *vocabulary* can
-shrink to generic operators later while the *view* keeps the read-it-from-the-diagram
-legibility (evaluator-architecture.md §9). Today the node ``stage`` is still the legacy
-name; once nodes carry an operator ``stage`` + discriminator fields this resolves the label
-from those fields instead (the keying is intentionally params-aware already).
+the graph preview, CLI, and web builder, decoupling the label from the node vocabulary.
 """
 
 from __future__ import annotations
 
 from typing import Optional
+from .operators import node_kind
 
 # Legacy stage name → base label (only where prettifying the snake_case name reads poorly).
 _BASE_LABELS = {
@@ -63,7 +60,6 @@ def display_label(stage: str, params: Optional[dict] = None) -> str:
     resolved to its legacy kind (e.g. ``search{mode:hybrid}`` → ``retrieval``) so the labels
     are keyed on the concrete behavior, not the generic op name."""
     p = params or {}
-    from .operators import node_kind
 
     stage = node_kind(stage, p)  # operator → its legacy kind (identity for legacy names)
     base = _base_label(stage)

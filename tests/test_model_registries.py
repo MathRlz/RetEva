@@ -36,14 +36,21 @@ def test_unknown_model_is_not_registered():
 
 def test_resolve_model_name_by_size_and_default():
     audio = FAMILY_REGISTRIES["audio_embedding"]
-    assert audio.resolve_model_name("attention_pool", size="large-v3") == (
-        "openai/whisper-large-v3"
-    )
+    assert audio.resolve_model_name("wavlm", size="large") == "microsoft/wavlm-large"
     assert audio.resolve_model_name("attention_pool_m4t", size="v2-large") == (
         "facebook/seamless-m4t-v2-large"
     )
     # no size → the registered default name
     assert audio.get_default_name("attention_pool") == "openai/whisper-large"
+
+
+def test_attention_pool_sizes_cascade_off_encoder_type():
+    # attention_pool has no flat SIZES table: its checkpoints hang off encoder_type,
+    # exposed to the builder as the encoder_size field's `encoder_sizes` map.
+    schema = FAMILY_REGISTRIES["audio_embedding"].get_params_schema("attention_pool")
+    sizes = schema["encoder_size"]["encoder_sizes"]
+    assert sizes["whisper"]["large-v3"] == "openai/whisper-large-v3"
+    assert sizes["m4t"]["v2-large"] == "facebook/seamless-m4t-v2-large"
 
 
 def test_params_schema_exposes_pooling_choices():

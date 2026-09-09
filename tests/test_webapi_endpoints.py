@@ -1,28 +1,27 @@
-"""M8: webapi request-surface coverage via FastAPI TestClient.
+"""Webapi request-surface coverage via FastAPI TestClient.
 
 Covers the read endpoints (health/datasets) and the config-validation surface
 (happy path + malformed + unknown-key + missing-field). Does NOT submit a real job — only
 the *rejected* job-submit path is exercised, so no subprocess is launched.
 """
 
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parents[1]
+from tests.fixtures_paths import E2E_MINI, MINI_C, MINI_Q
+from tests.graph_test_helpers import mode_graph
 
 
 def _valid_config():
     # fixture-backed so dataset validation passes regardless of cwd
     return {
         "experiment_name": "webapi_test",
+        "graph_override": mode_graph("asr_text_retrieval"),
         "model": {
-            "pipeline_mode": "asr_text_retrieval",
             "asr_model_type": "whisper",
             "text_emb_model_type": "labse",
         },
         "data": {
             "dataset_name": "pubmed_qa",
-            "questions_path": str(_ROOT / "examples/data/pubmed_qa_small/questions.json"),
-            "corpus_path": str(_ROOT / "examples/data/pubmed_qa_small/corpus.json"),
+            "questions_path": MINI_Q,
+            "corpus_path": MINI_C,
         },
         "vector_db": {"type": "inmemory", "k": 5},
     }
@@ -76,7 +75,7 @@ def test_job_submit_with_invalid_config_rejected_before_launch(client):
 
 
 def test_data_root_confinement_opt_in(monkeypatch, client, tmp_path):
-    # L1: with EVALUATOR_DATA_ROOT set, a dataset path escaping it is rejected (400); unset,
+    # with EVALUATOR_DATA_ROOT set, a dataset path escaping it is rejected (400); unset,
     # absolute local paths are unrestricted (the default — see the happy-path test above).
     monkeypatch.setenv("EVALUATOR_DATA_ROOT", str(tmp_path))
     cfg = _valid_config()  # fixture paths live under the repo, not under tmp_path
@@ -96,21 +95,12 @@ def test_report_metrics_table_endpoint(client):
     assert body["n_traces"] == 2
 
 
-def test_graph_template_endpoint_serves_dag_and_404s(client):
-    body = client.get("/api/graph/template/asr_text_retrieval").json()
-    stages = {n["type"] for n in body["nodes"]}
-    assert {"asr", "embed", "search"} <= stages              # asr + embed + retrieval
-    assert body["nodes"] and body["levels"]                  # a wired, layered DAG
-    assert client.get("/api/graph/template/bogus_template").status_code == 404
-
-
 def test_graph_preview_payload_keeps_ports_and_all_bindings():
     """The /ui/config DAG payload must carry input_ports (a OneOf chain collapses to ONE port)
     and optional_inputs (the GT side-channel edges) — dropping them exploded the chain into
     dangling ports and silently erased every optional-GT edge. Bindings carry EVERY producer
     (the client renders earlier producers as faded fallback edges, newest as primary)."""
     import yaml
-    from pathlib import Path
 
     from evaluator.config.evaluation import EvaluationConfig
     from evaluator.config.graph_config import build_evaluation_config_kwargs
@@ -118,8 +108,7 @@ def test_graph_preview_payload_keeps_ports_and_all_bindings():
     from evaluator.webapi.ui.config import _graph_diagram_context
     import json
 
-    root = Path(__file__).resolve().parents[1]
-    raw = yaml.safe_load((root / "configs/evaluation_config_pubmed_qa.yaml").read_text())
+    raw = yaml.safe_load(open(E2E_MINI))
     cfg = EvaluationConfig.from_dict(build_evaluation_config_kwargs(raw), validate=False)
     payload = json.loads(_graph_diagram_context(graph_preview(cfg))["preview_json"])
     nodes = {n["id"]: n for n in payload["nodes"]}

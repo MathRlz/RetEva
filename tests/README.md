@@ -1,6 +1,11 @@
 # Tests
 
-Run: `pytest` (config in `pyproject.toml` → `testpaths = ["tests"]`). Lint: `flake8` (`.flake8`).
+Run: `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 pytest` (config in
+`pyproject.toml` → `testpaths = ["tests"]`) — the offline flags keep the suite from reaching
+HuggingFace and hanging. Lint: `flake8` (`.flake8`).
+
+Fixtures: `tests/data/pubmed_qa_mini/{questions,corpus}.json` (a tiny PubMed-QA sample) and
+`tests/data/configs/e2e_mini.yaml` back the end-to-end-shaped tests.
 
 These tests are **fast and model-free** — no real ASR/embedding weights are loaded. Heavy model
 behavior is covered by mocking the loaders/pipelines, so the whole suite runs in seconds and is
@@ -22,11 +27,8 @@ file — `pytest --collect-only -q` is the authoritative inventory.
 | **Reproducibility** | `test_reproducibility.py`, `test_data_flow_provenance.py`, `test_llm_seed_and_fallbacks.py` | content fingerprint, `repo@revision` pin, resolved-config sidecar; which producer fed each port; LLM seed forwarding + optimization-fallback surfacing |
 | **Models & registries** | `test_model_registries.py`, `test_node_registry.py`, `test_operators.py`, `test_audio_pooling.py` | five registries resolve + expose param schemas; 12 operators' ports/taxonomy/dispatch; ABTT/whiten math |
 | **Thesis artifacts** | `test_dag_export.py`, `test_branch_report_artifacts.py`, `test_report_export.py` | DOT DAG export; LaTeX branch + provenance tables; metrics-table/traces shapes |
-| **Web + CLI surfaces** | `test_webapi*.py`, `test_builder_run.py`, `test_emit_edges_write.py`, `test_quick_evaluate_shim.py` | builder/canvas round-trips, `--emit-edges --write`, the `quick_evaluate` config shim |
-
-Beyond the unit suite, `m1c_check.py` + `baselines/` gate **runtime** behavior: a
-behavior-preserving change must reproduce two committed baselines byte-for-byte (see
-`baselines/README.md`). That gate runs real models and lives outside `pytest`.
+| **Web + CLI surfaces** | `test_webapi*.py`, `test_builder_run.py`, `test_emit_edges_write.py`, `test_quick_evaluate_config.py` | builder/canvas round-trips, `--emit-edges --write`, the graph `quick_evaluate` builds from its keyword arguments |
+| **Layering** | `test_import_layering.py` | the package import order (and that the package-level import graph is acyclic) (leaf → top: `constants`/`errors`/`logging_config`/`utils` → `core`/`config` → `metrics`/`llm_client`/`storage`/`devices`/`tracking` → `models` → `datasets` → `pipeline` → `evaluation`/`judge`/`analysis`/`benchmarks` → `services` → `cli`/`webapi`/`api`/`public_api`/`diagnostics`) — an out-of-order import fails the test, not just at runtime |
 
 ## How to grow it
 
@@ -36,5 +38,3 @@ behavior-preserving change must reproduce two committed baselines byte-for-byte 
 - Config/graph changes → add a case to `test_graph_config.py`; a NEW config also needs the
   goldens regenerated (`python3 scripts/regen_graph_golden.py`), and the diff must be
   strictly additive — a changed existing entry means the refactor moved a graph.
-- Anything touching handlers, metrics, wiring, or config resolution → run the m1c parity
-  gate in the container before committing; the unit suite cannot see report-level drift.

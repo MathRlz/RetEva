@@ -1,10 +1,10 @@
 """GPU status display utility."""
 
 import sys
+from ..devices import GPUMonitor
 
 
 def format_memory(gb: float) -> str:
-    """Format memory in GB to a readable string."""
     if gb == float('inf'):
         return "unlimited"
     return f"{gb:.2f} GB"
@@ -25,7 +25,6 @@ def show_gpu_status(pool=None) -> None:
     Args:
         pool: Optional GPUPool to show allocation status.
     """
-    from ..devices import GPUMonitor
 
     monitor = GPUMonitor()
 
@@ -60,7 +59,6 @@ def show_gpu_status(pool=None) -> None:
             print(f"    Utilization:  {format_utilization(utilization)}")
         print()
 
-    # Show pool allocations if provided
     if pool is not None:
         print("-" * 60)
         print("Pool Allocations:")
@@ -81,7 +79,6 @@ def show_gpu_status(pool=None) -> None:
 
 def print_gpu_summary() -> str:
     """Return a one-line GPU summary for logging."""
-    from ..devices import GPUMonitor
 
     monitor = GPUMonitor()
 
@@ -105,7 +102,6 @@ def print_gpu_summary() -> str:
 
 
 def main():
-    """CLI entry point for GPU status."""
     show_gpu_status()
     return 0
 

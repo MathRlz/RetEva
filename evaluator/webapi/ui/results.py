@@ -16,6 +16,9 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from evaluator.webapi.ui._common import _graph_view_from_config
 from evaluator.webapi import chart_data
 from ...logging_config import get_logger
+from evaluator.storage import ExperimentStore
+from evaluator.analysis.leaderboard_views import leaderboard_rows, pareto_rows
+from evaluator.webapi.routers.leaderboard import delete_run_and_cache
 
 logger = get_logger(__name__)
 
@@ -44,7 +47,6 @@ _STORE_ERRORS = (sqlite3.Error, OSError)
 
 def _open_store(output_dir: str):
     """The leaderboard sqlite store for ``output_dir`` (may raise ``_STORE_ERRORS``)."""
-    from evaluator.storage import ExperimentStore
 
     return ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))
 
@@ -122,8 +124,6 @@ def register_results_routes(router: APIRouter, page) -> None:
         text_emb_model_type,
         audio_emb_model_type,
     ) -> HTMLResponse:
-        from evaluator.analysis.leaderboard_views import leaderboard_rows
-
         model_filters = {
             "asr_model_type": asr_model_type,
             "text_emb_model_type": text_emb_model_type,
@@ -193,9 +193,8 @@ def register_results_routes(router: APIRouter, page) -> None:
         objectives: str = "MRR:max,latency_ms:min",
         output_dir: str = "evaluation_results",
     ) -> HTMLResponse:
-        """Cross-run Pareto view for an experiment group (Roadmap 4a): a 2-objective scatter
-        with the non-dominated frontier highlighted + a table tagging each comparable run."""
-        from evaluator.analysis.leaderboard_views import pareto_rows
+        """Cross-run Pareto view for an experiment group: a 2-objective scatter with the
+        non-dominated frontier highlighted, plus a table tagging each comparable run."""
 
         try:
             groups = _open_store(output_dir).experiment_groups()
@@ -282,8 +281,6 @@ def register_results_routes(router: APIRouter, page) -> None:
         text_emb_model_type: str = Form(""),
         audio_emb_model_type: str = Form(""),
     ) -> HTMLResponse:
-        from evaluator.webapi.routers.leaderboard import delete_run_and_cache
-
         try:
             delete_run_and_cache(
                 run_id, delete_cache=(delete_cache == "on"), output_dir=output_dir

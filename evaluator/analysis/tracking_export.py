@@ -1,4 +1,4 @@
-"""Push an evaluation report to an experiment tracker (architecture-improvements §6).
+"""Push an evaluation report to an experiment tracker.
 
 The provenance block + the tidy metrics table map cleanly onto MLflow / Weights & Biases, so a
 run plugs into existing lab infrastructure instead of replacing it. ``report_to_tracking_payload``
@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from .report_export import _report_block, report_to_metrics_table
+from ..tracking.mlflow_calls import log_run
 
 
 def report_to_tracking_payload(report: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -53,13 +54,14 @@ def to_mlflow(report: Dict[str, Any], *, run_name=None, experiment=None) -> None
     except ImportError as exc:  # pragma: no cover - optional dep
         raise ImportError("MLflow export needs mlflow (pip install mlflow)") from exc
     payload = report_to_tracking_payload(report)
-    if experiment:
-        mlflow.set_experiment(experiment)
-    with mlflow.start_run(run_name=run_name):
-        mlflow.log_params(payload["params"])
-        mlflow.log_metrics(payload["metrics"])
-        for key, val in payload["tags"].items():
-            mlflow.set_tag(key, val)
+    log_run(
+        mlflow,
+        experiment=experiment,
+        run_name=run_name,
+        params=payload["params"],
+        metrics=payload["metrics"],
+        tags=payload["tags"],
+    )
 
 
 def to_wandb(report: Dict[str, Any], *, project=None, run_name=None) -> None:

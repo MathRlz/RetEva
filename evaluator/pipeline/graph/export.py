@@ -1,10 +1,7 @@
 """Publication export of a built StageGraph: Graphviz DOT.
 
-``evaluator graph --config x.yaml --format dot -o fig.dot`` then
-``dot -Tpdf fig.dot -o fig.pdf`` (or -Tsvg) gives a vector pipeline figure for a
-paper/thesis. Colors follow the taxonomy ``category`` axis (same grouping the web DAG
-uses); data-flow edges are labeled with the artifact they carry, ordering-only
-dependencies are dashed and unlabeled.
+Colors follow the taxonomy ``category`` axis; data-flow edges are labeled with the
+artifact they carry, and ordering-only dependencies are dashed and unlabeled.
 """
 
 from typing import Optional

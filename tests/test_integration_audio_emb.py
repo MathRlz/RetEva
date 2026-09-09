@@ -16,6 +16,7 @@ from evaluator.models.retrieval.strategy import RetrievalStrategyConfig
 from evaluator.pipeline.retrieval_pipeline import RetrievalPipeline
 from evaluator.storage.cache import CacheManager
 from evaluator.storage.vector_store import InMemoryVectorStore
+from tests.graph_test_helpers import mode_graph
 
 
 class _Named:
@@ -50,7 +51,7 @@ def _run(graph_override=None):
     ]
     cache = CacheManager(enabled=False)
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": "audio_emb_retrieval"}
+    cfg.graph_override = mode_graph("audio_emb_retrieval")
     cfg.model.audio_emb_model_type = "attention_pool"
     cfg.model.text_emb_model_type = "jina_v4"
     # Cross-modal APM: the audio embedder is trained to project into the text corpus space, so
@@ -67,7 +68,7 @@ def _run(graph_override=None):
     )
     return run_graph(
         AudioSamplesQueryDataset(samples), context,
-        eval_config=cfg, graph_override=graph_override,
+        eval_config=cfg, graph_override=graph_override or cfg.graph_override,
     )
 
 
@@ -76,7 +77,7 @@ def test_audio_emb_default_graph_produces_metrics():
     assert res["pipeline_mode"] == "audio_emb_retrieval"
     assert res.get("MRR") is not None  # query vectors reached retrieval + metrics ran
     assert res.get("Recall@5") is not None
-    # model info recorded for audio_emb mode (was a gap), incl. structured provenance (C6/F30)
+    # model info recorded for audio_emb mode, incl. structured provenance
     assert res.get("audio_embedder") == "mock-audio"
     prov = res["report"]["provenance"]["models"]
     assert prov["audio_emb"]["type"] == "attention_pool"
@@ -90,7 +91,7 @@ def test_audio_emb_complete_nodelist_graph_produces_metrics():
     nodes = [
         "dataset_source",
         {"id": "audio_embedding", "type": "audio_embedding",
-         "params": {"model": "attention_pool", "dim": 8}},
+         "params": {"dim": 8}},
         "corpus_embedding",
         {"id": "vector_db", "type": "vector_db", "params": {"store": "inmemory"}},
         {"id": "retrieval", "type": "retrieval", "params": {"k": 5}},

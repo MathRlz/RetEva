@@ -3,7 +3,7 @@
 Each source has a focused builder (:func:`create_local_loader`,
 :func:`create_huggingface_loader`, :func:`create_custom_loader`) that takes only the
 options it actually uses. :func:`create_dataset_loader` is a thin ``source``-dispatching
-shim over them, kept for back-compat with callers that pass one flat kwarg bag (D3/F8).
+shim over them, kept for back-compat with callers that pass one flat kwarg bag.
 """
 
 from pathlib import Path
@@ -109,58 +109,14 @@ def create_dataset_loader(
 ) -> DatasetLoaderProtocol:
     """Create a dataset loader based on the specified source type.
 
-    This factory function creates the appropriate loader based on the
-    source parameter and provided options.
-
     Args:
         source: Data source type. One of:
             - "local": Load from local audio directory
             - "huggingface": Load from HuggingFace Hub
             - "custom": Use GenericDatasetLoader with provided data
 
-        # Local loader options:
-        audio_dir: Path to directory containing audio files.
-        transcripts_file: Optional path to transcripts file.
-        recursive: Whether to search subdirectories.
-        file_pattern: Optional glob pattern to filter files.
-
-        # HuggingFace loader options:
-        huggingface_dataset: HuggingFace dataset identifier.
-        huggingface_subset: Dataset subset/configuration name.
-        huggingface_split: Dataset split to load.
-        column_mapping: Custom column name mapping.
-        max_samples: Maximum number of samples to load.
-        streaming: Whether to use streaming mode.
-        trust_remote_code: Whether to trust remote code.
-        cache_dir: Cache directory for HuggingFace datasets.
-
-        # Common options:
-        default_language: Default language code.
-        sample_rate: Target sample rate for resampling.
-        **kwargs: Additional keyword arguments.
-
-    Returns:
-        A dataset loader implementing DatasetLoaderProtocol.
-
     Raises:
         ValueError: If required options are missing for the source type.
-
-    Example:
-        >>> # Load from local directory
-        >>> loader = create_dataset_loader(
-        ...     source="local",
-        ...     audio_dir="./data/audio",
-        ...     default_language="en"
-        ... )
-
-        >>> # Load from HuggingFace
-        >>> loader = create_dataset_loader(
-        ...     source="huggingface",
-        ...     huggingface_dataset="mozilla-foundation/common_voice_11_0",
-        ...     huggingface_subset="en",
-        ...     huggingface_split="test",
-        ...     max_samples=100
-        ... )
     """
     source = source.lower()
 

@@ -1,20 +1,7 @@
 """Node taxonomy — the declared class of every pipeline node.
 
-Two orthogonal axes, declared once per node on its ``register_stage_node`` call:
-
-- ``category`` — the data-flow ROLE, exactly one per node (a clean partition):
-  ``source`` (emits dataset artifacts, no upstream) · ``model`` (identity is a managed
-  encoder/ASR model — device + offload lifecycle) · ``transform`` (pure data→data) ·
-  ``metric`` (compares expected GT × actual → scores) · ``sink`` (terminal side-effect, no
-  artifact output). This axis is load-bearing: lifecycle/device/offload, validation, and
-  execution reason about a node by its category.
-
-- ``domain`` — the functional AREA, for UI grouping / DAG coloring / docs (not MECE-critical).
-
-``model`` is reserved for the registry encoder/ASR nodes (the device/offload-managed set), so
-``category == "model"`` ⟺ the set the device/offload maps encode. LLM-backed generation/judge
-and a cross-encoder rerank *use* models but keep their data-flow category; their model-backing
-is a secondary property (``model_field`` / runtime config), not the category.
+``category`` is the data-flow ROLE, exactly one per node — load-bearing for
+lifecycle/device/offload and execution; ``domain`` is UI-only grouping, not MECE-critical.
 """
 
 from __future__ import annotations

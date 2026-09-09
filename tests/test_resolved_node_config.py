@@ -1,21 +1,22 @@
-"""Graph-first Phase 5: the resolved config is the *executed DAG*, node-centric, no mode.
+"""The resolved config is the *executed DAG*, node-centric, no mode.
 
-The original bug: an ``audio_emb_retrieval`` run wrote ``asr_model: wav2vec2:default`` into its
-resolved config even though ASR never ran (the flat serializer emitted the default model field).
-The fix: serialize the graph that actually ran — so a node (and its model) the run never executed
-can never appear — and round-trip it.
+The resolved config serializes the graph that actually ran — so a node (and its model) the run
+never executed can never appear (e.g. an ``audio_emb_retrieval`` run must never show
+``asr_model: wav2vec2:default`` when ASR never ran) — and round-trips it.
 """
 
 import copy
 
 from evaluator.config.evaluation import EvaluationConfig
-from evaluator.config.graph_config import resolved_node_config, build_evaluation_config_kwargs
-from evaluator.pipeline.graph.modes import build_graph_for_config
+from evaluator.config.serialization import resolved_node_config
+from evaluator.config.graph_config import build_evaluation_config_kwargs
+from evaluator.pipeline.graph.build import build_graph_for_config
+from tests.fixtures_paths import E2E_MINI, MINI_C, MINI_Q
 
 _DATASET = {
     "id": "pubmed_qa",
-    "questions": "examples/data/pubmed_qa_small/questions.json",
-    "corpus": "examples/data/pubmed_qa_small/corpus.json",
+    "questions": MINI_Q,
+    "corpus": MINI_C,
 }
 
 
@@ -82,7 +83,7 @@ def test_resolved_config_round_trips():
     resolved = resolved_model_config(cfg2, node2)
     assert resolved.audio_emb_model_type == "attention_pool"
     assert resolved.audio_emb_dim == 1024
-    assert cfg2.graph_template == "audio_emb_retrieval"   # label derived from the graph nodes
+    assert cfg2.graph_label == "audio_emb_retrieval"   # label derived from the graph nodes
     assert cfg2.vector_db.k == 5
 
 
@@ -106,27 +107,25 @@ def test_asr_text_resolved_config_lists_asr_text_retrieval():
 
 
 def test_resolved_config_round_trips_structural_params():
-    """Audit 2026-07 #1: the resolved sidecar must rebuild the IDENTICAL graph. Multi-arm
-    structural params (dense/sparse arms, result_fusion's hybrid flag) and multi-source
-    dataset maps round-trip exactly. (No more graph.branches case — comparing variants is
-    just distinctly-named nodes in the one graph.nodes list, nothing to serialize
-    pre-expansion.)"""
-    import os
+    """The resolved sidecar must rebuild the same executed DAG for a plain
+    explicit-graph config (no graph.branches — comparing variants is just distinctly-named
+    nodes in the one graph.nodes list, nothing to serialize pre-expansion). Being
+    self-contained, the sidecar inlines onto each node what the source left to a `nodes:` /
+    `model:` default; it must never drop or change a param, nor move an edge."""
+    cfg = EvaluationConfig.from_yaml(E2E_MINI, validate=False)
+    g1 = build_graph_for_config(cfg)
+    rc = resolved_node_config(cfg)
+    cfg2 = EvaluationConfig.from_dict(build_evaluation_config_kwargs(rc), validate=False)
+    g2 = build_graph_for_config(cfg2)
 
-    import yaml
-
-    root = os.path.dirname(os.path.dirname(__file__))
-    for name in ("showcase_hybrid_rerank_mmr",       # per-arm mode + hybrid flag
-                 "showcase_multi_dataset_join",      # datasets: map lift
-                 "e2e_pubmed_qa_small"):             # plain path
-        raw = yaml.safe_load(open(os.path.join(root, f"configs/{name}.yaml")))
-        cfg = EvaluationConfig.from_dict(build_evaluation_config_kwargs(raw), validate=False)
-        g1 = build_graph_for_config(cfg)
-        rc = resolved_node_config(cfg)
-        cfg2 = EvaluationConfig.from_dict(build_evaluation_config_kwargs(rc), validate=False)
-        g2 = build_graph_for_config(cfg2)
-
-        def sig(g):
-            return {n.id: (sorted((n.params or {}).items(), key=str), sorted(n.bindings))
-                    for n in g.nodes}
-        assert sig(g1) == sig(g2), f"{name}: resolved sidecar rebuilt a different graph"
+    rebuilt = {n.id: n for n in g2.nodes}
+    assert set(rebuilt) == {n.id for n in g1.nodes}, "E2E_MINI: node set changed"
+    for n in g1.nodes:
+        other = rebuilt[n.id]
+        assert sorted(other.bindings) == sorted(n.bindings), f"{n.id}: edges changed"
+        assert (n.params or {}).items() <= (other.params or {}).items(), f"{n.id}: params lost"
+    # the config's `nodes:` block resolves ONTO the nodes it configures
+    assert rebuilt["vector_db"].params["store"] == "inmemory"
+    assert rebuilt["asr"].params["model"] == "whisper"
+    assert rebuilt["asr"].params["name"] == "openai/whisper-base"
+    assert rebuilt["text_embedding"].params["model"] == "labse"

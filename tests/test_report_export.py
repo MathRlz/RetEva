@@ -1,4 +1,4 @@
-"""Roadmap §6 — tidy report exports: metrics table + per-query traces."""
+"""Tidy report exports: metrics table + per-query traces."""
 
 import csv
 import json

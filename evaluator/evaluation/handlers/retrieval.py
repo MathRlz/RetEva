@@ -1,7 +1,6 @@
 """Retrieval stage handlers: candidate generation + rerank/refinement.
 
-Each handler
-registers itself via ``@register_stage_handler`` at import time.
+Each handler registers itself via ``@register_stage_handler`` at import time.
 """
 
 from __future__ import annotations
@@ -15,32 +14,30 @@ from ..helpers import _search_results_to_keys
 from ..item_isolation import isolate_batch
 from ..executor.state import RunState
 from ..executor.node_pipeline import _node_reranking
-from ._common import publish_keyed_or_plain
+from ._common import _publish_retrieved, publish_keyed_or_plain
 from .retrieval_debug import log_retrieval_debug as _log_retrieval_debug
+from ...models.retrieval.strategy import RetrievalStrategyConfig
+from ...pipeline.corpus_index import build_index_from_vectors
+from ...pipeline.factory import effective_vector_db_config
+from ...pipeline.retrieval_pipeline import RetrievalPipeline
+from ...storage.registry import create_vector_store
+from .query import _stage_multi_query_retrieval
+from ._dispatch import dispatch_operator
+from ...errors import ConfigurationError
+from ..validation import resolve_query_space
+from ..item_set import ItemSet
+from ...models.retrieval.fusion_registry import fuse_hybrid_results
 
 logger = get_logger(__name__)
 
 
-def _publish_retrieved(s: RunState, results_list: list, query_ids: list) -> None:
-    """Publish ``retrieved`` (keyed when ids align 1:1, else plain) via the shared publish
-    contract — so rerank/metrics/answer_gen read the list, metric nodes read it keyed."""
-    publish_keyed_or_plain(s, "retrieved", results_list, query_ids)
-
-
 def _retrieval_query_texts(s: RunState, rp=None, vector_artifact: str = None):
-    """Query texts for sparse/hybrid lexical scoring — graph truth, no run-mode label.
-
-    What the query IS is told by the vector stream that actually feeds THIS node
-    (``vector_artifact``, the resolved query_vectors artifact name):
-
-    * ``audio_query_vectors`` — a pure audio query has no text: dense only; sparse/
-      hybrid raises (using the bound reference here would be oracle leakage).
-    * text / fused stream — the node's own query_text chain (the ASR hypothesis when
-      one feeds it, the dataset question otherwise); a fused stream with no text on
-      the chain falls back to the spoken reference (the fusion text side's source).
-
-    Bus-only since M1d-2. ``rp`` is the pipeline actually used (the vector_index
-    artifact); falls back to the shared one."""
+    """Query texts for sparse/hybrid lexical scoring — graph truth, no run-mode label. Told
+    by the vector stream that feeds THIS node (``vector_artifact``): audio-only queries
+    have no text (dense only; sparse/hybrid raises — using the bound reference would be
+    oracle leakage); a text/fused stream uses the node's own query_text chain, falling back
+    to the spoken reference when the chain has no text. Bus-only; ``rp`` is the pipeline
+    actually used, falling back to the shared one."""
     rp = rp if rp is not None else s.retrieval_pipeline
     if vector_artifact == "audio_query_vectors":
         if rp is not None and rp.strategy_config.core.mode != "dense":
@@ -56,16 +53,14 @@ def _retrieval_query_texts(s: RunState, rp=None, vector_artifact: str = None):
 
 
 def _finalize_retrieval(s: RunState, results_list, query_vectors, query_ids, rp=None) -> None:
-    """Publish final (payload, score) results to the bus; log debug.
-
-    Bus-only since M1c-2: downstream (metrics / answer_gen / finalize / aggregate)
-    reads the `retrieved` artifact via `_retrieved_from_bus`, not RunState mirrors."""
+    """Publish final (payload, score) results to the bus; log debug. Bus-only: downstream
+    (metrics / answer_gen / finalize / aggregate) reads the `retrieved` artifact via
+    `_retrieved_from_bus`, not RunState mirrors."""
     retrieved_keys = [_search_results_to_keys(results) for results in results_list]
-    # Publish the `retrieved` artifact (list of per-query (payload, score) lists) under
-    # this node's id so downstream reads the right producer (retrieval or a rerank). Same
-    # shape as retrieve_candidates output, so rerank instances chain (R4c/D2). Keyed as an
-    # ItemSet (W3) when query ids align — get_artifact unwraps to the list for legacy
-    # consumers; metric nodes read it keyed via get_items.
+    # Publishes `retrieved` (per-query (payload, score) lists) under this node's id so
+    # downstream reads the right producer; same shape as retrieve_candidates output, so
+    # rerank instances chain. Keyed as an ItemSet when ids align — get_artifact unwraps for
+    # legacy consumers, metric nodes read it keyed.
     _publish_retrieved(s, results_list, query_ids)
     logger.info(f"Retrieval complete: {len(retrieved_keys)} queries")
     _log_retrieval_debug(
@@ -82,21 +77,13 @@ def _finalize_retrieval(s: RunState, results_list, query_vectors, query_ids, rp=
 
 @register_stage_handler("index", time_key="retrieval_s")
 def _stage_index(s: RunState) -> None:
-    """Build the per-node vector store + index from ``corpus_vectors`` (§4 split).
-
-    The node's params pick the backend (``store`` + backend essentials); defaults
-    come from the global ``vector_db`` config. Publishes the indexed pipeline as
-    this node's ``vector_index`` — retrieval reads it artifact-first, so two
-    ``vector_db`` nodes with different backends coexist across branches.
-    """
+    """Build the per-node vector store + index from ``corpus_vectors``. The node's params
+    pick the backend (defaults from the global ``vector_db`` config); publishes the
+    indexed pipeline as this node's ``vector_index`` — retrieval reads it artifact-first,
+    so two ``vector_db`` nodes with different backends coexist across branches."""
     cv = s.get_artifact("corpus_vectors", default=None)
     if cv is None or s.config is None:
         return
-    from ...models.retrieval.strategy import RetrievalStrategyConfig
-    from ...pipeline.factory import effective_vector_db_config
-    from ...pipeline.retrieval_pipeline import RetrievalPipeline
-    from ...services.corpus_index import build_index_from_vectors
-    from ...storage.registry import create_vector_store
 
     params = s.node_params
     effective = effective_vector_db_config(s.config.vector_db, params)
@@ -107,21 +94,19 @@ def _stage_index(s: RunState) -> None:
         store,
         s.cache_manager,
         strategy_config=RetrievalStrategyConfig.from_vector_db_config(effective),
-        # The shared cross-encoder (built once by the factory) rides along so a
-        # following rerank node refines with the configured model — same instance,
-        # so the offload planner's free-after-last-use semantics are unchanged.
+        # The shared cross-encoder (built once by the factory) rides along so a following rerank
+        # node refines with the configured model — same instance, so offload's free-after-last-use
+        # semantics are unchanged.
         reranker=getattr(s.retrieval_pipeline, "reranker", None),
     )
-    build_index_from_vectors(rp, cv)  # also tags rp.index_space_id = cv.space (§4 V[s] typing)
+    build_index_from_vectors(rp, cv)  # also tags rp.index_space_id = cv.space (V[s] typing)
     s.put_artifact("vector_index", rp)
 
 
 @register_stage_handler("search", time_key="retrieval_s")
 def _stage_search(s: RunState) -> None:
     """The ``search`` operator: plain retrieval, or the multi-query/decompose fan-out
-    composite (which lives in the query handlers). Bodies unchanged."""
-    from .query import _stage_multi_query_retrieval
-    from ._dispatch import dispatch_operator
+    composite (which lives in the query handlers)."""
 
     return dispatch_operator("search", {
         "retrieval": _stage_retrieval,
@@ -132,16 +117,14 @@ def _stage_search(s: RunState) -> None:
 def _stage_retrieval(s: RunState) -> None:
     """Candidate generation (dense/sparse/hybrid). When a ``rerank`` node follows
     (refinement configured) this only fetches candidates; otherwise it finalizes."""
-    # The retrieval-input embeddings: the highest-priority published stream resolved by
-    # s.input (one_of fused > audio > text > precomputed). A result-fusion retrieval
-    # instance pins ONE stream via the `vectors` param (so two retrievals over the audio
-    # and text streams feed result_fusion). Bus-only (M1d): a missing producer is a graph bug.
+    # The retrieval-input embeddings: highest-priority published stream via s.input
+    # (one_of fused > audio > text > precomputed); a result-fusion instance pins ONE stream
+    # via the `vectors` param (so two retrievals feed result_fusion). Bus-only: a missing
+    # producer is a graph bug.
     params = s.node_params
     vname = params.get("vectors")
     query_vectors = s.get_artifact(vname) if vname else s.input("query_vectors")
     if query_vectors is None:
-        from ...errors import ConfigurationError
-
         raise ConfigurationError(
             "retrieval got no query vectors: no upstream embedder published "
             f"'{vname or 'query_vectors'}' (audio/text/fused). Likely a graph-wiring bug "
@@ -151,14 +134,13 @@ def _stage_retrieval(s: RunState) -> None:
     if isinstance(query_vectors, list) and len(query_vectors) > 0:
         query_vectors = np.array(query_vectors)
     s.cb("step_3_retrieval", 0, s.total, "Step 3: Retrieval")
-    # The vector_index artifact is the indexed retrieval pipeline (published by
-    # vector_db); fall back to the shared pipeline for direct callers (R4a).
+    # The vector_index artifact is the indexed retrieval pipeline (published by vector_db);
+    # fall back to the shared pipeline for direct callers.
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
-    # The ACTUAL bound producer (this branch's own embedder), not just the flat config
-    # default — a multi-variant graph's branches can each override it. Resolved once and
-    # reused for the space guard below + forwarded to the report/provenance assembler
-    # (which binds to `retrieved`, not the embedding streams, so it can't see the embedder
-    # node directly — this is how it recovers per-branch embedder identity).
+    # The ACTUAL bound producer (this branch's own embedder), not the flat config default —
+    # resolved once, reused for the space guard below, and forwarded so the report/
+    # provenance assembler (bound to `retrieved`, not the embedding streams) can recover
+    # per-branch embedder identity.
     artifact_name, producer_id = s.resolved_producer(vname or "query_vectors")
     if producer_id is not None:
         # Kept as two distinct keys (not one generic slot): a mode with both an audio and a
@@ -171,28 +153,26 @@ def _stage_retrieval(s: RunState) -> None:
             s.put_artifact("query_text_embedder_model_provenance", text_prov)
         if audio_prov is not None:
             s.put_artifact("query_audio_embedder_model_provenance", audio_prov)
-    # Runtime space guard (2b): loud error if the bound query stream and the index live in
-    # incompatible embedding spaces. No-op when either space is unknown (defense-in-depth
-    # behind the pre-flight validators). Only the vector-dotting arms (dense/hybrid) qualify.
+    # Runtime space guard: loud error if the bound query stream and index live in
+    # incompatible embedding spaces; no-op when either is unknown (defense-in-depth behind
+    # the pre-flight validators). Only dense/hybrid arms qualify.
     cfg_mode = str(getattr(getattr(rp, "strategy_config", None) and rp.strategy_config.core,
                            "mode", "dense"))
     if (params.get("mode") or cfg_mode) != "sparse" and hasattr(rp, "assert_query_space"):
-        from ..validation import resolve_query_space
-
         rp.assert_query_space(
             resolve_query_space(s.config, artifact_name or vname, producer_id=producer_id)
         )
-    # Per-node k (R2): a branch may retrieve a different depth.
+    # Per-node k: a branch may retrieve a different depth.
     k = report_depth(params.get("k", s.k))
-    # Per-node retrieval mode (R-hybrid): the hybrid DAG runs its dense + sparse arms as two
-    # retrieval nodes (mode=dense / mode=sparse) feeding result_fusion, instead of the
-    # monolithic in-pipeline hybrid fuse. Absent ⇒ the pipeline's configured mode.
+    # Per-node retrieval mode: the hybrid DAG runs dense + sparse arms as two retrieval
+    # nodes feeding result_fusion, instead of the monolithic in-pipeline hybrid fuse.
+    # Absent ⇒ the pipeline's configured mode.
     rmode = params.get("mode")
     node_id = getattr(s.current_node, "id", "retrieval")
     with TimingContext("Retrieval step", logger):
         qtexts = _retrieval_query_texts(s, rp, vector_artifact=artifact_name)
         nq = len(query_vectors)
-        # Per-item identity rides the keyed query_vectors ItemSet (M1d-2).
+        # Per-item identity rides the keyed query_vectors ItemSet.
         keyed = s.keyed_items(vname) if vname else s.input_items("query_vectors")
         ids = (
             [str(i) for i in keyed.ids]
@@ -204,7 +184,7 @@ def _stage_retrieval(s: RunState) -> None:
             return [qtexts[i]] if qtexts is not None else None
 
         if rp.needs_refinement or s.refine_in_graph or s.fuse_in_graph:
-            # Per-item isolation (T1): one query failing to fetch candidates drops out (empty
+            # Per-item isolation: one query failing to fetch candidates drops out (empty
             # candidate list, recorded) instead of aborting; keyed report excludes it.
             candidates = isolate_batch(
                 ids,
@@ -222,8 +202,8 @@ def _stage_retrieval(s: RunState) -> None:
                 placeholder=[],
                 sink=s.drop_sink,
             )
-            # Publish candidates as `retrieved` so a following rerank reads them (D2);
-            # keyed so the rerank's finalize keeps the real query ids (M1d-2).
+            # Publish candidates as `retrieved` so a following rerank reads them;
+            # keyed so the rerank's finalize keeps the real query ids.
             _publish_retrieved(s, candidates, ids)
         else:
             _finalize_retrieval(
@@ -269,8 +249,7 @@ def _refine_inputs(s: RunState):
 @register_stage_handler("refine", time_key="retrieval_s")
 def _stage_refine(s: RunState) -> None:
     """The ``refine`` operator: dispatch by op to rerank / mmr / threshold (each
-    retrieved→retrieved; bodies unchanged)."""
-    from ._dispatch import dispatch_operator
+    retrieved→retrieved)."""
 
     dispatch_operator("refine", {
         "rerank": _stage_rerank,
@@ -310,8 +289,8 @@ def _stage_threshold(s: RunState) -> None:
 
 def _retrieved_from_bus(s: RunState):
     """The `retrieved` artifact from the bound producer (retrieval/rerank), as
-    ``(results_with_scores, retrieved_keys, query_ids)`` locals (R4c, bus-only since
-    M1c-2/M1d). Per-item identity rides the keyed ItemSet; index ids otherwise."""
+    ``(results_with_scores, retrieved_keys, query_ids)`` locals. Per-item identity rides
+    the keyed ItemSet; index ids otherwise."""
     results_list = s.get_artifact("retrieved", default=[])
     keyed = s.keyed_items("retrieved")
     ids = (
@@ -327,8 +306,6 @@ def _stage_result_fusion(s: RunState) -> None:
     upstream retrievals (audio-stream + text-stream) into one ranked set per query, reusing
     the registered hybrid rank-fusion strategies. Republishes ``retrieved`` so metrics /
     answer_gen bind the fused results."""
-    from ..item_set import ItemSet
-    from ...models.retrieval.fusion_registry import fuse_hybrid_results
 
     producers = s._producers("retrieved")
     sets = [
@@ -344,12 +321,11 @@ def _stage_result_fusion(s: RunState) -> None:
         return
 
     params = s.node_params
-    # Hybrid composition (R-hybrid): the two upstream arms are the dense + sparse retrievals
-    # over ONE query stream. Fusion params come from the pipeline's core config (the same
-    # hybrid_fusion_method / dense_weight / rrf_k the monolithic hybrid used), and the fused
-    # pool keeps fetch_k depth when a refine node follows (so rerank/MMR see the full pool —
-    # byte-identical to the in-pipeline hybrid path). The audio↔text result-level fusion keeps
-    # its own params + per-query depth.
+    # Hybrid composition: the two upstream arms are the dense + sparse retrievals over ONE
+    # query stream. Fusion params come from the pipeline's core config (same as the
+    # monolithic hybrid), and the fused pool keeps fetch_k depth when a refine node follows
+    # — byte-identical to the in-pipeline hybrid path. The audio↔text result-level fusion
+    # keeps its own params + per-query depth.
     hybrid = bool(params.get("hybrid"))
     rp = s.get_artifact("vector_index", default=s.retrieval_pipeline)
     core = getattr(getattr(rp, "strategy_config", None), "core", None)

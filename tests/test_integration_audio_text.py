@@ -22,6 +22,7 @@ from evaluator.models.retrieval.strategy import RetrievalStrategyConfig
 from evaluator.pipeline.retrieval_pipeline import RetrievalPipeline
 from evaluator.storage.cache import CacheManager
 from evaluator.storage.vector_store import InMemoryVectorStore
+from tests.graph_test_helpers import mode_graph
 
 
 class _Named:
@@ -71,12 +72,12 @@ def _run():
     ]
     cache = CacheManager(enabled=False)
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": "audio_text_retrieval"}
+    cfg.graph_override = mode_graph("audio_text_retrieval")
     cfg.model.audio_emb_model_type = "clap_audio"
     cfg.model.text_emb_model_type = "clap_text"
     cfg.model.audio_emb_embedding_space = "shared_clap_space"
     cfg.model.text_emb_embedding_space = "shared_clap_space"
-    cfg.embedding_fusion.enabled = True            # the template's distinguishing feature
+    cfg.embedding_fusion.enabled = True            # the graph fuses the two vector streams
     text_emb = _MockTextEmb()
     context = EvaluationContext(
         retrieval_pipeline=RetrievalPipeline(
@@ -88,11 +89,12 @@ def _run():
         cache_manager=cache, k=5, batch_size=4,
         features=RunFeatures(embedding_fusion_config=cfg.embedding_fusion),
     )
-    res = run_graph(AudioSamplesQueryDataset(samples), context, eval_config=cfg)
+    res = run_graph(AudioSamplesQueryDataset(samples), context, eval_config=cfg,
+                    graph_override=cfg.graph_override)
     return res, text_emb
 
 
-def test_audio_text_template_runs_end_to_end():
+def test_audio_text_graph_runs_end_to_end():
     res, _ = _run()
     assert res["pipeline_mode"] == "audio_text_retrieval"
     # both streams reached fusion → retrieval → the metrics tail ran

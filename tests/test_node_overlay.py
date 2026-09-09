@@ -1,17 +1,16 @@
-"""Runtime delivery of feature-node params (audit 2026-07 #4/#5/#7; R3-P3 resolution).
+"""Runtime delivery of feature-node params.
 
 The loader folds a feature node's params into its sub-config, but BRANCH overrides survive
 on the node and reach the handler through the **resolved per-node config**
-(``evaluation/node_config.py``, computed once at run setup — it replaced the run-time
-``node_overlay`` allowlist). These tests pin that path: overlaid keys win, unset keys
-inherit the global (incl. the LLM backend), an explicit ``enabled: false`` beats the
-presence-derived force, and a globally-absent feature stays absent.
+(``config/node_config.py``, computed once at run setup). These tests pin that path: overlaid
+keys win, unset keys inherit the global (incl. the LLM backend), an explicit ``enabled: false``
+beats the presence-derived force, and a globally-absent feature stays absent.
 """
 from types import MethodType, SimpleNamespace
 
 from evaluator.config.query_correction import QueryCorrectionConfig
 from evaluator.evaluation.executor.state import RunState
-from evaluator.evaluation.node_config import resolve_node_config
+from evaluator.config.node_config import resolve_node_config
 
 
 def _state_with(node_id, resolved, **attrs):

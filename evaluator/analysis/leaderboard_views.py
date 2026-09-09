@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from evaluator.storage import ExperimentStore
+from evaluator.analysis.pareto import annotate_pareto, parse_objectives, pareto_frontier
 
 
 def leaderboard_rows(
@@ -51,9 +52,8 @@ def pareto_rows(
     objectives: str = "MRR:max",
     output_dir: str = "evaluation_results",
 ) -> Dict[str, Any]:
-    """The cross-run Pareto view for a run group (Roadmap 4a): every comparable run tagged
+    """The cross-run Pareto view for a run group: every comparable run tagged
     ``on_frontier``, plus the frontier subset. ``objectives`` = ``"MRR:max,latency_ms:min"``."""
-    from evaluator.analysis.pareto import annotate_pareto, parse_objectives, pareto_frontier
 
     objs = parse_objectives(objectives)
     store = ExperimentStore(db_path=str(Path(output_dir) / "leaderboard.sqlite"))

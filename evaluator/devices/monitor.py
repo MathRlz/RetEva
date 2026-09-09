@@ -14,26 +14,19 @@ class MemoryInfo:
 
 @dataclass
 class GPUInfo:
-    """GPU device information."""
     index: int
     name: str
     total_memory_gb: float
 
 
 class GPUMonitor:
-    """Monitor GPU status and memory usage.
-
-    Wraps torch.cuda functionality to provide a clean interface
-    for querying GPU availability and memory usage.
-    """
+    """Monitor GPU status and memory usage; wraps torch.cuda behind a clean interface."""
 
     def __init__(self):
-        """Initialize the GPU monitor."""
         self._cuda_available: Optional[bool] = None
 
     @property
     def cuda_available(self) -> bool:
-        """Check if CUDA is available."""
         if self._cuda_available is None:
             try:
                 import torch
@@ -43,7 +36,6 @@ class GPUMonitor:
         return self._cuda_available
 
     def get_device_count(self) -> int:
-        """Return the number of CUDA devices torch reports."""
         if not self.cuda_available:
             return 0
         import torch
@@ -72,7 +64,6 @@ class GPUMonitor:
             return None
 
     def get_all_gpus(self) -> List[GPUInfo]:
-        """Get information about all available GPUs."""
         gpus = []
         if not self.cuda_available:
             return gpus
@@ -119,7 +110,6 @@ _default_monitor: Optional[GPUMonitor] = None
 
 
 def get_monitor() -> GPUMonitor:
-    """Get the default GPU monitor instance."""
     global _default_monitor
     if _default_monitor is None:
         _default_monitor = GPUMonitor()

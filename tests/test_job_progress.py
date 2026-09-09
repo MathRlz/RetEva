@@ -1,4 +1,4 @@
-"""Phase 3 — job-progress soft-stall hint: a still-running job whose last progress update is old
+"""Job-progress soft-stall hint: a still-running job whose last progress update is old
 shows a "no update for Ns" note, so a hung run is visible instead of a frozen progress bar.
 """
 

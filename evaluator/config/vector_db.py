@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 from ..config.types import VectorDBType, to_enum
-from ..metrics.ir import RETRIEVAL_DEPTH
+from ..constants import RETRIEVAL_DEPTH
 
 # The composable post-retrieval refine vocabulary (each is one retrieved→retrieved node).
 REFINE_OPS = ("rerank", "mmr", "threshold")
@@ -11,84 +11,22 @@ REFINE_OPS = ("rerank", "mmr", "threshold")
 
 @dataclass
 class VectorDBConfig:
-    """
-    Configuration for vector database and retrieval settings.
-
-    Controls vector store backend, retrieval strategies, reranking, and advanced
-    retrieval options like MMR and hybrid search.
-
-    Attributes:
-        type: Vector database type. Default: "inmemory".
-            Options: "inmemory", "faiss", "faiss_gpu", "chromadb", "qdrant".
-        k: Number of documents to retrieve. Default: 10. Floored at the deepest report
-            cutoff (@10) at run time — a smaller value cannot silently cap ``recall@10``.
-        gpu_id: GPU device ID for FAISS GPU. Default: 0.
-
-        retrieval_mode: Retrieval strategy. Default: "dense".
-            Options: "dense", "sparse", "hybrid".
-        hybrid_dense_weight: Weight for dense retrieval in hybrid mode (0.0-1.0). Default: 0.5.
-        hybrid_fusion_method: Method for combining hybrid results. Default: "weighted".
-            Options: "weighted", "rrf", "max_score".
-        rrf_k: RRF k parameter (higher = more weight to top results). Default: 60.
-
-        bm25_k1: BM25 k1 parameter. Default: 1.5.
-        bm25_b: BM25 b parameter. Default: 0.75.
-
-        reranker_mode: Reranking strategy. Default: "none".
-            Options: "none", "token_overlap", "cross_encoder".
-        reranker_top_k: Number of candidates to rerank. Default: 20.
-        reranker_weight: Weight for reranker scores (0.0-1.0). Default: 0.5.
-        reranker_enabled: Whether cross-encoder reranking is enabled. Default: False.
-        reranker_model: Cross-encoder model identifier.
-            Default: "cross-encoder/ms-marco-MiniLM-L-6-v2".
-        reranker_device: Device for reranker (None = auto-detect).
-
-        use_mmr: Enable Maximal Marginal Relevance for diversity. Default: False.
-        mmr_lambda: MMR lambda parameter (0-1, higher = more relevance). Default: 0.5.
-        min_similarity_threshold: Filter results below this score. Optional.
-        distance_metric: Distance metric for similarity. Default: "cosine".
-            Options: "cosine", "euclidean", "dot_product".
-
-        chromadb_path: Path for ChromaDB persistent storage (None = in-memory).
-        chromadb_collection_name: Collection name in ChromaDB. Default: "documents".
-
-        qdrant_url: URL for Qdrant server (e.g., "http://localhost:6333"). Optional.
-        qdrant_path: Path for Qdrant local storage (None = in-memory). Optional.
-        qdrant_collection_name: Collection name in Qdrant. Default: "documents".
-        qdrant_api_key: API key for Qdrant Cloud. Optional.
-
-    Examples:
-        >>> # Dense retrieval with FAISS
-        >>> config = VectorDBConfig(type="faiss", k=10)
-        >>>
-        >>> # Hybrid retrieval with reranking
-        >>> config = VectorDBConfig(
-        ...     type="chromadb",
-        ...     retrieval_mode="hybrid",
-        ...     hybrid_dense_weight=0.7,
-        ...     reranker_enabled=True,
-        ...     reranker_top_k=50
-        ... )
-        >>>
-        >>> # MMR for diversity
-        >>> config = VectorDBConfig(
-        ...     type="qdrant",
-        ...     use_mmr=True,
-        ...     mmr_lambda=0.6
-        ... )
-    """
+    """Configuration for vector database and retrieval settings: store backend, retrieval
+    strategy, reranking, and advanced options (MMR, hybrid search). Field comments below
+    carry per-field semantics."""
     type: Union[str, VectorDBType] = "inmemory"  # inmemory | faiss | faiss_gpu | chromadb | qdrant
+    # floored at the deepest report cutoff (@10) so a smaller k cannot silently cap recall@10
     k: int = RETRIEVAL_DEPTH
     gpu_id: int = 0
     retrieval_mode: str = "dense"  # dense | sparse | hybrid
-    hybrid_dense_weight: float = 0.5
+    hybrid_dense_weight: float = 0.5  # 0.0-1.0
     hybrid_fusion_method: str = "weighted"  # weighted | rrf | max_score
     rrf_k: int = 60  # RRF k parameter (higher = more weight to top results)
     bm25_k1: float = 1.5
     bm25_b: float = 0.75
     reranker_mode: str = "none"  # none | token_overlap | cross_encoder
     reranker_top_k: int = 20
-    reranker_weight: float = 0.5
+    reranker_weight: float = 0.5  # 0.0-1.0
     # Cross-encoder reranker settings
     reranker_enabled: bool = False
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -98,18 +36,17 @@ class VectorDBConfig:
     mmr_lambda: float = 0.5  # 0-1, higher = more relevance, lower = more diversity
     min_similarity_threshold: Optional[float] = None  # Filter results below this score
     distance_metric: str = "cosine"  # cosine | euclidean | dot_product
-    # Explicit, ordered post-retrieval refine chain (Roadmap 2a). Each entry is one of
-    # REFINE_OPS; the listed nodes are emitted in this order (repeats allowed → cascades,
-    # e.g. ["rerank", "mmr", "rerank"]). None = derive the chain from the reranker / use_mmr /
-    # threshold flags in the canonical rerank→mmr→threshold order (byte-identical to before).
+    # Explicit, ordered post-retrieval refine chain (one of REFINE_OPS per entry; repeats
+    # allowed → cascades). None derives the chain from reranker/use_mmr/threshold in the
+    # canonical rerank→mmr→threshold order.
     refine_ops: Optional[List[str]] = None
 
     # ChromaDB-specific settings
-    chromadb_path: Optional[str] = None
+    chromadb_path: Optional[str] = None  # None = in-memory
     chromadb_collection_name: str = "documents"
     # Qdrant-specific settings
     qdrant_url: Optional[str] = None
-    qdrant_path: Optional[str] = None
+    qdrant_path: Optional[str] = None  # None = in-memory
     qdrant_collection_name: str = "documents"
     qdrant_api_key: Optional[str] = None
 
@@ -118,7 +55,6 @@ class VectorDBConfig:
         if isinstance(self.type, str):
             self.type = to_enum(self.type, VectorDBType)
 
-        # Validate weights and thresholds
         valid_retrieval_modes = {"dense", "sparse", "hybrid"}
         if self.retrieval_mode not in valid_retrieval_modes:
             raise ValueError(

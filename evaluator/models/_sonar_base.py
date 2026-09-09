@@ -1,9 +1,7 @@
 """Shared base for SONAR embedding models.
 
-SONAR speech (``a2e/sonar.py``) and text (``t2e/sonar.py``) encoders both wrap a
-device-bound inference pipeline that must be rebuilt to move devices. This mixin
-holds the common install hint, device coercion, and ``to()`` rebuild logic; each
-subclass supplies ``_build_pipeline(device)``.
+Both wrap a device-bound pipeline that must be rebuilt to move devices; this
+mixin holds the shared device-coercion and rebuild logic.
 """
 from abc import ABC, abstractmethod
 

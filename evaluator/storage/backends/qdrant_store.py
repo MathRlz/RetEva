@@ -23,6 +23,12 @@ except ImportError:
 from ..vector_store import VectorStore
 from ...utils.numeric import l2_normalize
 from ...logging_config import get_logger
+from ._common import (
+    check_vector_payload_lengths,
+    load_payloads_and_metadata,
+    primitive_payload,
+    restore_common_metadata,
+)
 
 logger = get_logger(__name__)
 
@@ -76,7 +82,6 @@ class QdrantVectorStore(VectorStore):
         self._init_client()
 
     def _init_client(self) -> None:
-        """Initialize Qdrant client based on configuration."""
         if self.url:
             # Remote server mode
             self.client = QdrantClient(
@@ -91,7 +96,6 @@ class QdrantVectorStore(VectorStore):
             self.client = QdrantClient(":memory:")
 
     def _get_distance(self) -> "Distance":
-        """Get Qdrant Distance enum from string."""
         distance = self.DISTANCE_MAP.get(self.distance_fn)
         if distance is None:
             valid = list(self.DISTANCE_MAP.keys())
@@ -102,7 +106,6 @@ class QdrantVectorStore(VectorStore):
         return distance
 
     def _ensure_collection(self, dim: int) -> None:
-        """Ensure collection exists with correct configuration."""
         collections = self.client.get_collections().collections
         collection_names = [c.name for c in collections]
 
@@ -119,40 +122,8 @@ class QdrantVectorStore(VectorStore):
         )
         self._dim = dim
 
-    def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
-        """Build the vector store from vectors and payloads."""
-        if len(vectors) != len(payloads):
-            raise ValueError(
-                f"Number of vectors ({len(vectors)}) must match "
-                f"number of payloads ({len(payloads)})"
-            )
-
-        # Store payloads locally for retrieval
-        self._payloads = payloads
-
-        normalized_vectors = l2_normalize(vectors, axis=1).astype(np.float32)  # cosine
-
-        dim = vectors.shape[1]
-        self._ensure_collection(dim)
-
-        points = []
-        for i, (vector, payload) in enumerate(zip(normalized_vectors, payloads)):
-            # Convert payload to Qdrant-compatible format
-            if isinstance(payload, dict):
-                qdrant_payload = {
-                    k: v for k, v in payload.items()
-                    if isinstance(v, (str, int, float, bool, list))
-                }
-                qdrant_payload["_payload_idx"] = i
-            else:
-                qdrant_payload = {"_payload_idx": i, "_payload_str": str(payload)}
-
-            points.append(PointStruct(
-                id=i,
-                vector=vector.tolist(),
-                payload=qdrant_payload,
-            ))
-
+    def _upsert_points(self, points: List["PointStruct"]) -> None:
+        """Upsert points in batches to avoid oversized requests."""
         batch_size = 1000
         for i in range(0, len(points), batch_size):
             batch = points[i:i + batch_size]
@@ -160,6 +131,48 @@ class QdrantVectorStore(VectorStore):
                 collection_name=self.collection_name,
                 points=batch,
             )
+
+    def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
+        """Build the vector store from vectors and payloads."""
+        check_vector_payload_lengths(vectors, payloads)
+
+        self._payloads = payloads
+
+        normalized_vectors = l2_normalize(vectors, axis=1).astype(np.float32)  # cosine
+
+        dim = vectors.shape[1]
+        self._ensure_collection(dim)
+
+        points = [
+            PointStruct(
+                id=i,
+                vector=vector.tolist(),
+                payload=primitive_payload(payload, i, allow_lists=True),
+            )
+            for i, (vector, payload) in enumerate(zip(normalized_vectors, payloads))
+        ]
+
+        self._upsert_points(points)
+
+    def _hits_to_results(self, hits) -> List[Tuple[Any, float]]:
+        """Convert one query's Qdrant hits into (payload, score) tuples.
+
+        Cosine/dot-product scores from Qdrant are already similarities; euclidean
+        distance needs converting to a similarity score.
+        """
+        output = []
+        for hit in hits:
+            payload_idx = hit.payload.get("_payload_idx", 0)
+            score = hit.score
+
+            if self.distance_fn in ("euclidean", "l2"):
+                score = 1.0 / (1.0 + score)
+
+            payload = self._payload_at(payload_idx)
+            if payload is not None:
+                output.append((payload, float(score)))
+
+        return output
 
     def search(
         self,
@@ -196,21 +209,7 @@ class QdrantVectorStore(VectorStore):
             with_payload=True,
         )
 
-        output = []
-        for hit in results.points:
-            payload_idx = hit.payload.get("_payload_idx", 0)
-            score = hit.score
-
-            # For cosine distance, score is already similarity
-            # For euclidean, we need to convert
-            if self.distance_fn in ("euclidean", "l2"):
-                score = 1.0 / (1.0 + score)
-
-            payload = self._payload_at(payload_idx)
-            if payload is not None:
-                output.append((payload, float(score)))
-
-        return output
+        return self._hits_to_results(results.points)
 
     def search_batch(
         self,
@@ -245,22 +244,7 @@ class QdrantVectorStore(VectorStore):
             requests=requests,
         )
 
-        all_outputs = []
-        for response in batch_results:
-            output = []
-            for hit in response.points:
-                payload_idx = hit.payload.get("_payload_idx", 0)
-                score = hit.score
-
-                if self.distance_fn in ("euclidean", "l2"):
-                    score = 1.0 / (1.0 + score)
-
-                payload = self._payload_at(payload_idx)
-                if payload is not None:
-                    output.append((payload, float(score)))
-            all_outputs.append(output)
-
-        return all_outputs
+        return [self._hits_to_results(response.points) for response in batch_results]
 
     def save(self, path: Union[str, Path]) -> None:
         """Save vector store to disk: payloads + metadata; in-memory mode also
@@ -289,7 +273,6 @@ class QdrantVectorStore(VectorStore):
         with open(save_path / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
-        # If using in-memory storage, export vectors
         if not self.url and not self.path:
             all_points = []
             offset = None
@@ -322,14 +305,8 @@ class QdrantVectorStore(VectorStore):
         """Load vector store from disk."""
         load_path = Path(path)
 
-        with open(load_path / "payloads.json", "r") as f:
-            self._payloads = json.load(f)
-
-        with open(load_path / "metadata.json", "r") as f:
-            metadata = json.load(f)
-
-        self.collection_name = metadata["collection_name"]
-        self.distance_fn = metadata["distance_fn"]
+        self._payloads, metadata = load_payloads_and_metadata(load_path)
+        restore_common_metadata(self, metadata)
         self._dim = metadata.get("dim")
 
         # Re-initialize client (in-memory for loaded data)
@@ -355,10 +332,4 @@ class QdrantVectorStore(VectorStore):
                     for p in all_points
                 ]
 
-                batch_size = 1000
-                for i in range(0, len(points), batch_size):
-                    batch = points[i:i + batch_size]
-                    self.client.upsert(
-                        collection_name=self.collection_name,
-                        points=batch,
-                    )
+                self._upsert_points(points)

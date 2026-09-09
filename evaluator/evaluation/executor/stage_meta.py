@@ -1,10 +1,9 @@
 """Per-model-stage placement metadata — one source of truth for the two executor maps.
 
-A model stage needs two things keyed by its legacy kind: which ``config.model`` field holds its
-device (the parallel scheduler serializes same-device work) and which ``RunState`` attribute holds
-the pipeline whose model it runs (the offload planner frees it after its last use). These used to
-live as two hand-kept dicts in ``parallel.py`` and ``offload.py``; they're derived from this table
-instead so adding a model stage is a single edit.
+A model stage needs two things keyed by its legacy kind: which ``config.model`` field holds
+its device (the parallel scheduler serializes same-device work) and which ``RunState``
+attribute holds the pipeline whose model it runs (the offload planner frees it after its last
+use) — kept in one table so adding a model stage is a single edit.
 
 ``corpus_embedding`` carries a device (it shares the query text embedder's) but no own pipeline
 attr — the offload planner resolves its model specially — so its ``pipeline_attr`` is ``None``.

@@ -1,10 +1,7 @@
 """Persistence for named builder graphs — a directory of JSON files, one per saved graph.
-
-Deliberately tiny (no DB): a saved graph is just the builder's canvas export
-(``{mode, nodes, edges, branches?, llm?}``) written to ``<dir>/<name>.json``. The store
-gives the builder a "save this graph / reopen a saved one" gallery without standing
-infrastructure. Names are sanitised to a safe slug so a name can never escape the directory.
-"""
+Deliberately tiny (no DB): the canvas export is written to ``<dir>/<name>.json``, giving a
+save/reopen gallery without standing infrastructure; names are slugged so none can escape the
+directory."""
 
 from __future__ import annotations
 

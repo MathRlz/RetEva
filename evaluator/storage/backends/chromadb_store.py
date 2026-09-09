@@ -14,6 +14,12 @@ except ImportError:
 from ..vector_store import VectorStore
 from ...utils.numeric import l2_normalize
 from ...logging_config import get_logger
+from ._common import (
+    check_vector_payload_lengths,
+    load_payloads_and_metadata,
+    primitive_payload,
+    restore_common_metadata,
+)
 
 logger = get_logger(__name__)
 
@@ -48,7 +54,6 @@ class ChromaDBVectorStore(VectorStore):
         self._init_client()
 
     def _init_client(self) -> None:
-        """Initialize ChromaDB client and collection."""
         if self.persist_path:
             self.client = chromadb.PersistentClient(path=self.persist_path)
         else:
@@ -60,20 +65,8 @@ class ChromaDBVectorStore(VectorStore):
             metadata={"hnsw:space": self.distance_fn}
         )
 
-    def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
-        """Build the vector store from vectors and payloads."""
-        if len(vectors) != len(payloads):
-            raise ValueError(
-                f"Number of vectors ({len(vectors)}) must match "
-                f"number of payloads ({len(payloads)})"
-            )
-
-        # Store payloads locally for retrieval
-        self._payloads = payloads
-
-        normalized_vectors = l2_normalize(vectors, axis=1)  # cosine similarity
-
-        # Clear existing collection data
+    def _recreate_collection(self) -> None:
+        """Delete then recreate the collection so build/load start from empty state."""
         try:
             self.client.delete_collection(self.collection_name)
         except Exception as exc:
@@ -84,21 +77,23 @@ class ChromaDBVectorStore(VectorStore):
             metadata={"hnsw:space": self.distance_fn}
         )
 
+    def build(self, vectors: np.ndarray, payloads: List[Any]) -> None:
+        """Build the vector store from vectors and payloads."""
+        check_vector_payload_lengths(vectors, payloads)
+
+        self._payloads = payloads
+
+        normalized_vectors = l2_normalize(vectors, axis=1)  # cosine similarity
+
+        self._recreate_collection()
+
         ids = [str(i) for i in range(len(vectors))]
 
         # Convert payloads to metadata (ChromaDB requires string/int/float/bool values)
-        metadatas = []
-        for i, payload in enumerate(payloads):
-            if isinstance(payload, dict):
-                # Filter out non-primitive values for metadata
-                metadata = {
-                    k: v for k, v in payload.items()
-                    if isinstance(v, (str, int, float, bool))
-                }
-                metadata["_payload_idx"] = i
-            else:
-                metadata = {"_payload_idx": i, "_payload_str": str(payload)}
-            metadatas.append(metadata)
+        metadatas = [
+            primitive_payload(payload, i, allow_lists=False)
+            for i, payload in enumerate(payloads)
+        ]
 
         # Add in batches to avoid memory issues
         batch_size = 5000
@@ -109,6 +104,29 @@ class ChromaDBVectorStore(VectorStore):
                 embeddings=normalized_vectors[i:end_idx].tolist(),
                 metadatas=metadatas[i:end_idx],
             )
+
+    def _hits_to_results(self, doc_ids, distances) -> List[Tuple[Any, float]]:
+        """Convert one query's ChromaDB ids/distances into (payload, score) tuples.
+
+        ChromaDB returns distances, not similarities, so cosine/l2 need converting;
+        inner product distances are already the similarity score.
+        """
+        output = []
+        for doc_id, distance in zip(doc_ids, distances):
+            payload_idx = int(doc_id)
+
+            if self.distance_fn == "cosine":
+                score = 1.0 - distance
+            elif self.distance_fn == "ip":
+                score = distance
+            else:  # l2
+                score = 1.0 / (1.0 + distance)
+
+            payload = self._payload_at(payload_idx)
+            if payload is not None:
+                output.append((payload, float(score)))
+
+        return output
 
     def search(
         self,
@@ -141,22 +159,7 @@ class ChromaDBVectorStore(VectorStore):
         if results["ids"] and results["ids"][0]:
             distances = (results["distances"][0] if results["distances"]
                          else [0.0] * len(results["ids"][0]))
-
-            for idx, (doc_id, distance) in enumerate(zip(results["ids"][0], distances)):
-                payload_idx = int(doc_id)
-
-                # Convert distance to similarity score
-                # ChromaDB returns distances, not similarities for cosine
-                if self.distance_fn == "cosine":
-                    score = 1.0 - distance
-                elif self.distance_fn == "ip":
-                    score = distance
-                else:  # l2
-                    score = 1.0 / (1.0 + distance)
-
-                payload = self._payload_at(payload_idx)
-                if payload is not None:
-                    output.append((payload, float(score)))
+            output = self._hits_to_results(results["ids"][0], distances)
 
         return output
 
@@ -188,21 +191,7 @@ class ChromaDBVectorStore(VectorStore):
                     results["distances"][query_idx]
                     if results["distances"] else [0.0] * len(results["ids"][query_idx])
                 )
-
-                for doc_id, distance in zip(results["ids"][query_idx], distances):
-                    payload_idx = int(doc_id)
-
-                    # Convert distance to similarity score
-                    if self.distance_fn == "cosine":
-                        score = 1.0 - distance
-                    elif self.distance_fn == "ip":
-                        score = distance
-                    else:  # l2
-                        score = 1.0 / (1.0 + distance)
-
-                    payload = self._payload_at(payload_idx)
-                    if payload is not None:
-                        output.append((payload, float(score)))
+                output = self._hits_to_results(results["ids"][query_idx], distances)
 
             all_outputs.append(output)
 
@@ -226,7 +215,6 @@ class ChromaDBVectorStore(VectorStore):
         with open(save_path / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
-        # If using in-memory storage, export collection data
         if not self.persist_path:
             all_data = self.collection.get(include=["embeddings", "metadatas"])
 
@@ -249,14 +237,8 @@ class ChromaDBVectorStore(VectorStore):
         """Load vector store from disk."""
         load_path = Path(path)
 
-        with open(load_path / "payloads.json", "r") as f:
-            self._payloads = json.load(f)
-
-        with open(load_path / "metadata.json", "r") as f:
-            metadata = json.load(f)
-
-        self.collection_name = metadata["collection_name"]
-        self.distance_fn = metadata["distance_fn"]
+        self._payloads, metadata = load_payloads_and_metadata(load_path)
+        restore_common_metadata(self, metadata)
 
         self._init_client()
 
@@ -266,15 +248,7 @@ class ChromaDBVectorStore(VectorStore):
             with open(collection_data_path, "r") as f:
                 export_data = json.load(f)
 
-            try:
-                self.client.delete_collection(self.collection_name)
-            except Exception as exc:
-                logger.debug("delete_collection %s skipped: %s", self.collection_name, exc)
-
-            self.collection = self.client.create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": self.distance_fn}
-            )
+            self._recreate_collection()
 
             if export_data["ids"]:
                 self.collection.add(

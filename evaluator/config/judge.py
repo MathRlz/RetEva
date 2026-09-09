@@ -16,34 +16,15 @@ JUDGE_REFERENCE_MODES = {"free", "graded"}
 
 @dataclass
 class JudgeConfig(LLMBackendMixin):
-    """LLM-as-judge scoring config.
-
-    Off by default. When enabled, an LLM scores each query on the configured ``judge_aspects``
-    (multi-aspect), producing per-query scores that flow through the normal metric path
-    (``judge_overall`` / ``judge_<aspect>`` / ``judge_pass_rate``). The LLM endpoint/model
-    inherit the global ``config.llm`` block unless overridden here.
-
-    Attributes:
-        enabled: master switch (default False).
-        api_base/model/api_key_env/temperature/timeout_s: LLM endpoint (inherit ``config.llm``).
-        use_local_server/local_server_url: route to a locally-spawned LLM server.
-        judge_mode: what to evaluate — ``retrieval`` | ``answer_quality`` | ``both``.
-        judge_aspects: dimensions to score, e.g. ``[relevance, faithfulness, completeness]``.
-        score_aggregation: combine aspect scores → overall (``average`` | ``weighted`` | ``min``
-            | ``max``); ``aspect_weights`` required for ``weighted``.
-        reference_mode: ``free`` (intrinsic) or ``graded`` (feed the reference answer / relevant
-            docs to the judge as a grading key).
-        pass_threshold: overall score at/above which a case counts as PASS (judge_pass_rate).
-        include_doc_text / judge_top_k: feed the top-k retrieved docs' *text* (not just ids).
-        max_cases: cap on queries judged (0 = all).
-        system_prompt / user_prompt_template: optional overrides (None → built-in).
-    """
+    """LLM-as-judge scoring config. Off by default; when enabled, an LLM scores each query
+    on the configured ``judge_aspects``, producing per-query scores that flow through the
+    normal metric path (``judge_overall``/``judge_<aspect>``/``judge_pass_rate``)."""
     enabled: bool = False
     api_base: str = "https://api.openai.com/v1/chat/completions"
     model: str = "gpt-4o-mini"
     api_key_env: str = "OPENAI_API_KEY"
     temperature: float = 0.0
-    max_cases: int = 50
+    max_cases: int = 50  # 0 = all
     timeout_s: int = 60
 
     # What + how to judge
@@ -51,24 +32,24 @@ class JudgeConfig(LLMBackendMixin):
     judge_aspects: List[str] = field(
         default_factory=lambda: ["relevance", "faithfulness", "completeness"]
     )
-    score_aggregation: str = "average"  # average | weighted | min | max
+    # average | weighted | min | max (weighted needs aspect_weights)
+    score_aggregation: str = "average"
     aspect_weights: Optional[Dict[str, float]] = None
-    reference_mode: str = "free"  # free | graded
-    pass_threshold: float = 0.5
+    reference_mode: str = "free"  # free (intrinsic) | graded (feeds ref answer/docs as grading key)
+    pass_threshold: float = 0.5  # score at/above which a case counts as PASS (judge_pass_rate)
 
     # Context fed to the judge
-    include_doc_text: bool = True
+    include_doc_text: bool = True  # feed doc text (not just ids), up to judge_top_k
     judge_top_k: int = 5
 
     # Local LLM server support
     use_local_server: bool = False
     local_server_url: Optional[str] = None
-    # Sampling seed forwarded to the LLM request (inherited from the top-level
-    # `llm:` block unless set here); None = omit. temperature 0 alone does not
-    # pin an LLM's sampling.
+    # Sampling seed forwarded to the LLM request (inherited from top-level `llm:` unless
+    # set); None = omit. temperature 0 alone does not pin sampling.
     seed: Optional[int] = None
-    # Requests kept in flight for this component's per-item loop (inherited from the
-    # `llm:` block unless set here); 1 = serial.
+    # Requests kept in flight for this component (inherited from top-level `llm:` unless set);
+    # 1 = serial.
     concurrency: int = 1
 
     # Prompt overrides

@@ -1,4 +1,4 @@
-"""R3/R4: torchaudio-backed helpers keep the librosa semantics they replaced —
+"""Torchaudio-backed helpers keep the librosa semantics —
 pitch-preserving stretch, duration-preserving pitch shift, plain resample."""
 import numpy as np
 import pytest
@@ -30,3 +30,14 @@ def test_resample_halves_length_and_same_rate_is_identity():
     audio = _sine()
     assert len(resample_audio(audio, 16000, 8000)) == len(audio) // 2
     assert resample_audio(audio, 16000, 16000) is audio
+
+
+def test_to_mono_16k_matches_the_inline_sites():
+    import torch, torchaudio
+    from evaluator.utils.audio import to_mono_16k
+    stereo = torch.randn(2, 8000)
+    out = to_mono_16k(stereo, 8000, downmix="mean", as_numpy=True)
+    ref = torchaudio.functional.resample(stereo, 8000, 16000).squeeze().numpy().mean(axis=0)
+    assert out.shape == ref.shape and abs(out - ref).max() < 1e-6
+    mono = torch.randn(4000)
+    assert to_mono_16k(mono, 16000, downmix="mean", as_numpy=False) is mono

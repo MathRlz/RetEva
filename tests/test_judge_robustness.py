@@ -1,4 +1,4 @@
-"""M3: a single failing trace (LLM timeout/transient error) must not abort the whole judge
+"""A single failing trace (LLM timeout/transient error) must not abort the whole judge
 stage and lose the other verdicts — it is dropped and logged, the rest are judged."""
 
 from types import SimpleNamespace

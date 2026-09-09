@@ -1,10 +1,7 @@
 """Iterative / multi-hop RAG flow configuration.
 
-A RAG flow is a sequence of retrieve→refine hops: embed the query, retrieve, reformulate
-the query using the retrieved documents, retrieve again. ``rounds`` controls how many
-retrieval passes run; the graph builder UNROLLS them into distinct node instances (the
-OneOf + prior-producer wiring picks each hop's inputs automatically). ``rounds=1`` (the
-default) is exactly today's single retrieval — no behavior change.
+A RAG flow is retrieve→refine hops: embed, retrieve, reformulate the query from the
+retrieved docs, retrieve again. ``rounds=1`` (default) is exactly single retrieval.
 """
 
 from __future__ import annotations
@@ -16,13 +13,7 @@ _REFINE_METHODS = {"rewrite_with_context", "relevance_feedback", "self_rag_criti
 
 @dataclass
 class RagFlowConfig:
-    """Multi-hop retrieve→refine flow.
-
-    Attributes:
-        rounds: number of retrieval passes (>= 1). 1 == single retrieval (default).
-        refine_method: the query_refine strategy used between hops.
-        refine_context_top_k: how many top retrieved docs feed the refinement.
-    """
+    """Multi-hop retrieve→refine flow."""
 
     rounds: int = 1
     refine_method: str = "rewrite_with_context"

@@ -4,21 +4,16 @@ import numpy as np
 import torch
 
 from ..storage.cache import CacheManager
+from ..storage.cache.helpers import CacheMixin, compute_audio_hash
 from ..devices.memory import get_memory_manager, run_with_oom_backoff
 from ..logging_config import get_logger, TimingContext
 from ..models import AudioEmbeddingModel
-from ..utils.cache_helpers import CacheMixin, compute_audio_hash
 
 logger = get_logger(__name__)
 
 
 class AudioEmbeddingPipeline(CacheMixin):
-    """
-    Pipeline for direct audio to embedding using AudioEmbeddingModel.
-
-    This is for models that directly encode audio to embeddings without ASR.
-    Implements caching of computed embeddings for efficiency.
-    """
+    """Pipeline for direct audio to embedding using AudioEmbeddingModel (no ASR)."""
 
     def __init__(
         self,
@@ -34,25 +29,14 @@ class AudioEmbeddingPipeline(CacheMixin):
 
     @property
     def model(self) -> AudioEmbeddingModel:
-        """Get the underlying audio embedding model."""
         return self._model
 
     @property
     def model_name(self) -> str:
-        """Get the model name."""
         return self._model.name()
 
     def process(self, audio: torch.Tensor, sampling_rate: int) -> np.ndarray:
-        """
-        Process a single audio sample and return its embedding.
-
-        Args:
-            audio: Audio tensor
-            sampling_rate: Audio sampling rate in Hz
-
-        Returns:
-            np.ndarray: Audio embedding vector
-        """
+        """Process a single audio sample and return its embedding."""
         audio_hash = compute_audio_hash(audio, sampling_rate)
 
         model_version = self.model_version
@@ -86,16 +70,9 @@ class AudioEmbeddingPipeline(CacheMixin):
         sampling_rates: List[int],
         show_progress: bool = False,
     ) -> np.ndarray:
-        """
-        Process a batch of audio samples and return their embeddings.
+        """Process a batch of audio samples and return their embeddings.
 
-        Args:
-            audio_list: List of audio tensors
-            sampling_rates: List of sampling rates
-            show_progress: Whether to show progress bar (not currently used)
-
-        Returns:
-            np.ndarray: Array of audio embeddings with shape (len(audio_list), embedding_dim)
+        ``show_progress`` is accepted but not currently used.
         """
         memory_manager = get_memory_manager()
         model_version = self.model_version
@@ -103,7 +80,6 @@ class AudioEmbeddingPipeline(CacheMixin):
         compute_needed: List[tuple[torch.Tensor, int, Optional[str]]] = []
         compute_indices: List[int] = []
 
-        # Check cache for all items
         if self.cache_enabled:
             for idx, audio in enumerate(audio_list):
                 audio_hash = compute_audio_hash(audio, sampling_rates[idx])
@@ -125,21 +101,19 @@ class AudioEmbeddingPipeline(CacheMixin):
                     f"Audio embedding cache: {cache_hits}/{len(audio_list)} hits"
                 )
         else:
-            # No cache, compute all
             compute_needed = [
                 (audio, sr, None) for audio, sr in zip(audio_list, sampling_rates)
             ]
             compute_indices = list(range(len(audio_list)))
             self._record_miss("embeddings", len(audio_list))
 
-        # Compute missing embeddings
         if compute_needed:
             with TimingContext(
                 f"Computing {len(compute_needed)} audio embeddings", logger
             ):
                 audios_to_compute = [item[0] for item in compute_needed]
                 srs_to_compute = [item[1] for item in compute_needed]
-                # OOM-resilient: halve-and-retry an oversized batch instead of crashing (T7).
+                # OOM-resilient: halve-and-retry an oversized batch instead of crashing.
                 computed_embs = run_with_oom_backoff(
                     lambda pairs: self._model.encode_audio(
                         [a for a, _ in pairs], [s for _, s in pairs]
@@ -148,7 +122,6 @@ class AudioEmbeddingPipeline(CacheMixin):
                 )
                 memory_manager.record_operation()
 
-                # Cache and insert computed embeddings
                 for idx, (_, _, audio_hash), emb in zip(
                     compute_indices, compute_needed, computed_embs
                 ):
@@ -160,7 +133,6 @@ class AudioEmbeddingPipeline(CacheMixin):
 
         result = np.array(embeddings)
 
-        # Clear GPU cache after batch processing
         memory_manager.clear_gpu_cache()
 
         return result

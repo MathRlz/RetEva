@@ -1,4 +1,4 @@
-"""B4/F18: decompose_query + generate_multi_queries share one _fanout / _parse_listed_queries.
+"""decompose_query + generate_multi_queries share one _fanout / _parse_listed_queries.
 
 No LLM is called — `_call_llm` is monkeypatched. Pins the parse cleanup + the two fan-out
 contracts (decompose returns the parsed list as-is; multi_query prepends the de-duplicated

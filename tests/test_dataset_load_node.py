@@ -5,7 +5,7 @@ container parity gate; this pins the loader mechanics with a duck-typed state.""
 from types import SimpleNamespace
 
 from evaluator.evaluation.handlers import source as src
-from evaluator.evaluation.load_info import LoadInfo
+from evaluator.core.load_info import LoadInfo
 
 
 def _state(**over):

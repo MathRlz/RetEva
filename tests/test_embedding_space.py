@@ -6,11 +6,12 @@ from evaluator.config.evaluation import EvaluationConfig
 from evaluator.errors import ConfigurationError
 from evaluator.evaluation.validation import validate_graph_embedding_spaces
 from evaluator.pipeline.graph import build_graph_for_config
+from tests.graph_test_helpers import mode_graph
 
 
 def _config(mode, *, text_emb=None, audio_emb=None, retrieval_mode="dense"):
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": mode}
+    cfg.graph_override = mode_graph(mode)
     if text_emb:
         cfg.model.text_emb_model_type = text_emb
     if audio_emb:
@@ -58,9 +59,6 @@ def test_embedding_space_override_must_match_on_both_sides():
     cfg.model.text_emb_embedding_space = "labse_space"
     with pytest.raises(ConfigurationError, match="Embedding-space mismatch"):
         validate_embedding_spaces(cfg)
-
-
-# ── Compatible-space registry + runtime guard (Roadmap 2b) ───────────
 
 
 import evaluator.models.embedding_space as es  # noqa: E402
@@ -152,15 +150,15 @@ def _real_cfg_and_graph():
 
 
 def test_resolve_query_space_without_producer_id_uses_flat_default():
-    # Old behavior, preserved for callers with no live producer_id.
+    # Flat-default resolution: preserved for callers with no live producer_id.
     cfg, _ = _real_cfg_and_graph()
     assert resolve_query_space(cfg, "text_query_vectors") == "labse:sentence-transformers/LaBSE"
 
 
 def test_resolve_query_space_with_producer_id_uses_the_actual_branch_embedder():
-    # THE bug: every branch used to assert the flat default regardless of its own
-    # per-node model override — a jina_v4 branch's query space came back "labse", which
-    # then mismatched its own jina_v4-built index and raised EmbeddingSpaceMismatch.
+    # Producer-aware resolution matters: asserting the flat default regardless of a branch's
+    # own per-node model override would make a jina_v4 branch's query space come back "labse",
+    # which would mismatch its own jina_v4-built index and raise EmbeddingSpaceMismatch.
     cfg, graph = _real_cfg_and_graph()
     jina_node = next(n for n in graph.nodes if n.id == "text_embedding_xtts_whisper_jina")
     assert jina_node is not None
@@ -180,7 +178,7 @@ def test_resolve_query_space_fused_stream_stays_unknown_regardless_of_producer_i
 
 def test_full_graph_has_zero_embedding_space_mismatches_across_all_variants():
     # The pre-flight, per-node-aware checker (already correct) confirms the graph itself
-    # is sound — the bug was purely in the SEPARATE runtime guard, resolve_query_space.
+    # is sound; the SEPARATE runtime guard, resolve_query_space, is what's under test here.
     from evaluator.evaluation.validation import check_embedding_spaces
 
     cfg, graph = _real_cfg_and_graph()
@@ -189,7 +187,7 @@ def test_full_graph_has_zero_embedding_space_mismatches_across_all_variants():
 
 def test_runtime_guard_no_longer_false_positives_on_a_jina_branch(monkeypatch):
     # End-to-end-ish: simulate what _stage_retrieval actually does for a jina branch's
-    # retrieval node — must NOT raise now (used to raise EmbeddingSpaceMismatch).
+    # retrieval node — must not raise EmbeddingSpaceMismatch.
     from evaluator.pipeline.retrieval_pipeline import RetrievalPipeline
     from evaluator.storage.vector_store import InMemoryVectorStore
 

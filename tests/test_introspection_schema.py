@@ -1,11 +1,12 @@
-"""Phase 0.5 drift-guard: the /api/introspection/schema endpoint is the single contract the
+"""The /api/introspection/schema endpoint is the single contract the
 web UI builds itself from. These tests assert every list in the schema *equals* its backing
 registry/enum, so a model / metric / strategy / fusion registered in the core auto-appears in
 the UI and nothing can silently drift.
 """
 
 import pytest
-from tests.graph_test_helpers import explicit_graph
+from tests.fixtures_paths import MINI_C, MINI_Q
+from tests.graph_test_helpers import explicit_graph, mode_graph
 
 
 @pytest.fixture(scope="module")
@@ -17,7 +18,7 @@ def schema(client):
 
 def test_schema_has_all_keys(schema):
     expected = {
-        "graph_templates", "model_families", "datasets", "metrics", "headline_metrics",
+        "model_families", "datasets", "metrics", "headline_metrics",
         "artifacts", "vector_stores", "fusion_methods", "combine_strategies", "correctors",
         "retrieval_modes", "reranker_modes", "dataset_sources", "startup_modes",
         "offload_policies", "distance_metrics", "node_catalogue",
@@ -32,13 +33,12 @@ def test_schema_lists_equal_registries(schema):
         SERVICE_OFFLOAD_POLICIES, DATASET_SOURCES,
     )
     from evaluator.evaluation.metric_registry import list_metrics
-    from evaluator.evaluation.query_correction import list_correctors
+    from evaluator.models.retrieval.query.correction import list_correctors
     from evaluator.evaluation.results import HEADLINE_METRICS
     from evaluator.models.retrieval import list_fusions
     from evaluator.models.retrieval.query.optimization import list_combine_strategies
     from evaluator.models.retrieval.rag.strategies import DistanceMetric
     from evaluator.pipeline.artifacts import list_artifacts
-    from evaluator.pipeline.graph.templates import list_graph_templates
     from evaluator.storage.registry import list_vector_stores
 
     assert schema["fusion_methods"] == list_fusions()
@@ -52,7 +52,6 @@ def test_schema_lists_equal_registries(schema):
     assert schema["offload_policies"] == list(SERVICE_OFFLOAD_POLICIES)
     assert schema["distance_metrics"] == [d.value for d in DistanceMetric]
     assert schema["headline_metrics"] == list(HEADLINE_METRICS)
-    assert schema["graph_templates"] == list_graph_templates()
     assert [m["name"] for m in schema["metrics"]] == [m.name for m in list_metrics()]
     assert [a["name"] for a in schema["artifacts"]] == [a.name for a in list_artifacts()]
 
@@ -81,7 +80,7 @@ def test_new_fusion_auto_appears(client):
 
 
 def test_judge_node_and_metrics_surface(schema):
-    """J5: the LLM-judge node + its metrics/artifacts auto-surface in the registry-driven
+    """The LLM-judge node + its metrics/artifacts auto-surface in the registry-driven
     schema with no UI hardcoding — the builder offers the node and the leaderboard discovers
     the judge_* metrics by virtue of registration alone."""
     metric_names = {m["name"] for m in schema["metrics"]}
@@ -114,7 +113,7 @@ def test_schema_carries_field_help(schema):
 
 
 def test_dataset_source_outputs_reflect_chosen_dataset():
-    """P1.1: a dataset_source advertises the CHOSEN dataset's real fields (its output ports + the GT
+    """A dataset_source advertises the CHOSEN dataset's real fields (its output ports + the GT
     fields the user can wire), not the union of what every dataset can output."""
     from evaluator.webapi.form_builder import resolve_node_form
 
@@ -158,7 +157,7 @@ def test_structural_artifacts_match_js_filter():
 
 
 def test_render_node_marks_structural_for_preview():
-    """P2.3: the read-only preview payload marks plumbing `structural`, so the config-page graph
+    """The read-only preview payload marks plumbing `structural`, so the config-page graph
     hides it by default (with a power-user 'view full DAG' toggle)."""
     from types import SimpleNamespace
 
@@ -184,8 +183,8 @@ def test_config_preview_payload_marks_structural():
     from evaluator.webapi.form_config import graph_spec_to_config_dict
     from evaluator.webapi.ui.config import _graph_diagram_context
 
-    _Q = "examples/data/pubmed_qa_small/questions.json"
-    _C = "examples/data/pubmed_qa_small/corpus.json"
+    _Q = MINI_Q
+    _C = MINI_C
     spec = {"mode": "asr_text_retrieval", "nodes": [
         {"id": "dataset_source", "type": "dataset_source",
          "params": {"dataset": "pubmed_qa", "questions": _Q, "corpus": _C}},
@@ -228,8 +227,8 @@ def test_open_in_builder_source_resolves_real_dataset():
     from evaluator.webapi.form_builder import graph_preview
     from evaluator.webapi.form_config import graph_spec_to_config_dict
 
-    _Q = "examples/data/pubmed_qa_small/questions.json"
-    _C = "examples/data/pubmed_qa_small/corpus.json"
+    _Q = MINI_Q
+    _C = MINI_C
     spec = {"mode": "asr_text_retrieval", "nodes": [
         {"id": "dataset_source", "type": "dataset_source",
          "params": {"dataset": "pubmed_qa", "questions": _Q, "corpus": _C}},
@@ -246,7 +245,7 @@ def test_open_in_builder_source_resolves_real_dataset():
 
 
 def test_palette_excludes_structural_and_groups_by_section():
-    """P2.2: the builder palette offers only meaningful operations, grouped into the user-facing
+    """The builder palette offers only meaningful operations, grouped into the user-facing
     sections; the structural plumbing (measure/report + sink/finalize/aggregate/persistence) is
     filtered out, and tts + the LLM judge live under Models."""
     from evaluator.webapi.form_builder import PALETTE_SECTIONS, node_catalogue
@@ -265,7 +264,7 @@ def test_palette_excludes_structural_and_groups_by_section():
 
 
 def test_builder_has_no_freeform_param_wildcard():
-    """P1.3: the builder no longer offers a free-form '+ add param' row — every settable param is
+    """The builder does not offer a free-form '+ add param' row — every settable param is
     auto-surfaced (param_spec switches + the model section + the model's Params schema). The
     `setExtraParam` channel stays (renderSchemaFields uses it for the model Params)."""
     import pathlib
@@ -279,7 +278,7 @@ def test_builder_has_no_freeform_param_wildcard():
 
 
 def test_rerank_surfaces_node_settable_tuning():
-    """P1.2: the reranker tuning the handler reads (`_node_reranking`: model/mode/top_k/weight/
+    """The reranker tuning the handler reads (`_node_reranking`: model/mode/top_k/weight/
     device) is all surfaced as builder fields — so the wildcard isn't needed to set it. mmr's
     lambda + threshold's cutoff are global config (not node params), so they're intentionally
     absent."""
@@ -344,7 +343,7 @@ def test_builder_supports_node_copy_paste_and_selection_highlight():
 
 
 def test_node_param_switches_carry_help(schema):
-    """Phase 3 polish: builder node-param switches get a tooltip from the FIELD_HELP glossary
+    """Builder node-param switches get a tooltip from the FIELD_HELP glossary
     (the same source the config form uses), so the param panel explains non-obvious fields."""
     nodes = schema["node_catalogue"]["nodes"] + schema["node_catalogue"]["presets"]
     by_key = {p["key"]: p for n in nodes for p in n.get("node_params", [])}
@@ -395,8 +394,8 @@ def test_node_form_names_the_default_model():
 
     cfg = EvaluationConfig.from_dict(build_evaluation_config_kwargs({
         "dataset": {"id": "pubmed_qa",
-                    "questions": "examples/data/pubmed_qa_small/questions.json",
-                    "corpus": "examples/data/pubmed_qa_small/corpus.json"},
+                    "questions": MINI_Q,
+                    "corpus": MINI_C},
         "graph": explicit_graph(["dataset_source", "corpus_embedding", "vector_db", "tts",
                                  "asr", "text_embedding", "retrieval", "metrics", "finalize"]),
         "nodes": {"asr": {"model": "whisper"}, "text_embedding": {"model": "jina_v4"}},
@@ -423,7 +422,7 @@ def test_edit_nodes_json_carries_input_ports_for_config_and_run_buildspec():
     from evaluator.webapi.ui.config import _edit_nodes_json
 
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": "audio_emb_retrieval"}
+    cfg.graph_override = mode_graph("audio_emb_retrieval")
     cfg.model.audio_emb_model_type = "attention_pool"
     payload = json.loads(_edit_nodes_json("t", config_to_canvas_spec(cfg), cfg))
     retrieval = next(n for n in payload["nodes"] if n["id"] == "retrieval")
@@ -438,7 +437,7 @@ def test_edit_nodes_json_carries_input_ports_for_config_and_run_buildspec():
 def test_graph_preview_overlays_routed_aliases_same_as_render_node():
     """`_preview_node` (feeds `graph_preview` -> `_edit_nodes_json` -> Config & Run's real
     `/ui/config-preview` route) must apply the SAME `_overlay_routed_aliases` step `render_node`
-    (feeds `config_to_canvas_spec`) already does -- it didn't, so a B2 *routed* artifact (a
+    (feeds `config_to_canvas_spec`) already does -- it didn't, so a *routed* artifact (a
     type-open port fed something the node def never statically lists, e.g.
     `dataset_source.reference_text` -> an embedder's `query_text` port -- the real shape of
     `configs/pubmed_qa_rag_fulltext.yaml`, a pure-text-retrieval config) was invisible to
@@ -484,7 +483,7 @@ def test_config_and_run_buildspec_reconstructs_a_oneof_port_edge_correctly():
     from evaluator.pipeline import build_graph_for_config
 
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": "audio_emb_retrieval"}
+    cfg.graph_override = mode_graph("audio_emb_retrieval")
     cfg.model.audio_emb_model_type = "attention_pool"
     payload = json.loads(_edit_nodes_json("t", config_to_canvas_spec(cfg), cfg))
 

@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict
 
 from fastapi import APIRouter, Response
 
-from evaluator.services import ModelServiceProvider
+from evaluator.pipeline import ModelServiceProvider
 from evaluator.webapi.schemas import HealthResponse
 
 

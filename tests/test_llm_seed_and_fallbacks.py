@@ -1,4 +1,4 @@
-"""P4 pins: LLM sampling seed rides the request; optimization fallbacks reach provenance."""
+"""LLM sampling seed rides the request; optimization fallbacks reach provenance."""
 
 import json
 import urllib.request

@@ -1,54 +1,19 @@
-"""MLflow experiment tracking implementation.
-
-This module provides MLflow integration for tracking evaluation experiments,
-including parameters, metrics, and artifacts.
+"""MLflow experiment tracking implementation: parameters, metrics, and artifacts for
+evaluation runs.
 """
 
 from typing import Dict, Any, Optional
 from pathlib import Path
 
 from ..logging_config import get_logger
+from . import mlflow_calls
 
 logger = get_logger(__name__)
 
 
 class MLflowTracker:
-    """MLflow experiment tracker for evaluation runs.
-
-    Wraps MLflow functionality for logging parameters, metrics, and artifacts
-    during evaluation. Supports both local file-based tracking and remote
-    tracking servers.
-
-    Attributes:
-        experiment_name: Name of the MLflow experiment.
-        tracking_uri: MLflow tracking server URI or local path.
-        _run_active: Whether a run is currently active.
-
-    Examples:
-        Basic usage with local tracking::
-
-            >>> tracker = MLflowTracker("my_experiment")
-            >>> with tracker:
-            ...     tracker.log_params({"batch_size": 32, "model": "whisper"})
-            ...     tracker.log_metrics({"MRR": 0.75, "MAP": 0.68})
-
-        With a tracking server::
-
-            >>> tracker = MLflowTracker(
-            ...     experiment_name="production_eval",
-            ...     tracking_uri="http://mlflow-server:5000"
-            ... )
-            >>> tracker.start_run(run_name="eval_run_001")
-            >>> tracker.log_params({"k": 10})
-            >>> tracker.log_metrics({"Recall@5": 0.82})
-            >>> tracker.end_run()
-
-        Logging artifacts::
-
-            >>> with MLflowTracker("artifact_demo") as tracker:
-            ...     tracker.log_artifact("results/metrics.json")
-            ...     tracker.log_artifact("results/confusion_matrix.png")
-    """
+    """MLflow experiment tracker for evaluation runs; supports both local file-based
+    tracking and remote tracking servers."""
 
     def __init__(
         self,
@@ -63,8 +28,7 @@ class MLflowTracker:
         self._mlflow = None
 
     def _ensure_mlflow(self) -> Any:
-        """Lazily import and configure MLflow; returns the mlflow module.
-        Raises ImportError if mlflow is not installed."""
+        """Lazily import and configure MLflow; returns the mlflow module."""
         if self._mlflow is None:
             try:
                 import mlflow
@@ -74,7 +38,7 @@ class MLflowTracker:
                     mlflow.set_tracking_uri(self.tracking_uri)
                     logger.debug(f"MLflow tracking URI set to: {self.tracking_uri}")
 
-                mlflow.set_experiment(self.experiment_name)
+                mlflow_calls.set_experiment(mlflow, self.experiment_name)
                 logger.debug(f"MLflow experiment set to: {self.experiment_name}")
 
             except ImportError as e:
@@ -93,7 +57,7 @@ class MLflowTracker:
             logger.warning("A run is already active. Ending it before starting a new one.")
             self.end_run()
 
-        mlflow.start_run(run_name=run_name)
+        mlflow_calls.start_run(mlflow, run_name=run_name)
         self._run_active = True
         logger.info(f"Started MLflow run: {run_name or '(auto-generated)'}")
 
@@ -114,7 +78,7 @@ class MLflowTracker:
 
         for i in range(0, len(param_items), batch_size):
             batch = dict(param_items[i:i + batch_size])
-            mlflow.log_params(batch)
+            mlflow_calls.log_params(mlflow, batch)
 
         logger.debug(f"Logged {len(flat_params)} parameters to MLflow")
 
@@ -155,10 +119,7 @@ class MLflowTracker:
             if isinstance(v, (int, float)) and not isinstance(v, bool)
         }
 
-        if step is not None:
-            mlflow.log_metrics(numeric_metrics, step=step)
-        else:
-            mlflow.log_metrics(numeric_metrics)
+        mlflow_calls.log_metrics(mlflow, numeric_metrics, step=step)
 
         logger.debug(f"Logged {len(numeric_metrics)} metrics to MLflow")
 
@@ -174,24 +135,21 @@ class MLflowTracker:
             return
 
         mlflow = self._ensure_mlflow()
-        mlflow.log_artifact(str(artifact_path))
+        mlflow_calls.log_artifacts(mlflow, [str(artifact_path)])
         logger.debug(f"Logged artifact: {path}")
 
     def end_run(self) -> None:
-        """End the current MLflow run."""
         if not self._run_active:
             return
 
         mlflow = self._ensure_mlflow()
-        mlflow.end_run()
+        mlflow_calls.end_run(mlflow)
         self._run_active = False
         logger.info("Ended MLflow run")
 
     def __enter__(self) -> "MLflowTracker":
-        """Context manager entry - starts a run."""
         self.start_run()
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Context manager exit - ends the run."""
         self.end_run()

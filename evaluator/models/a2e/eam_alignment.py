@@ -1,26 +1,8 @@
 """EAM alignment-pool model (``side/eam``'s ``AlignmentModel`` architecture).
 
-``side/eam``'s ``AlignmentModel`` is a genuinely joint audio-text model: ``encode_audio``
-and ``encode_text`` both end in the SAME ``pool``/``proj`` modules, so audio and text land
-in one shared embedding space by construction. This wraps it as one class implementing
-BOTH ``AudioEmbeddingModel`` and ``TextEmbeddingModel`` (mirrors ``clap_style.py``'s
-dual-registration pattern) so it can be used as the audio_embedding node, the
-text_embedding node, or both at once for cross-modal retrieval.
-
-Only ``audio_sa``/``text_sa``/``pool``/``proj`` are built and loaded — ``side/eam``'s
-``cross_attn`` and the optional ``audio_adapter``/``text_adapter`` are training-only
-machinery (``encode_audio``/``forward``'s cross-attention branch is gated on
-``self.training``, and nothing in this codebase ever constructs a non-``None`` adapter —
-grepped ``side/eam`` for every ``AlignmentModel(...)`` call site). At inference there is
-nothing to compute with them, so they're not reimplemented at all; any such keys in a
-checkpoint are simply ignored.
-
-When an audio_embedding node and a text_embedding node both name ``eam_alignment`` with
-the SAME ``model_path``, they get two separate Python wrapper instances (one per family's
-registry/service-provider cache — those caches don't cross-reference each other) but a
-single shared ``_EamAlignmentCore`` (module-level cache keyed on
-``(model_path, audio_encoder_name)``): one loaded encoder pair + one set of
-audio_sa/text_sa/pool/proj weights, not two.
+``encode_audio``/``encode_text`` both end in the SAME ``pool``/``proj`` modules, so audio
+and text land in one shared embedding space by construction; this wraps it as both an
+``AudioEmbeddingModel`` and a ``TextEmbeddingModel``.
 """
 from dataclasses import dataclass
 from typing import ClassVar, Dict, List, Optional, Tuple
@@ -134,6 +116,8 @@ _PROJ_LAYERNORM_KEY = "proj.net.3.weight"  # shape (embedding_dim,)
 _AUDIO_SA_INPROJ_KEY = "audio_sa.attn.in_proj_weight"  # shape (3*input_dim, input_dim)
 _TEXT_SA_INPROJ_KEY = "text_sa.attn.in_proj_weight"  # shape (3*input_dim, input_dim)
 
+# Only inference-time weights: side/eam's cross_attn/adapters are training-only and never
+# populated here, so unmatched checkpoint keys are safely ignored.
 _STRICT_PREFIXES = ("audio_sa.", "text_sa.", "pool.", "proj.")
 _DEFAULT_NUM_HEADS = 8
 _DEFAULT_DROPOUT = 0.1
@@ -420,7 +404,6 @@ class EamAlignmentModel(AudioEmbeddingModel, TextEmbeddingModel):
         self.core.to(device)
         return self
 
-    # --- AudioEmbeddingModel ---
     def preprocess_audio(self, audio_list: List[torch.Tensor], sampling_rates: List[int]):
         return self.core.audio_backend.preprocess(audio_list, sampling_rates)
 
@@ -438,7 +421,6 @@ class EamAlignmentModel(AudioEmbeddingModel, TextEmbeddingModel):
     #: is a guaranteed OOM, and padding-to-longest across a whole corpus wastes compute.
     TEXT_BATCH_SIZE = 32
 
-    # --- TextEmbeddingModel ---
     def encode(self, texts: List[str], show_progress: bool = False,
               desc: str = "Embedding") -> np.ndarray:
         chunks = []

@@ -1,20 +1,7 @@
-"""Text perturbation for robustness testing (task C2).
+"""Text perturbation for robustness testing.
 
-The thesis asks how voice→retrieval degrades under realistic query corruption. ``AudioAugmenter``
-covers the acoustic side; this is the text side: inject the kinds of errors an ASR system makes on
-medical speech, deterministically (seeded per item) so a corrupted variant is reproducible.
-
-Two perturbation families, both medically motivated:
-
-- **homophones** — words an ASR confuses acoustically (``to``/``two``, ``ileum``/``ilium``,
-  ``hypo``/``hyper`` prefixes), the everyday source of retrieval drift.
-- **unit/dose corruption** — the *dangerous* class: ``mg``↔``mcg``, ``ml``↔``l``,
-  ``once``↔``twice``.
-  A 1000× dose error from a unit swap is exactly what a clinical retrieval system must be robust to,
-  and what CEER (`metrics/clinical.py`) measures the cost of.
-
-Seeded via ``item_seed(seed, query_id, node_id, variant)`` so the same item always corrupts the
-same way regardless of order/parallelism.
+Injects the kinds of errors an ASR system makes on medical speech (homophones, unit/dose
+swaps), seeded per item so a corrupted variant is reproducible regardless of order/parallelism.
 """
 
 from __future__ import annotations
@@ -71,7 +58,7 @@ class TextAugmentConfig:
 
 
 class TextAugmenter:
-    """Deterministic, medically-motivated text corruption for robustness branches (C2)."""
+    """Deterministic, medically-motivated text corruption for robustness branches."""
 
     def __init__(self, config: Optional[TextAugmentConfig] = None) -> None:
         self.config = config or TextAugmentConfig()

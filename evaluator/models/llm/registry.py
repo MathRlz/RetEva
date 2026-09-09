@@ -1,8 +1,7 @@
 """Curated local-LLM list for the builder's model picker.
 
-Only what the picker shows (see ``catalog.list_llm_models``): Ollama model id, display
-label, domain, size class, and a rough RAM floor. The live Ollama probe supplies the
-actually-installed set; this list is just curated suggestions.
+See ``catalog.list_llm_models``: this is just curated suggestions, merged there with a live
+Ollama probe of what's actually installed.
 """
 
 from typing import Any, Dict, List

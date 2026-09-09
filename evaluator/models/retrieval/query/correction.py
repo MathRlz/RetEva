@@ -1,18 +1,7 @@
-"""Post-ASR query correction (architecture C1).
-
-Repairs domain errors in the ASR hypothesis before embedding/retrieval. Three pluggable
-correctors:
-
-- ``rule`` — deterministic whole-word replacement (case-insensitive, word-boundary safe), seeded
-  with medical abbreviation/unit normalizations, extensible via config.
-- ``kb`` — fuzzy-match each (long enough) word against a knowledge-base of canonical medical terms
-  and snap near-misses back (the classic ASR error: ``metformin`` → ``met foreman``). Deterministic.
-- ``llm`` — ask an LLM to repair transcription errors using only medical knowledge (injected client,
-  so it's testable + endpoint-agnostic).
-
-Every method emits a **correction diff** (raw → corrected, per item) so the experiment can report
-*what* the correction changed — the evidence behind the ref/asr/asr+correction comparison.
-"""
+"""Post-ASR query correction: repairs domain errors in the ASR hypothesis before
+embedding/retrieval via pluggable correctors (``rule``, ``kb``, ``llm``, and others
+registered via :func:`register_corrector`). Every method emits a correction diff (raw ->
+corrected, per item) as evidence for the ref/asr/asr+correction comparison."""
 
 from __future__ import annotations
 
@@ -21,6 +10,8 @@ import logging
 import re
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
+from ....llm_client.client import LLMClient
+from ....metrics.domain_terms import load_drug_terms, load_drug_doses
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +62,6 @@ def correct_text(text: str, compiled: List[Tuple[re.Pattern, str]]) -> str:
     return out
 
 
-# ── KB (fuzzy) corrector ──────────────────────────────────────────────
 # A starter glossary of canonical medical terms an ASR commonly garbles. Extend via
 # config.kb_terms. Only words ≥ 4 chars and within the edit-distance budget are snapped.
 DEFAULT_KB_TERMS: Tuple[str, ...] = (
@@ -160,15 +150,14 @@ def _llm_correct(texts: List[str], config: Any, client: Any) -> List[str]:
             if sink is not None:
                 sink.append(1)
             out.append(t)
-    # C7.5 — constrained decode, post-hoc: an LLM must not invent non-existent drugs.
-    # Snap any out-of-vocab drug-shaped token in the OUTPUT through the phonetic corrector
+    # Constrained decode, post-hoc: an LLM must not invent non-existent drugs. Snap any
+    # out-of-vocab drug-shaped token in the OUTPUT through the phonetic corrector
     # (server-agnostic; real grammar-constrained decoding stays a deferred extension).
     if getattr(config, "constrain_to_vocab", False):
         out = _phonetic_corrector(out, config)
     return out
 
 
-# ── Corrector registry (§11, C7 groundwork) ───────────────────────────
 # A corrector is `(texts, config, client=None) → corrected texts` (same length).
 # Register a custom one with @register_corrector("my_method") and select it via the
 # query_correction node's `method` param — no core edit.
@@ -215,13 +204,10 @@ def _llm_corrector(
     texts: List[str], config: Any, client: Optional[Any] = None
 ) -> List[str]:
     if client is None:
-        from ..llm_client.client import LLMClient
-
         client = LLMClient(config.to_llm_config(), component="query_correction")
     return _llm_correct(texts, config, client)
 
 
-# ── Phonetic (drug sound-alike) corrector (C7.1) ──────────────────────
 # Snaps a word to a canonical drug/term when it SOUNDS the same — the confusion class the
 # edit-distance kb corrector can't reach safely (ph/f, soft/hard c, z/s, x/ks, vowel slips
 # at edit distance 2+). Code equality gates the looser edit budget.
@@ -247,7 +233,6 @@ def _phonetic_code(word: str) -> str:
 
 def _phonetic_vocab(config: Any) -> Tuple[str, ...]:
     """Snap vocabulary: the bundled/overridden drug terms ∪ the ``kb_terms`` config channel."""
-    from ..metrics.domain_terms import load_drug_terms
 
     terms = list(load_drug_terms(getattr(config, "drug_terms_path", None) or None))
     terms += [str(t) for t in (getattr(config, "kb_terms", None) or ())]
@@ -295,7 +280,6 @@ def _phonetic_corrector(
     return [_phonetic_correct_text(t or "", terms, max_edits) for t in texts]
 
 
-# ── Dose/unit plausibility (C7.2) ─────────────────────────────────────
 # Repairs the units-slip class CEER exists for ("levothyroxine 125 mg" for mcg): when a
 # recognised drug's dose is implausible in the stated unit and EXACTLY ONE metric-mass unit
 # makes the number plausible, the unit — never the number — is rewritten. Anything
@@ -366,7 +350,6 @@ def _clinical_corrector(
 ) -> List[str]:
     """Phonetic snap + dose/unit plausibility repair — the CEER-targeted combination
     (phonetic first, so a snapped drug name anchors the dose check)."""
-    from ..metrics.domain_terms import load_drug_doses
 
     corrected = _phonetic_corrector(texts, config, client)
     doses = load_drug_doses(getattr(config, "drug_doses_path", None) or None)
@@ -388,29 +371,23 @@ def correct_query_texts(
 
 
 def resolve_correction_client(config: Any) -> Optional[Any]:
-    """Build the batch-level client a corrector needs **once**, so a per-item map (4b) doesn't
+    """Build the batch-level client a corrector needs **once**, so a per-item map doesn't
     rebuild it per call. Only the ``llm`` method needs one; ``rule``/``kb`` return None (and stay
     picklable for the ``process`` backend)."""
     if getattr(config, "method", "rule") != "llm":
         return None
-    from ..llm_client.client import LLMClient
 
     return LLMClient(config.to_llm_config(), component="query_correction")
-
-
-def correct_one_text(text: str, config: Any, client: Optional[Any] = None) -> str:
-    """Correct a single query text — the per-item unit for the 4b ``parallel_map`` (sync default →
-    byte-identical to :func:`correct_query_texts`). Pass a ``client`` from
-    :func:`resolve_correction_client` to reuse one across items (the ``llm`` method; rule/kb ignore
-    it). Top-level (not a closure) so the ``process`` backend can pickle it."""
-    return correct_query_texts([text or ""], config, client)[0]
 
 
 def correct_one_text_status(
     text: str, config: Any, client: Optional[Any] = None
 ) -> Tuple[str, int]:
-    """Like :func:`correct_one_text`, plus the number of LLM-call fallbacks for this item
-    (0 for non-llm methods) — the handler's provenance counter."""
+    """Correct a single query text — the per-item unit for ``parallel_map`` (sync default →
+    byte-identical to :func:`correct_query_texts`) — plus the number of LLM-call fallbacks for
+    this item (0 for non-llm methods), the handler's provenance counter. Pass a ``client`` from
+    :func:`resolve_correction_client` to reuse one across items (the ``llm`` method; rule/kb ignore
+    it). Top-level (not a closure) so the ``process`` backend can pickle it."""
     sink: list = []
     token = _llm_fallback_sink.set(sink)
     try:

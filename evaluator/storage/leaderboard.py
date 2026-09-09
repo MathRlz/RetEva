@@ -68,8 +68,8 @@ class ExperimentStore:
                 ON runs(dataset_name, pipeline_mode, created_at DESC)
                 """
             )
-            # Run-grouping columns (architecture-improvements §3) — additive, migrated onto
-            # pre-existing DBs (SQLite has no ADD COLUMN IF NOT EXISTS, so probe pragma first).
+            # Run-grouping columns — additive, migrated onto pre-existing DBs (SQLite has no
+            # ADD COLUMN IF NOT EXISTS, so probe pragma first).
             existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
             if "experiment_group" not in existing:
                 conn.execute("ALTER TABLE runs ADD COLUMN experiment_group TEXT")
@@ -140,7 +140,7 @@ class ExperimentStore:
                     getattr(config, "experiment_group", None),
                     json.dumps(tags) if tags else None,
                     config.data.dataset_name,
-                    str(config.graph_template),
+                    str(config.graph_label),
                     metadata.get("start_time"),
                     metadata.get("end_time"),
                     metadata.get("duration_seconds"),
@@ -227,8 +227,8 @@ class ExperimentStore:
         self, experiment_group: str, *, limit: int = 500
     ) -> List[Dict[str, Any]]:
         """All runs in ``experiment_group`` with their full numeric metrics — the multi-metric /
-        Pareto cross-run view (Roadmap 4a). Each row: ``{run_id, experiment_name, dataset_name,
-        pipeline_mode, created_at, metrics}``."""
+        Pareto cross-run view. Each row: ``{run_id, experiment_name, dataset_name, pipeline_mode,
+        created_at, metrics}``."""
         sql = (
             "SELECT id, experiment_name, dataset_name, pipeline_mode, metrics_json, created_at "
             "FROM runs WHERE experiment_group = ? ORDER BY created_at DESC LIMIT ?"
@@ -319,49 +319,6 @@ class ExperimentStore:
             cursor = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
             conn.commit()
             return cursor.rowcount > 0
-
-    def list_runs(
-        self,
-        *,
-        limit: int = 100,
-        dataset_name: Optional[str] = None,
-        pipeline_mode: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        sql = """
-            SELECT id, experiment_name, dataset_name, pipeline_mode, start_time, end_time,
-                   duration_seconds, output_dir, created_at
-            FROM runs
-        """
-        clauses: List[str] = []
-        params: List[Any] = []
-        if dataset_name:
-            clauses.append("dataset_name = ?")
-            params.append(dataset_name)
-        if pipeline_mode:
-            clauses.append("pipeline_mode = ?")
-            params.append(pipeline_mode)
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC LIMIT ?"
-        params.append(limit)
-
-        with closing(self._connect()) as conn, conn:
-            rows = conn.execute(sql, params).fetchall()
-        return [
-            {
-                "run_id": run_id,
-                "experiment_name": experiment_name,
-                "dataset_name": ds_name,
-                "pipeline_mode": mode,
-                "start_time": start_time,
-                "end_time": end_time,
-                "duration_seconds": duration_seconds,
-                "output_dir": output_dir,
-                "created_at": created_at,
-            }
-            for (run_id, experiment_name, ds_name, mode, start_time, end_time,
-                 duration_seconds, output_dir, created_at) in rows
-        ]
 
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
         with closing(self._connect()) as conn, conn:

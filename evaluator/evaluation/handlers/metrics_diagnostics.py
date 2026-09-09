@@ -1,9 +1,6 @@
-"""IR (retrieval) diagnostics for the metrics report (extracted from ``handlers/metrics.py``).
-
-The diagnostics the registry report does **not** carry: the WER↔Recall correlation, the
-first-relevant-rank distribution + failure rate, the bootstrap confidence intervals, and (when
-traces are enabled) the failure-mode decomposition. The metrics core calls ``_ir_diagnostics``
-from the single-branch ``metrics`` node; values/functions are unchanged from the legacy path.
+"""IR (retrieval) diagnostics not carried by the registry report: WER↔Recall correlation,
+first-relevant-rank distribution + failure rate, bootstrap confidence intervals, and (when
+traces are enabled) the failure-mode decomposition.
 """
 
 from __future__ import annotations
@@ -28,9 +25,8 @@ MIN_SAMPLES_FOR_CI = 20
 
 
 def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores, retrieved_keys) -> None:
-    """Retrieval diagnostics not carried by the registry report (correlation, rank
-    distribution, failure rate/analysis, flat CIs). Same functions/values as the old path.
-    """
+    """Registry-uncarried retrieval diagnostics: correlation, rank distribution,
+    failure rate/analysis, flat CIs."""
     corr = wer_recall_correlation(wer_scores, recall5)
     if corr is not None:
         results["wer_recall5_correlation"] = corr
@@ -41,8 +37,8 @@ def _ir_diagnostics(results, s, all_relevant, recall5, wer_scores, retrieved_key
     results["first_relevant_rank_distribution"] = rank_dist
     results["retrieval_failure_rate"] = failure_rate
 
-    # Unconditional: this was gated on `trace_limit > 0`, which with 0 meaning "no limit"
-    # would switch the analysis OFF exactly for full runs.
+    # Unconditional: gating on trace_limit > 0 (0 means "no limit") would disable this
+    # analysis for full runs.
     _attach_failure_analysis(
         results, s, all_relevant, rank_dist, recall5, wer_scores, retrieved_keys
     )

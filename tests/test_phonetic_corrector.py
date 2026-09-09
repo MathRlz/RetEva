@@ -1,4 +1,4 @@
-"""C7.1 — phonetic (drug sound-alike) corrector + the opt-in corrected/rx metrics.
+"""Phonetic (drug sound-alike) corrector + the opt-in corrected/rx metrics.
 
 The phonetic corrector catches what the edit-distance kb corrector can't reach safely:
 same-sound substitutions (ph/f, soft c, z/s, x/ks, vowel slips) at edit distance 2+,
@@ -8,7 +8,7 @@ gated on phonetic-code equality. The corrected_*/ceer_rx metrics are opt-in via
 from types import SimpleNamespace
 
 from evaluator.config.query_correction import QueryCorrectionConfig
-from evaluator.evaluation.query_correction import (
+from evaluator.models.retrieval.query.correction import (
     _phonetic_code,
     correct_query_texts,
     list_correctors,
@@ -18,8 +18,6 @@ from evaluator.evaluation.query_correction import (
 def _cfg(**kw):
     return QueryCorrectionConfig(enabled=True, method="phonetic", **kw)
 
-
-# ── the corrector ─────────────────────────────────────────────────────
 
 def test_phonetic_registered():
     assert "phonetic" in list_correctors()
@@ -66,12 +64,12 @@ def test_kb_terms_channel_extends_the_vocab():
 
 def test_branch_override_reaches_the_corrector():
     # Per-branch params must reach the corrector, or a branch silently runs the global
-    # method (R3-P3: resolved once at setup; was the overlay allowlist).
+    # method (resolved once at setup).
     from types import MethodType
 
     from evaluator.evaluation.executor.state import RunState
     from evaluator.evaluation.handlers.query import _node_correction_config
-    from evaluator.evaluation.node_config import resolve_node_config
+    from evaluator.config.node_config import resolve_node_config
 
     base = QueryCorrectionConfig(enabled=True, method="rule")
     resolved = resolve_node_config(
@@ -87,8 +85,6 @@ def test_branch_override_reaches_the_corrector():
     assert cfg.method == "phonetic"
     assert cfg.phonetic_max_edits == 3
 
-
-# ── the opt-in metrics ────────────────────────────────────────────────
 
 def _score(flag: bool, with_corrected: bool):
     from evaluator.evaluation.handlers.metrics import _branch_scores
@@ -121,7 +117,7 @@ def test_c7_metrics_fire_when_opted_in():
     scores = _score(flag=True, with_corrected=True)
     # Default CEER counts dose units only: 'mg' survives in the raw hypothesis → 0.0.
     # The drug-aware set sees the mangled drug name → raw 0.5, corrected 0.0. This is the
-    # gap that made the vocab extension load-bearing for C7.
+    # gap that made the vocab extension load-bearing.
     assert scores["ceer"].values[0] == 0.0
     assert scores["ceer_rx"].values[0] == 0.5
     assert scores["corrected_ceer_rx"].values[0] == 0.0
@@ -134,8 +130,6 @@ def test_corrected_metrics_need_the_artifact():
     assert "ceer_rx" in scores
     assert "corrected_wer" not in scores
 
-
-# ── C7.2: dose/unit plausibility (`clinical`) ─────────────────────────
 
 def _clinical(texts, **kw):
     return correct_query_texts(
@@ -181,8 +175,6 @@ def test_number_is_never_rewritten():
     assert "5000" in out
 
 
-# ── C7.5: constrained decode (post-hoc vocab snap on LLM output) ──────
-
 class _FakeClient:
     def __init__(self, reply):
         self.reply = reply
@@ -211,8 +203,6 @@ def test_llm_output_untouched_without_flag_and_when_valid():
     assert out2[0] == "take prednisone 20 mg"  # valid output stays
 
 
-# ── C7.6: drift pins (registry ↔ builder ↔ config ↔ overlay) ──────────
-
 def test_builder_method_choices_track_the_registry():
     from evaluator.pipeline.graph.operators_catalog import _transform_param_spec
 
@@ -221,14 +211,13 @@ def test_builder_method_choices_track_the_registry():
 
 
 def test_every_correction_field_is_branch_overridable():
-    # R3-P3 replaced the hand-maintained allowlist (and this test's bucket audit) with
-    # field-derived resolution: EVERY QueryCorrectionConfig field now reaches the corrector
+    # Field-derived resolution: EVERY QueryCorrectionConfig field reaches the corrector
     # from a node param, including the LLM-backend ones (a branch may point one corrector
     # at a different model). `corrected_metrics` stays run-level — the metric opt-in reads
     # the GLOBAL config — so overlaying it on a node is inert by design.
     import dataclasses
 
-    from evaluator.evaluation.node_config import resolve_node_config
+    from evaluator.config.node_config import resolve_node_config
 
     base = QueryCorrectionConfig(enabled=True, method="rule")
     for f in dataclasses.fields(QueryCorrectionConfig):

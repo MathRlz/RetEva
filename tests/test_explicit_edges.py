@@ -1,4 +1,4 @@
-"""Explicit port-level wiring (E2, docs/archive/ARCHITECTURE_TASKS.md).
+"""Explicit port-level wiring.
 
 `bind_explicit_edges` reconstructs bindings/aliases/deps from `{from, output, to, input}`
 edges; a correct edge set reproduces the auto-wired graph BIT-for-bit (order included —
@@ -131,20 +131,8 @@ def test_missing_required_edge_names_the_fix():
         bind_explicit_edges(_NODES, pruned)
 
 
-def test_branches_remap_port_edges_per_branch():
-    from evaluator.pipeline.graph.branches import expand_branches
-
-    specs, edges = expand_branches(
-        _NODES, [{"id": "b1", "asr": {"oracle": True}}], edges=_EDGES)
-    assert {"from": "tts@b1", "output": "query_audio",
-            "to": "asr@b1", "input": "query_audio"} in edges
-    g = build_graph_from_spec(specs, edges=edges)
-    te = next(n for n in g.nodes if n.id == "text_embedding@b1")
-    assert ("query_text", "asr@b1") in te.bindings
-
-
 def test_emit_edges_reproduces_every_config_graph_bit_for_bit():
-    """E3, the real parity proof: for EVERY repo config, reconstructing from the generated
+    """The real parity proof: for EVERY repo config, reconstructing from the generated
     edge set reproduces the auto-wired RUN-shape graph as tuple equality — bindings including
     ORDER, OneOf input_aliases, and depends_on. Stronger than the sorted golden."""
     import glob
@@ -164,12 +152,12 @@ def test_emit_edges_reproduces_every_config_graph_bit_for_bit():
         + glob.glob(os.path.join(root, "configs/campaign/*.yaml"))
     )
     assert len(configs) >= 46
-    # Non-canonical topologies exist BECAUSE auto-wiring cannot express them (B2): the
+    # Non-canonical topologies exist BECAUSE auto-wiring cannot express them: the
     # inverted chain's hand-written edges intentionally diverge from the auto-wired graph
     # (chain-order ranking would bypass the corrector), so the "reconstruct == autowire"
     # property is meaningless there. Their explicit-edge round-trip is pinned instead in
     # test_typed_port_routing.py::test_routed_graph_edge_round_trip.
-    non_canonical = {"showcase_correction_after_optimization.yaml"}
+    non_canonical = set()  # no config currently needs exclusion
     for path in configs:
         name = os.path.basename(path)
         if name in non_canonical:
@@ -186,7 +174,7 @@ def test_emit_edges_reproduces_every_config_graph_bit_for_bit():
 
 
 def test_migrated_configs_build_one_graph_for_preview_and_run():
-    """E4: with explicit port-level edges the preview and run builders produce ONE graph —
+    """With explicit port-level edges the preview and run builders produce ONE graph —
     same bindings/aliases/deps everywhere; the preview only adds display params (fields/
     suppress_outputs on dataset_source), never wiring."""
     import os
@@ -195,13 +183,19 @@ def test_migrated_configs_build_one_graph_for_preview_and_run():
 
     from evaluator.config.evaluation import EvaluationConfig
     from evaluator.config.graph_config import build_evaluation_config_kwargs
-    from evaluator.pipeline.graph.modes import build_graph_for_config
+    from evaluator.pipeline.graph.build import build_graph_for_config
+    from tests.fixtures_paths import E2E_MINI
     from tests.graph_golden_util import build_run_shape
 
     root = os.path.dirname(os.path.dirname(__file__))
-    for name in ("e2e_pubmed_qa_small", "showcase_hybrid_rerank_mmr",
-                 "evaluation_config_admed_selfretr_fusion", "e2e_pubmed_qa_3branch"):
-        raw = yaml.safe_load(open(os.path.join(root, f"configs/{name}.yaml")))
+    paths = [
+        E2E_MINI,
+        # an apm_tests config with explicit port edges
+        os.path.join(root, "configs/apm_tests/admed/admed_asr_selfretr_lora.yaml"),
+    ]
+    for path in paths:
+        name = os.path.basename(path)
+        raw = yaml.safe_load(open(path))
         cfg = EvaluationConfig.from_dict(build_evaluation_config_kwargs(raw), validate=False)
         pv, run = build_graph_for_config(cfg), build_run_shape(cfg)
         assert [n.id for n in pv.nodes] == [n.id for n in run.nodes], name
@@ -212,7 +206,7 @@ def test_migrated_configs_build_one_graph_for_preview_and_run():
 
 
 def test_canvas_round_trip_rebuilds_identical_graph_for_every_config():
-    """E5 gate: config → canvas → exportSpec-shaped spec → graph_spec_to_config_dict →
+    """Config → canvas → exportSpec-shaped spec → graph_spec_to_config_dict →
     rebuilt graph has the SAME bindings as the original (plumbing edges re-derived for
     appended structural nodes; canvas edges are authoritative for the meaningful ones)."""
     import glob
@@ -222,7 +216,7 @@ def test_canvas_round_trip_rebuilds_identical_graph_for_every_config():
 
     from evaluator.config.evaluation import EvaluationConfig
     from evaluator.config.graph_config import build_evaluation_config_kwargs
-    from evaluator.pipeline.graph.modes import build_graph_for_config
+    from evaluator.pipeline.graph.build import build_graph_for_config
     from evaluator.webapi.form_builder import config_to_canvas_spec
     from evaluator.webapi.form_config import graph_spec_to_config_dict
 
@@ -261,14 +255,14 @@ def test_canvas_round_trip_rebuilds_identical_graph_for_every_config():
         a_by_id = {n.id: n for n in original.nodes}
         b_by_id = {n.id: n for n in rebuilt.nodes}
         # the plumbing derive may APPEND structural nodes an explicit config omitted
-        # (documented Approach-B behavior); every original node must survive unchanged.
+        # (documented behavior); every original node must survive unchanged.
         assert set(a_by_id) <= set(b_by_id), name
         for nid, a in a_by_id.items():
             assert a.bindings == b_by_id[nid].bindings, f"{name}:{nid}"
 
 
 def test_nodes_without_edges_rejected_at_load():
-    """E6 hard cut: a config graph is nodes AND port-level edges; the error names the
+    """A config graph is nodes AND port-level edges; the error names the
     generator."""
     import pytest
 

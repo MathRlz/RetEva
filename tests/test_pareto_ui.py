@@ -1,4 +1,4 @@
-"""Roadmap 4a: the cross-run Pareto UI route + group list (server-rendered, no JS needed)."""
+"""The cross-run Pareto UI route + group list (server-rendered, no JS needed)."""
 
 import pytest
 

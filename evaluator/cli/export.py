@@ -14,6 +14,9 @@ from evaluator.analysis import (
     export_sample_results,
 )
 from evaluator.analysis.export import load_results
+from evaluator.analysis.report_export import write_metrics_table_csv, write_traces_jsonl, write_traces_parquet
+from evaluator.analysis.branch_report import latex_provenance_table
+from evaluator.analysis.tracking_export import to_mlflow, to_wandb
 
 
 def parse_export_args(args: Optional[List[str]] = None) -> argparse.Namespace:
@@ -66,17 +69,9 @@ def parse_export_args(args: Optional[List[str]] = None) -> argparse.Namespace:
 
 
 def run_export(args: argparse.Namespace) -> int:
-    """Run export command.
-
-    Args:
-        args: Parsed command-line arguments.
-
-    Returns:
-        Exit code (0 for success, non-zero for failure).
-    """
+    """Run export command."""
     input_paths = [Path(p) for p in args.input]
 
-    # Validate input files exist
     for path in input_paths:
         if not path.exists():
             print(f"Error: File not found: {path}", file=sys.stderr)
@@ -84,7 +79,6 @@ def run_export(args: argparse.Namespace) -> int:
 
     try:
         if args.format == "latex-compare":
-            # Multi-file comparison
             if len(input_paths) < 2:
                 print(
                     "Error: latex-compare requires at least 2 input files",
@@ -92,7 +86,6 @@ def run_export(args: argparse.Namespace) -> int:
                 )
                 return 1
 
-            # Generate names if not provided
             names = args.names
             if names is None:
                 names = [p.stem for p in input_paths]
@@ -140,40 +133,28 @@ def run_export(args: argparse.Namespace) -> int:
                 print(f"Per-sample results exported to: {args.output}")
 
             elif args.format == "metrics-table":
-                from evaluator.analysis.report_export import write_metrics_table_csv
-
                 n = write_metrics_table_csv(results, args.output)
                 print(f"Metrics table ({n} rows) exported to: {args.output}")
 
             elif args.format == "traces":
-                from evaluator.analysis.report_export import write_traces_jsonl
-
                 n = write_traces_jsonl(results, args.output)
                 print(f"Per-query traces ({n} rows) exported to: {args.output}")
 
             elif args.format == "provenance":
-                from evaluator.analysis.branch_report import latex_provenance_table
-
                 Path(args.output).write_text(
                     latex_provenance_table(results, caption=args.caption)
                 )
                 print(f"Provenance table saved to: {args.output}")
 
             elif args.format == "traces-parquet":
-                from evaluator.analysis.report_export import write_traces_parquet
-
                 n = write_traces_parquet(results, args.output)
                 print(f"Per-query traces ({n} rows) exported to: {args.output}")
 
             elif args.format == "mlflow":
-                from evaluator.analysis.tracking_export import to_mlflow
-
                 to_mlflow(results, run_name=args.output)
                 print(f"Logged report to MLflow (run: {args.output})")
 
             elif args.format == "wandb":
-                from evaluator.analysis.tracking_export import to_wandb
-
                 to_wandb(results, run_name=args.output)
                 print(f"Logged report to W&B (run: {args.output})")
 
@@ -194,7 +175,6 @@ def run_export(args: argparse.Namespace) -> int:
 
 
 def main(args: Optional[List[str]] = None) -> int:
-    """Main entry point for export CLI."""
     parsed_args = parse_export_args(args)
     return run_export(parsed_args)
 

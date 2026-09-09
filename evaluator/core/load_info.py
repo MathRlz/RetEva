@@ -1,4 +1,4 @@
-"""Typed carrier for the run's dataset-load channel (was an untyped shared dict).
+"""Typed carrier for the run's dataset-load channel.
 
 One instance rides ``RunState.load_info`` per run, shared by reference between the
 service wrapper and the in-graph handlers: ``replay_query_ids`` goes *in* (item replay
@@ -21,7 +21,7 @@ class LoadInfo:
 
     def to_metadata(self) -> Dict[str, Any]:
         """The report-metadata dict (``metadata.cache.load``): only the fields that were
-        actually set, matching the shape of the former plain dict."""
+        actually set."""
         return {
             f.name: getattr(self, f.name)
             for f in fields(self)

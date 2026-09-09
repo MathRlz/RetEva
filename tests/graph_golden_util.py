@@ -8,14 +8,13 @@ Frozen in tests/data/graph_golden.json.
 (`build_run_graph` shape, `attach_fields=False`): per node the UNSORTED binding tuple +
 `input_aliases`. Frozen in tests/data/graph_order_golden.json. This exists because the runtime
 read is order-sensitive (`reversed(producers)` newest-first + OneOf candidate priority) while
-the plain golden sorts — the explicit-edges migration (E1, docs/archive/ARCHITECTURE_TASKS.md) must
-reproduce binding ORDER, not just the binding set.
+the plain golden sorts — a wiring change must reproduce binding ORDER, not just the binding set.
 """
 import yaml
 
 from evaluator.config.evaluation import EvaluationConfig
 from evaluator.config.graph_config import build_evaluation_config_kwargs
-from evaluator.pipeline.graph.modes import build_graph_for_config, build_run_graph
+from evaluator.pipeline.graph.build import build_graph_for_config, build_run_graph
 from evaluator.pipeline.graph.operators import node_kind
 
 
@@ -39,17 +38,8 @@ def graph_signature(config_path):
 
 
 def build_run_shape(cfg):
-    """The RUN-path graph for an explicit-node config (attach_fields=False). Pipelines are
-    never touched on the explicit-nodes path (feature derivation is skipped), so None is fine."""
-    return build_run_graph(
-        cfg.graph_template,
-        graph_override=cfg.graph_override,
-        embedding_fusion_config=None,
-        query_opt_config=None,
-        retrieval_pipeline=None,
-        eval_config=cfg,
-        trace_limit=0,
-    )
+    """The RUN-path graph for an explicit-node config (attach_fields=False)."""
+    return build_run_graph(cfg.graph_override, eval_config=cfg)
 
 
 def run_order_signature(config_path):

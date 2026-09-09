@@ -1,4 +1,4 @@
-"""E3: export_to_excel decomposed into summary + per-sample sheet writers.
+"""export_to_excel decomposed into summary + per-sample sheet writers.
 
 Skipped where openpyxl is absent; otherwise round-trips a small results dict and reads the
 cells back to pin the Summary metrics + the Per-Sample grid.

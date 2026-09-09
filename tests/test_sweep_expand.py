@@ -8,7 +8,7 @@ from evaluator.cli.sweep_expand import (
     _combo_label,
     _forward_adjacency,
     expand_axes,
-    expand_config,
+    main,
 )
 
 BASE_NODES = [
@@ -110,33 +110,23 @@ def test_colliding_labels_raise():
         expand_axes(BASE_NODES, BASE_EDGES, axes)
 
 
-def test_expand_config_requires_explicit_edges():
-    base_config = {"graph": {"nodes": BASE_NODES}}
-    axes = _axes({"node": "retrieval", "param": "k", "values": [5, 10]})
-    with pytest.raises(SweepExpandError, match="explicit graph.edges"):
-        expand_config(base_config, axes)
-
-
-def test_expand_config_round_trips_into_evaluation_config():
-    """The expanded graph.nodes/edges shape loads through the real node-centric translator."""
-    from evaluator.config.graph_config import build_evaluation_config_kwargs
-
-    base_config = {
-        "experiment": {"name": "t"},
-        "dataset": {"id": "pubmed_qa", "questions": "q.json", "corpus": "c.json"},
-        "graph": {"nodes": BASE_NODES, "edges": BASE_EDGES},
-    }
-    axes = _axes({"node": "retrieval", "param": "k", "values": [5, 10]})
-    expanded = expand_config(base_config, axes)
-
-    kwargs = build_evaluation_config_kwargs(expanded)
-    node_ids = {
-        n if isinstance(n, str) else n["id"] for n in kwargs["graph_override"]["nodes"]
-    }
-    assert {"retrieval_5", "retrieval_10", "metrics_5", "metrics_10"} <= node_ids
-    assert "retrieval" not in node_ids
-
-
 def test_combo_label_joins_sanitized_values():
     assert _combo_label([("retrieval", "mode", "dense/linear")]) == "dense-linear"
     assert _combo_label([("a", "x", "v1"), ("b", "y", 5)]) == "v1_5"
+
+
+def test_expand_axes_requires_explicit_edges(tmp_path):
+    """A base config with graph.nodes but no port-level graph.edges is refused: the expansion
+    rewires by ``from``/``to``, so an implicitly chained graph has nothing to rewire."""
+    import json
+
+    base = tmp_path / "base.yaml"
+    base.write_text(json.dumps({"graph": {"nodes": BASE_NODES}}), encoding="utf-8")
+    axes = tmp_path / "axes.json"
+    axes.write_text(
+        json.dumps(_axes({"node": "retrieval", "param": "k", "values": [5, 10]})),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SweepExpandError, match="no explicit graph.edges"):
+        main(["--base", str(base), "--axes", str(axes), "--dry-run"])

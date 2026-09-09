@@ -1,12 +1,6 @@
-"""Async job tracking for WebAPI.
-
-Each real evaluation runs as a **separate OS process**: the job supervisor launches the
-CLI (`evaluate.py --config <tmp>.yaml`) per job. The CLI runs the bundle path that works
-reliably; full process isolation means a crashing eval is a *failed job*, not a dead
-server. The parent keeps a thread pool of lightweight supervisors that only launch and
-monitor the subprocess and parse its output — they do no ML work. Injected (test/custom)
-runners run in-process.
-"""
+"""Async job tracking for WebAPI: each real evaluation runs as a separate OS process (the job
+supervisor launches the CLI per job), so a crashing eval is a failed job, not a dead server.
+Thread-pool supervisors only launch/monitor the subprocess; injected (test) runners run in-process."""
 
 import json
 import os
@@ -46,7 +40,7 @@ def _cli_command(interpreter: str, cfg_path: Path) -> list:
 
 def _head_tail_excerpt(lines: list, n: int) -> str:
     """First ``n`` + last ``n`` lines joined (with an omitted-count marker between) so a
-    root cause at either end of a long log survives the excerpt (L3)."""
+    root cause at either end of a long log survives the excerpt."""
     if len(lines) <= 2 * n:
         return "\n".join(lines)
     omitted = len(lines) - 2 * n
@@ -222,7 +216,7 @@ class JobManager:
             lines = self._jobs[job_id].log
             return list(lines[-tail:]) if tail else list(lines)
 
-    # ── submission ─────────────────────────────────────────────────────────────
+    # submission
 
     def submit_evaluation(self, config: EvaluationConfig) -> JobRecord:
         job_id = str(uuid4())
@@ -244,7 +238,7 @@ class JobManager:
         job.future = self._executor.submit(self._supervise, job_id, inproc, subproc)
         return job
 
-    # ── execution ──────────────────────────────────────────────────────────────
+    # execution
 
     def _supervise(self, job_id, inproc, subproc) -> None:
         if not self._start_running(job_id):
@@ -315,7 +309,7 @@ class JobManager:
 
         # Drain stdout in a reader thread so a cancel is honored on a fixed cadence even when
         # the child goes silent — the blocking ``for line in stdout`` could otherwise stall
-        # indefinitely and never re-check the cancel flag (F3).
+        # indefinitely and never re-check the cancel flag.
         def _drain() -> None:
             for raw in proc.stdout:
                 self._append_log(job_id, raw.rstrip())
@@ -345,8 +339,8 @@ class JobManager:
             )
 
     def _error_excerpt(self, job_id: str) -> str:
-        """Head + tail of the job log for a failure message (L3). A long traceback (e.g. a
-        CUDA OOM whose root-cause line is at the *top*) used to lose that line to a
+        """Head + tail of the job log for a failure message. A long traceback (e.g. a
+        CUDA OOM whose root-cause line is at the *top*) would lose that line to a
         tail-only excerpt; keep the first and last ``_ERR_TAIL_LINES`` so both ends survive."""
         return _head_tail_excerpt(self.get_log(job_id), _ERR_TAIL_LINES)
 
@@ -377,7 +371,7 @@ class JobManager:
             if isinstance(result, dict):
                 result["leaderboard_warning"] = f"leaderboard ingest failed: {exc}"
 
-    # ── state transitions ──────────────────────────────────────────────────────
+    # state transitions
 
     def _start_running(self, job_id: str) -> bool:
         with self._lock:
@@ -406,7 +400,7 @@ class JobManager:
             job = self._jobs.get(job_id)
             return bool(job and job.cancel_requested)
 
-    # ── queries / control ──────────────────────────────────────────────────────
+    # queries / control
 
     def get(self, job_id: str) -> JobRecord:
         with self._lock:
@@ -417,22 +411,6 @@ class JobManager:
     def list_jobs(self) -> List[Dict[str, Any]]:
         with self._lock:
             return [job.to_dict() for job in self._jobs.values()]
-
-    def request_cancel(self, job_id: str) -> bool:
-        with self._lock:
-            if job_id not in self._jobs:
-                raise KeyError(job_id)
-            job = self._jobs[job_id]
-            job.cancel_requested = True
-            if job.status == "queued" and job.future and job.future.cancel():
-                job.status = "cancelled"
-                job.finished_at = utc_now()
-                return True
-            proc = job.process
-        if proc is not None and proc.poll() is None:
-            _kill_process_group(proc)
-        with self._lock:
-            return self._jobs[job_id].status in {"cancelled", "completed", "failed"}
 
 
 class _ProgressTail:

@@ -1,16 +1,7 @@
 """Diagnostic retrieval/ASR metrics extracted from the evaluation loop.
 
-These are the per-run analysis metrics. Each function here is pure: it takes already-collected
-per-query data and returns a plain dict/scalar, so it can be unit-tested in
-isolation and reused by any evaluation engine.
-
-Functions:
-    - first_relevant_rank_distribution: histogram of first-relevant rank + failure rate
-    - wer_recall_correlation: Pearson r between per-query WER and Recall@5
-    - categorize_failures: split retrieval misses into asr/embedding/near-miss buckets
-    - embedding_alignment: mean/std cosine similarity between paired audio & text embeddings
-    - per_speaker_breakdown: group WER / Recall@5 by speaker_id from traces
-    - judge_calibration: correlate per-query judge score with Recall@5 / MRR
+Each function is pure (per-query data in, scalar/dict out) so it can be unit-tested and
+reused by any evaluation engine.
 """
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -26,11 +17,8 @@ def first_relevant_rank_distribution(
 ) -> Tuple[Dict[str, int], float]:
     """Histogram of the rank of the first relevant doc, plus the failure rate.
 
-    Returns:
-        (distribution, failure_rate) where distribution has buckets
-        "1", "2", "3-5", "6+", "not_found" and failure_rate is the fraction
-        of queries with no relevant doc retrieved. Relevance is graded: a doc
-        with grade 0 in the relevance map does not count as relevant (matches ir.py).
+    Returns (distribution, failure_rate): buckets are "1", "2", "3-5", "6+", "not_found"; a
+    doc with relevance grade 0 does not count as relevant (matches ir.py).
     """
     rank_dist: Dict[str, int] = {"1": 0, "2": 0, "3-5": 0, "6+": 0, "not_found": 0}
     for retrieved, relevant in zip(all_retrieved, all_relevant):
@@ -59,11 +47,8 @@ def wer_recall_correlation(
     wer_scores: List[float],
     per_query_recall: List[float],
 ) -> Optional[float]:
-    """Pearson correlation between per-query WER and Recall@5.
-
-    Returns None when the inputs are misaligned, too few (<5), or either series
-    has zero variance (correlation undefined).
-    """
+    """Pearson correlation between per-query WER and Recall@5; None if inputs are misaligned,
+    too few (<5), or either series has zero variance."""
     if not wer_scores or len(wer_scores) != len(per_query_recall) or len(wer_scores) < 5:
         return None
     wer_arr = np.array(wer_scores)
@@ -80,18 +65,10 @@ def categorize_failures(
     all_relevant: Optional[List[Dict[str, int]]] = None,
     corpus_doc_ids: Optional[set] = None,
 ) -> Dict[str, int]:
-    """Bucket retrieval misses by likely cause.
-
-    - corpus_gap: missed and the relevant doc is not in the corpus at all
-    - asr_failure: missed and WER high (>0.3)
-    - embedding_mismatch: missed despite near-perfect WER (<0.1)
-    - uncategorized_miss: missed with WER in [0.1, 0.3] — neither cause is clear
-    - near_miss: partial recall while some relevant docs landed at rank 2-5
-
-    ``corpus_gap`` is only detectable when both ``all_relevant`` (per-query relevance
-    maps) and ``corpus_doc_ids`` (the set of doc-ids actually in the corpus / vector
-    store) are supplied; it is checked first so a genuine corpus gap is not
-    misattributed to ASR/embedding. The key is always present (0 when uncheckable).
+    """Bucket retrieval misses by likely cause: corpus_gap, asr_failure, embedding_mismatch,
+    uncategorized_miss, near_miss (thresholds below). ``corpus_gap`` is checked first (needs
+    both ``all_relevant`` and ``corpus_doc_ids``) so a genuine corpus gap isn't misattributed
+    to ASR/embedding; every key is always present (0 when uncheckable).
     """
     cats: Dict[str, int] = {
         "corpus_gap": 0, "asr_failure": 0, "embedding_mismatch": 0,
@@ -121,11 +98,8 @@ def embedding_alignment(
     audio_emb: Optional[np.ndarray],
     text_emb: Optional[np.ndarray],
 ) -> Optional[Dict[str, float]]:
-    """Mean/std cosine similarity between paired audio and text embeddings.
-
-    Returns None when either array is missing or empty. Low mean (e.g. < 0.3)
-    signals the audio and text embedding spaces are poorly aligned.
-    """
+    """Mean/std cosine similarity between paired audio/text embeddings; None if either is
+    missing or empty. Low mean (e.g. < 0.3) signals poor audio-text alignment."""
     if audio_emb is None or text_emb is None:
         return None
     n_pairs = min(len(audio_emb), len(text_emb))
@@ -143,11 +117,8 @@ def embedding_alignment(
 
 
 def per_speaker_breakdown(traces: List[Dict[str, Any]]) -> Optional[Dict[str, Dict[str, float]]]:
-    """Group per-query WER and Recall@5 by speaker_id present in trace metadata.
-
-    Returns None when no trace carries a speaker_id. Exposes accent/speaker bias
-    invisible in aggregate metrics.
-    """
+    """Group per-query WER and Recall@5 by speaker_id in trace metadata; None if no trace
+    has one. Exposes accent/speaker bias invisible in aggregate metrics."""
     spk_wer: Dict[str, List[float]] = {}
     spk_rec: Dict[str, List[float]] = {}
     for trace in traces:
@@ -186,12 +157,9 @@ def judge_calibration(
     all_retrieved: List[List[str]],
     all_relevant: List[Dict[str, int]],
 ) -> Dict[str, float]:
-    """Correlate per-query judge score with Recall@5 and MRR.
-
-    Returns a dict that may contain "judge_vs_Recall5_correlation" and
-    "judge_vs_MRR_correlation". Empty when fewer than 5 valid judge scores or
-    judge scores have zero variance.
-    """
+    """Correlate per-query judge score with Recall@5 and MRR; keys are
+    "judge_vs_Recall5_correlation" and "judge_vs_MRR_correlation" (only when computable).
+    Empty when fewer than 5 valid judge scores or judge scores have zero variance."""
     out: Dict[str, float] = {}
     scores_arr = np.array(judge_scores)
     valid_mask = ~np.isnan(scores_arr)

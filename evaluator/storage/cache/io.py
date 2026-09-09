@@ -4,7 +4,7 @@ import hashlib
 import json
 import numpy as np
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Callable, Optional, Dict
 
 
 def _file_checksum(path: Path, block_size: int = 1 << 16) -> str:
@@ -32,16 +32,56 @@ class IoMixin:
         with open(path, "w") as f:
             json.dump(payload, f, indent=indent)
 
-    def _load_json_cache(
+    def _resolve_cached_artifact(
         self, cache_type: str, cache_key: str, extension: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[Path]:
+        """The on-disk artifact for a cache entry, or None if caching is off or it is absent.
+
+        The manifest's recorded path wins; the conventional path is the fallback."""
         if not self.enabled:
             return None
         fallback_path = self._get_cache_path(cache_type, cache_key, extension)
         resolved = self._resolve_manifest_path(cache_type, cache_key, fallback_path)
-        if resolved is not None and resolved.exists():
-            return self._read_json_file(resolved)
-        return None
+        if resolved is None or not resolved.exists():
+            return None
+        return resolved
+
+    def _store_artifact(
+        self,
+        cache_type: str,
+        cache_key: str,
+        extension: str,
+        write: Callable[[Path], None],
+        *,
+        stage: str,
+        model_name: Optional[str] = None,
+        model_version: Optional[str] = None,
+        input_hash: Optional[str] = None,
+        config_hash: Optional[str] = None,
+        payload_hash: Optional[str] = None,
+    ) -> None:
+        """Write one artifact through ``write(path)`` and record it in the manifest."""
+        if not self.enabled:
+            return
+        cache_path = self._get_cache_path(cache_type, cache_key, extension)
+        write(cache_path)
+        self._upsert_manifest_entry(
+            cache_type=cache_type,
+            cache_key=cache_key,
+            artifact_path=cache_path,
+            stage=stage,
+            model_name=model_name,
+            model_version=model_version,
+            input_hash=input_hash,
+            config_hash=config_hash,
+            payload_hash=payload_hash,
+        )
+
+    def _load_json_cache(
+        self, cache_type: str, cache_key: str, extension: str
+    ) -> Optional[Dict[str, Any]]:
+        resolved = self._resolve_cached_artifact(cache_type, cache_key, extension)
+        return self._read_json_file(resolved) if resolved is not None else None
 
     def _save_json_cache(
         self,
@@ -50,40 +90,22 @@ class IoMixin:
         extension: str,
         payload: Dict[str, Any],
         *,
-        stage: str,
-        model_name: Optional[str] = None,
-        model_version: Optional[str] = None,
-        input_hash: Optional[str] = None,
-        config_hash: Optional[str] = None,
-        payload_hash: Optional[str] = None,
         indent: Optional[int] = None,
+        **manifest_fields: Any,
     ) -> None:
-        if not self.enabled:
-            return
-        cache_path = self._get_cache_path(cache_type, cache_key, extension)
-        self._write_json_file(cache_path, payload, indent=indent)
-        self._upsert_manifest_entry(
-            cache_type=cache_type,
-            cache_key=cache_key,
-            artifact_path=cache_path,
-            stage=stage,
-            model_name=model_name,
-            model_version=model_version,
-            input_hash=input_hash,
-            config_hash=config_hash,
-            payload_hash=payload_hash,
+        self._store_artifact(
+            cache_type,
+            cache_key,
+            extension,
+            lambda path: self._write_json_file(path, payload, indent=indent),
+            **manifest_fields,
         )
 
     def _load_numpy_cache(
         self, cache_type: str, cache_key: str, extension: str
     ) -> Optional[np.ndarray]:
-        if not self.enabled:
-            return None
-        fallback_path = self._get_cache_path(cache_type, cache_key, extension)
-        resolved = self._resolve_manifest_path(cache_type, cache_key, fallback_path)
-        if resolved is not None and resolved.exists():
-            return np.load(resolved)
-        return None
+        resolved = self._resolve_cached_artifact(cache_type, cache_key, extension)
+        return np.load(resolved) if resolved is not None else None
 
     def _save_numpy_cache(
         self,
@@ -91,38 +113,21 @@ class IoMixin:
         cache_key: str,
         extension: str,
         array: np.ndarray,
-        *,
-        stage: str,
-        model_name: Optional[str] = None,
-        model_version: Optional[str] = None,
-        input_hash: Optional[str] = None,
-        config_hash: Optional[str] = None,
-        payload_hash: Optional[str] = None,
+        **manifest_fields: Any,
     ) -> None:
-        if not self.enabled:
-            return
-        cache_path = self._get_cache_path(cache_type, cache_key, extension)
-        np.save(cache_path, array)
-        self._upsert_manifest_entry(
-            cache_type=cache_type,
-            cache_key=cache_key,
-            artifact_path=cache_path,
-            stage=stage,
-            model_name=model_name,
-            model_version=model_version,
-            input_hash=input_hash,
-            config_hash=config_hash,
-            payload_hash=payload_hash,
+        self._store_artifact(
+            cache_type,
+            cache_key,
+            extension,
+            lambda path: np.save(path, array),
+            **manifest_fields,
         )
 
     def _load_npz_cache(
         self, cache_type: str, cache_key: str, extension: str
     ) -> Optional[Dict[str, np.ndarray]]:
-        if not self.enabled:
-            return None
-        fallback_path = self._get_cache_path(cache_type, cache_key, extension)
-        resolved = self._resolve_manifest_path(cache_type, cache_key, fallback_path)
-        if resolved is None or not resolved.exists():
+        resolved = self._resolve_cached_artifact(cache_type, cache_key, extension)
+        if resolved is None:
             return None
         with np.load(resolved) as data:
             return {
@@ -135,27 +140,13 @@ class IoMixin:
         cache_type: str,
         cache_key: str,
         extension: str,
-        *,
-        stage: str,
-        model_name: Optional[str] = None,
-        model_version: Optional[str] = None,
-        input_hash: Optional[str] = None,
-        config_hash: Optional[str] = None,
-        payload_hash: Optional[str] = None,
-        **arrays: np.ndarray,
+        arrays: Dict[str, np.ndarray],
+        **manifest_fields: Any,
     ) -> None:
-        if not self.enabled:
-            return
-        cache_path = self._get_cache_path(cache_type, cache_key, extension)
-        np.savez_compressed(cache_path, **arrays)
-        self._upsert_manifest_entry(
-            cache_type=cache_type,
-            cache_key=cache_key,
-            artifact_path=cache_path,
-            stage=stage,
-            model_name=model_name,
-            model_version=model_version,
-            input_hash=input_hash,
-            config_hash=config_hash,
-            payload_hash=payload_hash,
+        self._store_artifact(
+            cache_type,
+            cache_key,
+            extension,
+            lambda path: np.savez_compressed(path, **arrays),
+            **manifest_fields,
         )

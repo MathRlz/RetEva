@@ -1,18 +1,7 @@
 """Operator vocabulary: the alias bijection (evaluator-architecture.md §9).
 
-The named node types collapse into 12 **operators** whose behavior is selected by fields
-(asr and tts are first-class — two different models' nodes, no discriminator). This module
-holds the two halves of that bijection:
-
-* ``ALIASES`` — *forward*: ``old_name -> (operator, fixed_fields)``. Used at one chokepoint
-  (``wiring._normalize_spec_item``) to expand a legacy node-type string (or an
-  operator-authored ``{op, fields}`` spec) into ``(operator, params)`` **without changing the
-  node id** — so old configs/presets and the parity baselines keep their exact node ids.
-* ``node_kind(operator, params)`` — *reverse*: maps an operator instance back to its concrete
-  node kind (e.g. ``embed{axis:corpus}`` → ``corpus_embedding``), so every place that keys on a
-  specific behavior (device map, offload, V[s] validation, branch ordering, handler dispatch, …)
-  recovers it and reuses its kind-specific logic. The kind names are the pre-collapse node-type
-  vocabulary, which is also the ``ALIASES`` keys — so the two halves stay in lockstep.
+``ALIASES`` maps a legacy node-type name to ``(operator, fixed_fields)``; ``node_kind``
+reverses it. The two halves must stay in lockstep — same keys, inverse directions.
 """
 
 from __future__ import annotations
@@ -102,9 +91,9 @@ def expand_alias(name: str, params: Optional[dict]) -> Tuple[str, Optional[dict]
     if name not in ALIASES:
         return name, params
     operator, fixed = ALIASES[name]
-    from .registry import _NODE_REGISTRY  # lazy: avoid an import cycle
+    from .registry import NODE_REGISTRY  # lazy: avoid an import cycle
 
-    if operator not in _NODE_REGISTRY:
+    if operator not in NODE_REGISTRY:
         return name, params  # operator not collapsed yet — keep the legacy node
     return operator, {**fixed, **(params or {})}
 

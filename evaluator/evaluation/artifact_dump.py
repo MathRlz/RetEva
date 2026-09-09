@@ -1,9 +1,8 @@
-"""Opt-in mid-run artifact inspection (architecture-improvements §7).
+"""Opt-in mid-run artifact inspection.
 
 Set ``EVALUATOR_DUMP_ARTIFACTS=node_a,node_b`` to have the executor write each named node's
-published artifacts to ``<EVALUATOR_DUMP_DIR or 'artifact_dumps'>/<node>.<artifact>.jsonl``
-right after the node runs — the debugging hook researchers otherwise hand-roll, with no code
-change. Best-effort: a dump failure is logged, never raised.
+published artifacts to ``<EVALUATOR_DUMP_DIR or 'artifact_dumps'>/<node>.<artifact>.jsonl`` right
+after it runs. Best-effort: a dump failure is logged, never raised.
 """
 
 from __future__ import annotations
@@ -23,8 +22,7 @@ def _dump_targets() -> set:
 
 
 def _rows(value: Any):
-    """Best-effort (id, value) rows for an artifact. ItemSets become per-item rows; anything
-    else is wrapped as a single ``{"value": …}`` row."""
+    """(id, value) rows: ItemSets become per-item rows, else one ``{"value": …}`` row."""
     items = getattr(value, "items", None)
     if callable(items):
         try:
@@ -37,7 +35,7 @@ def _rows(value: Any):
 
 
 def _coerce(val: Any) -> Any:
-    """JSON-friendly form: ndarrays → list (truncated), dataclasses/objects → str fallback."""
+    """JSON-friendly form: ndarrays truncate to list, other objects fall back to str."""
     tolist = getattr(val, "tolist", None)
     if callable(tolist):
         try:

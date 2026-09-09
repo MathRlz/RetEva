@@ -1,4 +1,4 @@
-"""Pins the consolidated L2-normalization (audit). One canonical `l2_normalize` replaced 9 copies
+"""Pins the consolidated L2-normalization. One canonical `l2_normalize` replaced 9 copies
 of the matrix-floor / single-vector-guard / fusion-`where` rules across the 3 vector stores +
 embedding_fusion. On real embeddings (norm >> MIN_NORM_THRESHOLD) all of them are identical — this
 test fixes that equivalence so the consolidation can't silently change normalization.

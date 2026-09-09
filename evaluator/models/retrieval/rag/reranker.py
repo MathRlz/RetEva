@@ -2,7 +2,7 @@
 
 A reranker is duck-typed: implement ``rerank(query, documents, top_k=None) ->
 List[(payload, score)]`` + ``name()`` and register with ``@register_reranker_model``
-(§15.1) — no base class required.
+(see ``evaluator-architecture.md`` §15.1) — no base class required.
 """
 from typing import Any, List, Optional, Tuple
 
@@ -15,7 +15,6 @@ logger = get_logger(__name__)
 
 
 def _extract_text(payload: Any) -> str:
-    """Extract text content from a payload object."""
     if isinstance(payload, dict):
         return str(payload.get("text", ""))
     return str(payload)
@@ -27,13 +26,7 @@ def _extract_text(payload: Any) -> str:
     description='Cross-encoder reranker using sentence-transformers',
 )
 class CrossEncoderReranker:
-    """Cross-encoder reranker using sentence-transformers.
-
-    Supports models like:
-    - cross-encoder/ms-marco-MiniLM-L-6-v2
-    - BAAI/bge-reranker-base
-    - cross-encoder/ms-marco-TinyBERT-L-2-v2
-    """
+    """Cross-encoder reranker using sentence-transformers."""
 
     def __init__(
         self,
@@ -42,15 +35,6 @@ class CrossEncoderReranker:
         batch_size: int = 32,
         max_length: int = 512,
     ):
-        """Initialize the cross-encoder reranker.
-
-        Args:
-            model_name: HuggingFace model name or path.
-            device: Device to run the model on (e.g., "cuda:0", "cpu").
-                   If None, auto-detects.
-            batch_size: Batch size for scoring.
-            max_length: Maximum sequence length for tokenization.
-        """
         self._model_name = model_name
         self.batch_size = batch_size
         self.max_length = max_length
@@ -71,7 +55,6 @@ class CrossEncoderReranker:
         logger.info(f"Loaded CrossEncoder reranker: {model_name}")
 
     def name(self) -> str:
-        """Return the reranker model name."""
         return self._model_name
 
     def rerank(
@@ -80,34 +63,19 @@ class CrossEncoderReranker:
         documents: List[Tuple[Any, float]],
         top_k: Optional[int] = None,
     ) -> List[Tuple[Any, float]]:
-        """Rerank documents based on query relevance.
-
-        Args:
-            query: The query text.
-            documents: List of (payload, initial_score) tuples.
-            top_k: Number of top results to return.
-
-        Returns:
-            List of (payload, reranker_score) tuples sorted by relevance.
-        """
+        """Rerank documents based on query relevance."""
         if not documents:
             return []
 
-        # Extract texts for scoring
         texts = [_extract_text(payload) for payload, _ in documents]
-
-        # Create query-document pairs
         pairs = [[query, text] for text in texts]
-
-        # Get cross-encoder scores
         scores = self.model.predict(pairs, batch_size=self.batch_size)
 
-        # Handle both single and batch predictions
+        # cross-encoder .predict returns a bare scalar for a single pair, an array for a batch
         if isinstance(scores, (int, float)):
             scores = [scores]
         scores = np.array(scores).flatten()
 
-        # Combine payloads with new scores and sort
         scored = [
             (payload, float(score))
             for (payload, _), score in zip(documents, scores)

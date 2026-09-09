@@ -1,7 +1,6 @@
-"""Audio stage handlers: TTS gap-fill + audio-axis augmentation (§4.1 P4).
+"""Audio stage handlers: TTS gap-fill + audio-axis augmentation.
 
-Split out of ``handlers/source.py`` (B4) — the source module owns dataset/question
-concerns; this one owns the audio bricks. Registrations unchanged.
+The source module owns dataset/question concerns; this one owns the audio bricks.
 """
 
 from __future__ import annotations
@@ -12,12 +11,21 @@ from ...logging_config import get_logger
 from ..executor.state import RunState
 from ..stage_registry import register_stage_handler
 from ..audio_refs import audio_refs_from_questions
+from ...datasets.core import load_audio_file
+from ..provenance import item_seed, DEFAULT_SEED
+from ..item_set import ItemSet
+from ...config.audio_augmentation import AudioAugmentationConfig
+from ...pipeline.audio.augmentation import AudioAugmenter
+from ..audio_refs import RefAudioDatasetView  # noqa: F401  (doc link)
+from ...config.node_config import resolve_node_config
+from ..executor.cpu_parallel import run_per_item
+from ...pipeline.audio.prepare import synthesize_missing_query_audio
 
 logger = get_logger(__name__)
 
 
 def _augment_audio_one(id_path, *, augmenter, n_variants, base_seed, node_id, out_dir):
-    """Per-item audio augmentation — the 4b ``parallel_map`` unit: decode one query clip, write its
+    """Per-item audio augmentation — the ``parallel_map`` unit: decode one query clip, write its
     ``n_variants`` perturbed WAV(s), return the ``(vid, out_path)`` pairs (lineage ids ``q·augN``
     when n_variants > 1). Top-level + picklable so the ``process`` backend can run it; the
     perturbation is a pure function of (audio, sr, seed), so every backend is byte-identical."""
@@ -26,8 +34,6 @@ def _augment_audio_one(id_path, *, augmenter, n_variants, base_seed, node_id, ou
     import numpy as np
     import soundfile as sf
 
-    from ...datasets.core import load_audio_file
-    from ..provenance import item_seed
 
     qid, payload = id_path
     if isinstance(payload, tuple):
@@ -54,7 +60,6 @@ def _inmemory_audio_refs(s: "RunState"):
     items carry decoded audio (AudioSamplesQueryDataset — admed_voice etc.). None when the
     dataset has no such items. The tuples ride the same per-item pipeline as path refs
     (``_augment_audio_one`` handles both payload shapes)."""
-    from ..item_set import ItemSet
 
     ds = s.dataset
     if ds is None:
@@ -79,30 +84,20 @@ def _inmemory_audio_refs(s: "RunState"):
 
 
 def _stage_augment_audio(s: RunState) -> None:
-    """Audio-axis robustness (§4.1 P4): perturb each query clip, republish refs.
-
-    Reads the bus `query_audio` refs, decodes each clip, applies the seeded
-    AudioAugmenter (per-item: ``item_seed(seed, query_id, node_id, variant)``),
-    writes variant WAVs under ``<output_dir>/augmented_audio/<node_id>/`` and
-    publishes the new ref ItemSet (lineage ids ``q·augN`` when n_variants > 1).
-    No refs on the bus → no-op (warn).
-    """
+    """Audio-axis robustness: perturb each query clip, republish refs. Writes variant WAVs
+    under ``<output_dir>/augmented_audio/<node_id>/`` and publishes the new ref ItemSet
+    (lineage ids ``q·augN`` when n_variants > 1). No refs on the bus → no-op (warn)."""
     import os
 
-    from ...config.audio_augmentation import AudioAugmentationConfig
-    from ...pipeline.audio.augmentation import AudioAugmenter
-    from ..audio_refs import RefAudioDatasetView  # noqa: F401  (doc link)
-    from ..item_set import ItemSet
-    from ..provenance import DEFAULT_SEED
 
     refs = s.keyed_items("query_audio", default=None)
     if not isinstance(refs, ItemSet) or not refs.ids or not all(
         isinstance(v, str) for v in refs.values
     ):
         # No path refs on the bus. A sample-based dataset (admed_voice: real recordings
-        # decoded in memory, no audio_path) legitimately publishes none — feed the
-        # augmenter the in-memory audio instead. Only when the dataset has none either
-        # is it a real upstream failure (a tts node that failed to publish).
+        # decoded in memory, no audio_path) legitimately publishes none — feed the augmenter
+        # in-memory audio instead. Only when the dataset has none either is it a real upstream
+        # failure.
         refs = _inmemory_audio_refs(s)
         if refs is None:
             raise RuntimeError(
@@ -113,7 +108,6 @@ def _stage_augment_audio(s: RunState) -> None:
             )
     node_id = getattr(s.current_node, "id", "augment_audio")
     # Resolved before execution: global ⊕ node params; the node's presence ⇒ enabled.
-    from ..node_config import resolve_node_config
 
     cfg = s.resolved_config() or resolve_node_config(
         getattr(s.config, "augmentation", None) or AudioAugmentationConfig(),
@@ -130,8 +124,6 @@ def _stage_augment_audio(s: RunState) -> None:
         node_id,
     )
     os.makedirs(out_dir, exist_ok=True)
-
-    from ..executor.cpu_parallel import run_per_item
 
     # Per-item decode + perturb + write; the perturbation is pure in (audio, sr, seed).
     per_item = run_per_item(
@@ -163,7 +155,6 @@ def _stage_tts(s: RunState) -> None:
     questions = getattr(s.dataset, "questions", None)
     if not questions:
         return
-    from ...pipeline.audio.prepare import synthesize_missing_query_audio
 
     _t = time.perf_counter()
     # resolved before execution (global ⊕ node params, presence ⇒ enabled).
@@ -180,12 +171,10 @@ def _stage_tts(s: RunState) -> None:
     s.stage_times["tts_s"] = s.stage_times.get("tts_s", 0.0) + (
         time.perf_counter() - _t
     )
-    # Publish the now-complete audio refs (P4): questions were gap-filled in place
+    # Publish the now-complete audio refs: questions were gap-filled in place
     # (legacy consumers), the bus carries the same paths for audio-axis nodes.
     refs = audio_refs_from_questions(questions)
     if refs is not None:
-        from ..item_set import ItemSet
-
         ids, paths = refs
         s.put_artifact("query_audio", ItemSet(ids, paths))
     else:

@@ -1,9 +1,5 @@
-"""SONAR text embedding model implementation.
-
-SONAR (Sentence-level multimOdal and laNguage-Agnostic Representations) provides
-a shared text/speech embedding space. This text encoder lands in the same 1024-d
-space as the SONAR speech encoder (``a2e/sonar.py``), enabling zero-shot
-cross-modal retrieval.
+"""SONAR text embedding model implementation — shares SONAR's 1024-d text/speech space with
+the speech encoder (``a2e/sonar.py``), enabling zero-shot cross-modal retrieval.
 """
 from dataclasses import dataclass
 from typing import ClassVar, Dict, List
@@ -37,14 +33,6 @@ class SonarTextModel(SonarPipelineMixin, TextEmbeddingModel):
         source_lang: str = "eng_Latn",
         tokenizer: str = "text_sonar_basic_encoder",
     ):
-        """
-        Initialize SONAR text encoder.
-
-        Args:
-            model_name: SONAR text encoder identifier.
-            source_lang: SONAR language code for the input text (e.g. "eng_Latn").
-            tokenizer: SONAR tokenizer identifier (defaults to the encoder).
-        """
         self.model_name = model_name
         self.tokenizer = tokenizer
         self.source_lang = source_lang

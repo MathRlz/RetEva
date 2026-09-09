@@ -4,6 +4,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..types import AudioTranscriptionDataset, register_eval_dataset
+from .. import core
+from ...config.dataset_descriptors import resolve_split
+from ..runtime import AudioSamplesQueryDataset
+from ..loaders.base import AudioSample
 
 if TYPE_CHECKING:
     from ...config.data import DataConfig
@@ -24,10 +28,6 @@ class AdmedVoiceDataset(AudioTranscriptionDataset):
     @classmethod
     def from_config(cls, data: "DataConfig") -> "QueryDataset":
         import pandas as pd
-        from ..core import load_admed_voice_corpus, load_audio_file
-        from ..descriptor import resolve_split
-        from ..runtime import AudioSamplesQueryDataset
-        from ..loaders.base import AudioSample
 
         split = (resolve_split(data, cls.default_split) or "both").lower()
         if split == "validation":
@@ -39,7 +39,7 @@ class AdmedVoiceDataset(AudioTranscriptionDataset):
         test_size = getattr(data, "test_size", 0.0)
         if split in ("train", "test") and not test_size:
             test_size = 0.3
-        train_df, test_df = load_admed_voice_corpus(
+        train_df, test_df = core.load_admed_voice_corpus(
             test_size=test_size, base_path=base_path
         )
         if split == "train":
@@ -51,7 +51,7 @@ class AdmedVoiceDataset(AudioTranscriptionDataset):
 
         samples = []
         for idx, row in df.reset_index(drop=True).iterrows():
-            waveform, sr = load_audio_file(row["file_path"])
+            waveform, sr = core.load_audio_file(row["file_path"])
             # admed filenames repeat across category/speaker dirs, and the corpus even has
             # genuinely duplicated file rows — so any natural key collides. Duplicate
             # question_ids make dataset_source drop ALL ground truth (→ empty WER/CER + IR

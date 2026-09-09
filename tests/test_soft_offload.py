@@ -1,6 +1,6 @@
-"""Roadmap 2c: soft-CPU offload warm pool on ModelServiceProvider (LRU + TTL + reuse)."""
+"""Soft-CPU offload warm pool on ModelServiceProvider (LRU + TTL + reuse)."""
 
-from evaluator.services.model_provider import ModelServiceProvider
+from evaluator.pipeline.model_provider import ModelServiceProvider
 
 
 class _FakeService:
@@ -109,4 +109,4 @@ def test_warm_reuse_reactivates_to_device():
     got = p._get_or_create(p._asr_services, ("k1",), lambda: object(), "asr:whisper@cuda:1")
     assert got is m and svc.moved_to == "cuda:1"
     assert p.offload_stats()["warm_reuses"] == 1
-    assert ("k1",) not in p._warm                         # no longer parked
+    assert ("k1",) not in p._warm                         # not parked once reactivated

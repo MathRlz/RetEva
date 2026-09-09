@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 from ..registry import register_tts_model
 from .base_tts import BaseTTSModel
+from ...utils.audio import resample_audio
 
 logger = logging.getLogger(__name__)
 
@@ -18,22 +19,13 @@ logger = logging.getLogger(__name__)
     description='Piper TTS — fast, local, multi-language',
 )
 class PiperTTS(BaseTTSModel):
-    """Piper TTS provider - fast, local, multi-language."""
-
     def __init__(self, config):
-        """
-        Initialize Piper TTS provider.
-
-        Args:
-            config: AudioSynthesisConfig instance.
-        """
         super().__init__(config)
         self._check_installation()
         self.voice_path = self._get_voice_path()
         logger.info(f"Piper TTS initialized with voice: {config.voice}")
 
     def _check_installation(self):
-        """Check if piper is installed and accessible."""
         try:
             result = subprocess.run(
                 ["piper", "--version"],
@@ -54,7 +46,6 @@ class PiperTTS(BaseTTSModel):
             logger.warning(f"Could not check Piper version: {e}")
 
     def _get_voice_path(self) -> str:
-        """Get path to voice model file."""
         # config.voice may already be a literal path (relative or absolute) to the
         # .onnx file itself, e.g. because the user ran `python3 -m piper.download_voices`
         # by hand and wants to point straight at the result.
@@ -63,7 +54,6 @@ class PiperTTS(BaseTTSModel):
             logger.debug(f"Using voice path directly: {direct}")
             return str(direct)
 
-        # Try with and without .onnx extension
         voice_name = self.config.voice
         if not voice_name.endswith('.onnx'):
             voice_name += '.onnx'
@@ -95,13 +85,10 @@ class PiperTTS(BaseTTSModel):
                 logger.debug(f"Found voice at: {voice_path}")
                 return str(voice_path)
 
-        # Not found locally — try downloading it automatically via piper's own
-        # download tool before giving up.
         downloaded = self._download_voice(voice_name)
         if downloaded:
             return downloaded
 
-        # Voice not found - provide helpful error message
         searched_paths = [str(d / voice_name) for d in voice_dirs if d.exists()]
         raise FileNotFoundError(
             f"Voice model not found: {self.config.voice}\n"
@@ -151,34 +138,21 @@ class PiperTTS(BaseTTSModel):
         return None
 
     def synthesize(self, text: str) -> np.ndarray:
-        """
-        Synthesize audio using piper command-line tool.
-
-        Args:
-            text: Text to synthesize.
-
-        Returns:
-            audio: Float32 numpy array with audio waveform.
-        """
-        # Create temporary output file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             output_path = f.name
 
         try:
-            # Build piper command
             cmd = [
                 "piper",
                 "--model", self.voice_path,
                 "--output_file", output_path,
             ]
 
-            # Add optional parameters
             if self.config.speed != 1.0:
                 # Piper uses length_scale (inverse of speed)
                 length_scale = 1.0 / self.config.speed
                 cmd.extend(["--length_scale", str(length_scale)])
 
-            # Run synthesis
             logger.debug(f"Running Piper: {' '.join(cmd)}")
             result = subprocess.run(
                 cmd,
@@ -191,7 +165,6 @@ class PiperTTS(BaseTTSModel):
             if result.stderr:
                 logger.debug(f"Piper stderr: {result.stderr.decode('utf-8', errors='ignore')}")
 
-            # Load synthesized audio
             audio = self._load_audio(output_path)
 
             return audio
@@ -204,7 +177,6 @@ class PiperTTS(BaseTTSModel):
         except subprocess.TimeoutExpired:
             raise RuntimeError("Piper synthesis timed out (>30s)")
         finally:
-            # Clean up temp file
             if os.path.exists(output_path):
                 try:
                     os.unlink(output_path)
@@ -212,7 +184,6 @@ class PiperTTS(BaseTTSModel):
                     logger.warning(f"Failed to delete temp file {output_path}: {e}")
 
     def _load_audio(self, path: str) -> np.ndarray:
-        """Load audio file and resample if needed."""
         try:
             import soundfile as sf
         except ImportError:
@@ -220,16 +191,12 @@ class PiperTTS(BaseTTSModel):
                 "soundfile is required for Piper TTS. Install with: pip install soundfile"
             )
 
-        # Load audio
         audio, sr = sf.read(path)
 
-        # Convert stereo to mono if needed
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
 
-        # Resample if needed
         if sr != self.config.sample_rate:
-            from ...utils.audio import resample_audio
             audio = resample_audio(audio, sr, self.config.sample_rate)
 
         return audio.astype(np.float32)

@@ -37,7 +37,7 @@ def test_query_relevant_doc_is_its_sentence():
 
 
 def test_corpus_doc_ids_logs_on_broken_get_corpus():
-    # H1: a raising get_corpus() must be logged, not silently swallowed (which would disable
+    # a raising get_corpus() must be logged, not silently swallowed (which would disable
     # IR metrics with no trace). Capture off the logger directly (propagate=False once
     # setup_logging runs, so pytest caplog can't see it).
     import io

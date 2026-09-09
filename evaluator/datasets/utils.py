@@ -1,15 +1,13 @@
 """Dataset loading utilities with format auto-detection.
 
 Provides common utilities for loading JSON, JSONL, and CSV files,
-with automatic format detection and schema validation.
+with automatic format detection.
 """
 
 from __future__ import annotations
 
 import csv
 import json
-import re
-import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -88,17 +86,14 @@ def load_data_file(path: Union[str, Path]) -> Union[Dict[str, Any], List[Any]]:
 
 
 class DatasetLoader:
-    """Dataset loader with format auto-detection and schema validation.
+    """Dataset loader with format auto-detection.
 
     Example:
         loader = DatasetLoader("data/questions.jsonl")
         data = loader.load()
-        if loader.validate_schema(["question_id", "question_text"]):
-            print("Schema is valid")
     """
 
     def __init__(self, path: Union[str, Path]):
-        """Initialize the dataset loader."""
         self.path = Path(path)
         self._data: Optional[Union[Dict[str, Any], List[Any]]] = None
         self._format: Optional[str] = None
@@ -115,69 +110,3 @@ class DatasetLoader:
         if self._data is None:
             self._data = load_data_file(self.path)
         return self._data
-
-    def validate_schema(self, required_fields: List[str]) -> bool:
-        """Return True if the dataset has all required fields: top-level keys
-        for dict datasets, per-item fields for list datasets."""
-        data = self.load()
-
-        if isinstance(data, dict):
-            return all(field in data for field in required_fields)
-
-        if isinstance(data, list):
-            for item in data:
-                if not isinstance(item, dict):
-                    return False
-                if not all(field in item for field in required_fields):
-                    return False
-            return True
-
-        return False
-
-
-def normalize_text(text: str) -> str:
-    """Normalize text for consistent comparison:
-    Unicode NFC, lowercase, collapse whitespace runs, strip."""
-    if not text:
-        return ""
-    text = unicodedata.normalize("NFC", text)
-    text = text.lower()
-    text = re.sub(r"\s+", " ", text)
-    text = text.strip()
-    return text
-
-
-def extract_field(item: Any, field_path: str) -> Any:
-    """Extract a field from a nested structure via dot notation ("metadata.author";
-    numeric parts index lists: "items.0.id"). Supports dict, list/tuple, and
-    attribute access; returns None if the path does not exist."""
-    if item is None:
-        return None
-
-    parts = field_path.split(".")
-    current = item
-
-    for part in parts:
-        if current is None:
-            return None
-
-        # Try dict access
-        if isinstance(current, dict):
-            current = current.get(part)
-        # Try list/tuple access with numeric index
-        elif isinstance(current, (list, tuple)):
-            try:
-                idx = int(part)
-                if 0 <= idx < len(current):
-                    current = current[idx]
-                else:
-                    return None
-            except ValueError:
-                return None
-        # Try attribute access
-        elif hasattr(current, part):
-            current = getattr(current, part)
-        else:
-            return None
-
-    return current

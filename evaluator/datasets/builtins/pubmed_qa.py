@@ -6,6 +6,8 @@ from typing import List, TYPE_CHECKING
 
 from ...errors import ConfigurationError
 from ..types import MultimodalQADataset, register_eval_dataset
+from ..core import load_corpus_documents, load_questions_file
+from ..runtime import LazyAudioQueryDataset
 
 if TYPE_CHECKING:
     from ...config.data import DataConfig
@@ -42,9 +44,6 @@ class PubMedQABuiltinDataset(MultimodalQADataset):
 
     @classmethod
     def from_config(cls, data: "DataConfig") -> "QueryDataset":
-        from ..core import load_corpus_documents, load_questions_file
-        from ..runtime import LazyAudioQueryDataset
-
         if getattr(data, "prepared_dataset_dir", None):
             dataset_dir = Path(data.prepared_dataset_dir)
             if not dataset_dir.exists():

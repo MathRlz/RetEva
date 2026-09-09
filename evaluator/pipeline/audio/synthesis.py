@@ -6,6 +6,8 @@ import hashlib
 import os
 from pathlib import Path
 from ...logging_config import get_logger
+from evaluator.models.registry import tts_registry  # lazily loads a tts model on lookup
+from ...utils.audio import resample_audio
 
 logger = get_logger(__name__)
 
@@ -14,12 +16,6 @@ class AudioSynthesizer:
     """Base class for text-to-speech synthesis with caching support."""
 
     def __init__(self, config):
-        """
-        Initialize audio synthesizer.
-
-        Args:
-            config: AudioSynthesisConfig instance with TTS settings.
-        """
         self.config = config
         self.skip_cache = getattr(config, "skip_cache", False)
         self._cache_hits = 0
@@ -43,14 +39,9 @@ class AudioSynthesizer:
         logger.info("Initialized TTS model: %s", config.provider)
 
     def _create_provider(self):
-        """Factory method to create TTS model backend based on config.
-
-        Registry-driven: any provider registered via ``@register_tts_model``
-        (incl. aliases) is selectable — no hardcoded list here.
-        """
+        """Registry-driven: any provider registered via ``@register_tts_model``
+        (incl. aliases) is selectable — no hardcoded list here."""
         provider_name = (self.config.provider or "").lower()
-        # The TTS registry lazily imports the tts package on first lookup.
-        from evaluator.models.registry import tts_registry
 
         try:
             provider_cls = tts_registry.get(provider_name)
@@ -62,16 +53,7 @@ class AudioSynthesizer:
         return provider_cls(self.config)
 
     def synthesize(self, text: str, output_path: Optional[str] = None) -> np.ndarray:
-        """
-        Synthesize audio from text.
-
-        Args:
-            text: Text to synthesize.
-            output_path: Optional path to save audio file.
-
-        Returns:
-            audio_array: Float32 waveform in [-1, 1] range.
-        """
+        """Synthesize audio from text. Returns a float32 waveform in [-1, 1] range."""
         if not text or not text.strip():
             logger.warning("Empty text provided for synthesis, returning silence")
             return np.zeros(self.config.sample_rate, dtype=np.float32)
@@ -84,7 +66,6 @@ class AudioSynthesizer:
                 logger.info("TTS cache hit (file): %s", output_path)
                 return audio
 
-        # Check text-hash cache
         if self.cache_dir:
             cache_key = self._get_cache_key(text)
             cached_audio = self._load_from_cache(cache_key)
@@ -96,7 +77,6 @@ class AudioSynthesizer:
                 return cached_audio
 
         self._cache_misses += 1
-        # Synthesize
         logger.debug("TTS synthesizing: '%s...'", text[:60])
         audio = self.provider.synthesize(text)
         provider_sr = int(
@@ -104,7 +84,6 @@ class AudioSynthesizer:
         )
         audio = self._resample_if_needed(audio, provider_sr)
 
-        # Normalize to [-1, 1]
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
 
@@ -112,7 +91,6 @@ class AudioSynthesizer:
         if max_val > 0:
             audio = audio / max_val
 
-        # Cache
         if self.cache_dir:
             self._save_to_cache(cache_key, audio)
             logger.debug("Cached audio (key: %s...)", cache_key[:16])
@@ -126,7 +104,6 @@ class AudioSynthesizer:
 
     def _resample_if_needed(self, audio: np.ndarray, source_sr: int) -> np.ndarray:
         """Resample provider output to configured sample rate when required."""
-        from ...utils.audio import resample_audio
 
         return resample_audio(audio, source_sr, int(self.config.sample_rate))
 
@@ -144,7 +121,6 @@ class AudioSynthesizer:
         )
 
     def _get_cache_key(self, text: str) -> str:
-        """Generate cache key from text and config settings."""
         config_str = (
             f"{self.config.provider}_"
             f"{self.config.voice}_"
@@ -157,7 +133,6 @@ class AudioSynthesizer:
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
     def _load_from_cache(self, cache_key: str) -> Optional[np.ndarray]:
-        """Load audio from cache."""
         cache_path = self.cache_dir / f"{cache_key}.npy"
         if cache_path.exists():
             try:
@@ -168,7 +143,6 @@ class AudioSynthesizer:
         return None
 
     def _save_to_cache(self, cache_key: str, audio: np.ndarray):
-        """Save audio to cache."""
         try:
             cache_path = self.cache_dir / f"{cache_key}.npy"
             np.save(cache_path, audio)
@@ -187,7 +161,6 @@ class AudioSynthesizer:
             return None
 
     def _save_audio(self, path: str, audio: np.ndarray):
-        """Save audio to WAV file."""
         try:
             import soundfile as sf
 

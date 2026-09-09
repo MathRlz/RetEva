@@ -19,6 +19,7 @@ from .model_services import (
     LLMServerService,
 )
 from ..logging_config import get_logger
+from ..models.registry import FAMILY_REGISTRIES
 
 
 def _kw_default(obj: Any) -> Any:
@@ -60,7 +61,7 @@ class ModelServiceProvider:
         self._audio_services: Dict[AudioKey, FactoryModelService] = {}
         self._reranker_services: Dict[RerankerKey, FactoryModelService[Any]] = {}
         self._llm_server_services: Dict[LLMServerKey, LLMServerService] = {}
-        # Soft-CPU offload warm pool (Roadmap 2c): models released under the
+        # Soft-CPU offload warm pool: models released under the
         # ``on_finish_soft_cpu`` policy are parked on host RAM (warm) instead of freed, so a
         # later stage/run re-acquires them with a CPU→device move rather than a full reload.
         # Bounded LRU (capacity) + TTL keep host RAM in check; 0 = soft offload disabled.
@@ -118,7 +119,7 @@ class ModelServiceProvider:
         self._offload_stats["warm_reuses"] += 1
 
     #: Ordered key fields per family — declared once so get/move/release can't drift in
-    #: field order (B3/F16). ``device`` is uniform; move passes current/target through it.
+    #: field order. ``device`` is uniform; move passes current/target through it.
     _KEY_FIELDS: Dict[str, Tuple[str, ...]] = {
         "asr": ("model_type", "model_name", "adapter_path", "device"),
         "text": ("model_type", "model_name", "device"),
@@ -128,7 +129,7 @@ class ModelServiceProvider:
 
     @classmethod
     def _key_for(cls, family: str, **fields: Any) -> Tuple[Any, ...]:
-        """Build a service-bucket key for ``family`` from its declared field order (B3/F16)."""
+        """Build a service-bucket key for ``family`` from its declared field order."""
         try:
             names = cls._KEY_FIELDS[family]
         except KeyError:
@@ -309,7 +310,6 @@ class ModelServiceProvider:
         ``requires_path``, aliases, extras) come from decorator metadata, not
         hardcoded maps.
         """
-        from ..models.registry import FAMILY_REGISTRIES
 
         # Fallback capability per family when a model declares none.
         default_capabilities = {

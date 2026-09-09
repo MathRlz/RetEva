@@ -7,22 +7,24 @@ import argparse
 from evaluator.config import EvaluationConfig
 from evaluator.storage.cache import CacheManager
 from evaluator.logging_config import setup_logging, log_cache_stats, runtime_logger
-from evaluator.evaluation.runner import run_evaluation_from_config
+from evaluator.services.evaluation_service import run_from_config
 from .parser import apply_args_to_config
-from .utils import generate_output_filename, generate_model_description
+from ..evaluation.results_io import generate_output_filename, generate_model_description
+from evaluator.pipeline import ModelServiceProvider, build_graph_for_config
+from evaluator.diagnostics import log_runtime_summary
+from ..evaluation.results_io import save_run_artifacts
+from evaluator.pipeline.graph.display import display_label
+from evaluator.pipeline.graph import (
+    effective_inputs,
+    effective_outputs,
+    dataset_columns,
+)
 
 __all__ = ["run_evaluation"]
 
 
 def run_evaluation(args: argparse.Namespace) -> None:
-    """Run the evaluation with given arguments.
-
-    Args:
-        args: Parsed command-line arguments.
-    """
     if args.list_models:
-        from evaluator.services import ModelServiceProvider
-
         provider = ModelServiceProvider()
         print(json.dumps(provider.list_available_models(), indent=2))
         provider.shutdown()
@@ -35,14 +37,12 @@ def run_evaluation(args: argparse.Namespace) -> None:
     else:
         config = EvaluationConfig()
 
-    # Override config with command-line arguments
     apply_args_to_config(args, config)
 
     if args.print_graph:
         _print_graph(config)
         return
 
-    # Setup logging
     logger = setup_logging(
         experiment_name=config.experiment_name,
         log_dir=config.logging.log_dir,
@@ -54,12 +54,10 @@ def run_evaluation(args: argparse.Namespace) -> None:
     logger.info("Starting evaluation: %s", config.experiment_name)
     # Surface the interpreter + native threading stack (diagnoses env-specific native
     # crashes, e.g. a webapi subprocess running a different env than the CLI).
-    from evaluator.diagnostics import log_runtime_summary
 
     log_runtime_summary(logger)  # routes to the runtime category (verbose+)
     runtime_logger.debug("Configuration: %s", config.to_dict())
 
-    # Initialize cache manager
     cache_manager = CacheManager(
         cache_dir=config.cache.cache_dir, enabled=config.cache.enabled
     )
@@ -86,7 +84,7 @@ def run_evaluation(args: argparse.Namespace) -> None:
     )
 
     # Single shared execution core (same path the webapi/API uses).
-    results = run_evaluation_from_config(config, cache_manager=cache_manager)
+    results = run_from_config(config, cache_manager=cache_manager)
 
     _save_results(results, output_path, config, logger)
 
@@ -99,7 +97,6 @@ def _save_results(results, output_path, config, logger) -> None:
     to ``config.output_dir`` — the shared implementation (`evaluation/results_io.py`), so the
     CLI, the webapi/API service, and the webapi subprocess job (via this CLI) all produce the
     same artifacts."""
-    from ..evaluation.results_io import save_run_artifacts
 
     save_run_artifacts(results, config, logger, output_path=output_path)
     logger.info("=" * 60)
@@ -110,13 +107,6 @@ def _save_results(results, output_path, config, logger) -> None:
 
 def _print_graph(config: EvaluationConfig) -> None:
     """Print the execution DAG for *config* without loading any models."""
-    from evaluator.pipeline import build_graph_for_config
-    from evaluator.pipeline.graph.display import display_label
-    from evaluator.pipeline.graph import (
-        _effective_inputs,
-        _effective_outputs,
-        dataset_columns,
-    )
 
     graph = build_graph_for_config(config)
     print(f"Execution DAG (mode={graph.mode}):")
@@ -124,8 +114,8 @@ def _print_graph(config: EvaluationConfig) -> None:
         print(f"  Level {i}: {', '.join(node.id for node in level)}")
     print("  nodes (inputs -> outputs) [deps]:")
     for node in graph.nodes:
-        ins = ", ".join(_effective_inputs(node.stage, node.params)) or "-"
-        outs = ", ".join(_effective_outputs(node.stage, node.params)) or "-"
+        ins = ", ".join(effective_inputs(node.stage, node.params)) or "-"
+        outs = ", ".join(effective_outputs(node.stage, node.params)) or "-"
         deps = f"  [after {', '.join(node.depends_on)}]" if node.depends_on else ""
         shown_params = {k: v for k, v in (node.params or {}).items() if k != "fields"}
         params = f"  params={shown_params}" if shown_params else ""

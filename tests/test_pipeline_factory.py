@@ -1,9 +1,10 @@
-"""create_pipeline_from_config wires the right pipelines — the build decision is derived from the
-execution graph's nodes, not the ``pipeline_mode`` string (graph-first Phase 2)."""
+"""create_pipeline_from_config wires the right pipelines — the build decision is derived from
+the execution graph's nodes."""
 
 from unittest.mock import MagicMock, patch
 
 from evaluator.config.evaluation import EvaluationConfig
+from tests.graph_test_helpers import mode_graph
 
 
 def _build(mode, text_type):
@@ -19,7 +20,7 @@ def _build(mode, text_type):
         from evaluator.pipeline.factory import create_pipeline_from_config
 
         cfg = EvaluationConfig()
-        cfg.graph_override = {"template": mode}
+        cfg.graph_override = mode_graph(mode)
         cfg.model.asr_model_type = "wav2vec2"
         cfg.model.audio_emb_model_type = "attention_pool"
         cfg.model.text_emb_model_type = text_type
@@ -72,4 +73,5 @@ def test_audio_text_retrieval_builds_audio_text_retrieval():
     assert bundle.audio_embedding_pipeline is not None
     assert bundle.text_embedding_pipeline is not None
     assert bundle.retrieval_pipeline is not None
-    assert bundle.asr_pipeline is None
+    # the fused text-query stream is asr(audio) → text_embedding, so asr is in the graph
+    assert bundle.asr_pipeline is not None

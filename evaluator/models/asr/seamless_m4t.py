@@ -41,30 +41,18 @@ class SeamlessM4TASRModel(HuggingFaceASRModel):
         adapter_path: Optional[str] = None,
         tgt_lang: str = "eng",
     ):
-        """
-        Initialize SeamlessM4T-v2 ASR model.
-
-        Args:
-            model_name: HuggingFace model identifier.
-            adapter_path: Optional path to PEFT/LoRA adapter weights.
-            tgt_lang: Output language code. "eng" turns non-English audio into
-                English text (speech-to-text translation).
-        """
         self.tgt_lang = self._LANG_ALIASES.get(tgt_lang, tgt_lang)
         super().__init__(model_name, adapter_path)
 
     def _create_processor(self):
-        """Create SeamlessM4T processor."""
         from transformers import AutoProcessor
         return AutoProcessor.from_pretrained(self.model_name)
 
     def _create_model(self):
-        """Create SeamlessM4T-v2 speech-to-text model."""
         from transformers import SeamlessM4Tv2ForSpeechToText
         return SeamlessM4Tv2ForSpeechToText.from_pretrained(self.model_name)
 
     def _extract_features(self, processed_audio: List):
-        """Extract features using the SeamlessM4T processor."""
         inputs = self.processor(
             audio=processed_audio,
             sampling_rate=16000,
@@ -79,12 +67,9 @@ class SeamlessM4TASRModel(HuggingFaceASRModel):
         attention_mask: Optional[torch.Tensor],
         language: Optional[str],
     ) -> List[str]:
-        """Generate transcriptions/translations via the model's generate method.
-
-        ``language`` is the audio's *source* language and is intentionally
-        ignored: SeamlessM4T's ``tgt_lang`` is the *output* language, fixed by
-        config (one output language per run, as in a normal evaluation).
-        """
+        """``language`` (the audio's *source* language) is intentionally ignored:
+        SeamlessM4T's ``tgt_lang`` is the *output* language, fixed by config (one
+        output language per run, as in a normal evaluation)."""
         generated_ids = self.model.generate(
             input_features=features,
             attention_mask=attention_mask,

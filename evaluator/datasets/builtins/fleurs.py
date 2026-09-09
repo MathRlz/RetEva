@@ -4,6 +4,9 @@ from __future__ import annotations
 from typing import List, TYPE_CHECKING
 
 from ..types import AudioTranscriptionDataset, register_eval_dataset
+from ...config.dataset_descriptors import resolve_split
+from ..loaders import factory
+from ._common import audio_query_dataset
 
 if TYPE_CHECKING:
     from ...config.data import DataConfig
@@ -34,16 +37,12 @@ class FleursDataset(AudioTranscriptionDataset):
 
     @classmethod
     def from_config(cls, data: "DataConfig") -> "QueryDataset":
-        from ..descriptor import resolve_split
-        from ..loaders.factory import create_dataset_loader
-        from ..runtime import AudioSamplesQueryDataset, _load_corpus_entries
-
         subset = getattr(data, "huggingface_subset", None) or ""
         # Derive Whisper language code from subset tag (e.g. "pl_pl" → "pl")
         derived_lang = subset.split("_")[0] if subset else "en"
         default_language = getattr(data, "default_language", None) or derived_lang
 
-        loader = create_dataset_loader(
+        loader = factory.create_dataset_loader(
             source="huggingface",
             huggingface_dataset="google/fleurs",
             huggingface_subset=subset or None,
@@ -52,14 +51,4 @@ class FleursDataset(AudioTranscriptionDataset):
             max_samples=getattr(data, "max_samples", None),
             default_language=default_language,
         )
-        samples = loader.load()
-        corpus_entries = (
-            _load_corpus_entries(data.corpus_path)
-            if getattr(data, "corpus_path", None)
-            else []
-        )
-        return AudioSamplesQueryDataset(
-            samples,
-            trace_limit=getattr(data, "trace_limit", 0),
-            corpus_entries=corpus_entries,
-        )
+        return audio_query_dataset(loader, data)

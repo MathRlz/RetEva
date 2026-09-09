@@ -1,4 +1,4 @@
-"""A3 pins (CRITIQUE.md): the resolved data flow is recorded, fallbacks flagged.
+"""The resolved data flow is recorded, fallbacks flagged.
 
 Which producer feeds a port is decided at run time by OneOf priority × newest-published ×
 node-list order; ``RunState`` now records the winner per (consumer node, input key) in

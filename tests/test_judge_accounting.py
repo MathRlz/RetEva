@@ -1,8 +1,8 @@
 """Every attempted judgement is accounted for, and a truncated reply gets one more chance.
 
-A failed case used to vanish: logged once, filtered out, and `cases` (successes only) was the
-only number in the report — so "judged 900 of 1209" read as "cases: 900" with no trace of the
-309 that were lost.
+A failed case must not vanish: logging it once and filtering it out, with `cases`
+(successes only) as the only number in the report, would make "judged 900 of 1209" read as
+"cases: 900" with no trace of the 309 that were lost.
 """
 
 import pytest

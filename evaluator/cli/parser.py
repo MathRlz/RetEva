@@ -10,6 +10,7 @@ import argparse
 from typing import List, Optional
 
 from ..config.types import SERVICE_STARTUP_MODES, SERVICE_OFFLOAD_POLICIES
+from ..config import DevicePoolConfig
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -21,7 +22,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
 
-    # Config file + utilities
     parser.add_argument("--config", type=str, default=None,
                         help="Path to YAML configuration file (the experiment definition)")
     parser.add_argument("--list_models", action="store_true",
@@ -53,7 +53,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=None,
                         help="Override the dataset batch size for this run")
 
-    # Cache policy
     parser.add_argument("--no_cache", action="store_true", help="Disable caching")
     parser.add_argument("--cache_dir", type=str, default=None, help="Cache directory")
     parser.add_argument("--clear_cache", action="store_true",
@@ -68,7 +67,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--skip_dataset_validation", action="store_true",
                         help="Skip dataset integrity checks (not recommended for benchmark runs)")
 
-    # Logging / verbosity
     parser.add_argument("--log_level", type=str, default=None,
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     parser.add_argument(
@@ -86,22 +84,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 # Mapping from CLI argument name to config nested path (tuple of attr names). Operational flags
 # only — the experiment is described by the config and is never overridden from the CLI.
 _CLI_ARG_MAP = {
-    # Service runtime (service_runtime.*)
     "service_startup_mode": ("service_runtime", "startup_mode"),
     "service_offload_policy": ("service_runtime", "offload_policy"),
-    # Streaming + CPU-stage parallelism
     "streaming_window_size": ("streaming", "window_size"),
     "cpu_stage_executor": ("cpu_stage_executor",),
     "cpu_stage_workers": ("cpu_stage_workers",),
-    # Dataset batch size (data.*)
     "batch_size": ("data", "batch_size"),
-    # Cache (cache.*)
     "cache_dir": ("cache", "cache_dir"),
-    # Logging (logging.*)
     "log_level": ("logging", "console_level"),
-    # Output (top-level config)
     "output_dir": ("output_dir",),
-    # Checkpoint (top-level config)
     "checkpoint_interval": ("checkpoint_interval",),
 }
 
@@ -135,8 +126,6 @@ def apply_args_to_config(args: argparse.Namespace, config) -> None:
     defined entirely by the config and is never modified from the CLI.
     """
     import os
-
-    from ..config import DevicePoolConfig
 
     # Console verbosity: -vv > -v > --verbosity > EVALUATOR_VERBOSITY env > config.
     verbose_count = getattr(args, "verbose", 0) or 0

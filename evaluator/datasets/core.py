@@ -68,7 +68,7 @@ def get_data_dir() -> Path:
     return Path.cwd()
 
 
-# ── Questions / corpus file loaders (used by the pubmed_qa descriptor path) ───────────
+# Questions / corpus file loaders, used by the pubmed_qa descriptor path.
 
 
 def load_json_or_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -212,7 +212,6 @@ def load_admed_voice_corpus(
     # filer out non human
     corpus = corpus[corpus["source"] == "natural"]
 
-    # filter out longer than 30s
     corpus["duration_sec"] = corpus["file_duration"].apply(get_duration_in_seconds)
     corpus = corpus[corpus["duration_sec"] <= 30.0]
 

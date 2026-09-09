@@ -11,8 +11,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 import numpy as np
 import torch
 
-from ..storage.cache import CacheManager
-from ..logging_config import get_logger
+from . import CacheManager
+from ...logging_config import get_logger
+from ...utils.model_version import resolve_model_version
 
 logger = get_logger(__name__)
 
@@ -39,10 +40,6 @@ def compute_hash(data: bytes, *extra: Any) -> str:
 def compute_audio_hash(audio: torch.Tensor | np.ndarray, sampling_rate: int) -> str:
     """
     Compute a hash for audio data including sampling rate.
-
-    Args:
-        audio: Audio tensor or numpy array
-        sampling_rate: Audio sampling rate
 
     Returns:
         MD5 hex digest string
@@ -76,12 +73,8 @@ class CacheMixin:
     _cache_misses: Dict[str, int]
 
     def _init_cache_stats(self, categories: List[str]) -> None:
-        """
-        Initialize cache statistics tracking.
-
-        Args:
-            categories: List of category names to track (e.g., ['features', 'transcriptions'])
-        """
+        """Initialize cache statistics tracking for ``categories`` (e.g.
+        ``['features', 'transcriptions']``)."""
         self._cache_hits = {cat: 0 for cat in categories}
         self._cache_misses = {cat: 0 for cat in categories}
 
@@ -93,10 +86,10 @@ class CacheMixin:
     @property
     def model_version(self) -> Optional[str]:
         """Best-effort weights revision of this pipeline's model, folded into cache keys so
-        updated weights under the same name invalidate the cache (T3). ``None`` when unknown
-        (key unchanged → back-compat). Resolves from ``self.model`` or ``self._model``.
+        updated weights under the same name invalidate the cache. ``None`` when unknown (the
+        key stays unchanged, so existing cache entries still hit). Resolves from ``self.model``
+        or ``self._model``.
         """
-        from .model_version import resolve_model_version
 
         model = getattr(self, "model", None) or getattr(self, "_model", None)
         return resolve_model_version(model)
@@ -133,21 +126,14 @@ class CacheMixin:
         return None, False
 
     def _store_cache(self, setter: Callable[[], None]) -> None:
-        """
-        Store a value in cache if caching is enabled.
-
-        Args:
-            setter: Callable that stores the value in cache
-        """
+        """Store a value in cache if caching is enabled."""
         if self.cache_enabled:
             setter()
 
     def _record_hit(self, category: str, count: int = 1) -> None:
-        """Record cache hit(s) for a category."""
         self._cache_hits[category] += count
 
     def _record_miss(self, category: str, count: int = 1) -> None:
-        """Record cache miss(es) for a category."""
         self._cache_misses[category] += count
 
     def get_cache_stats(self) -> Dict[str, Any]:

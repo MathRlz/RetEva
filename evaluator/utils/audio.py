@@ -1,7 +1,6 @@
 """Torchaudio-backed audio DSP helpers.
 
-Graceful-degradation contract (inherited from the librosa paths these replaced,
-AUDIT_2026-07 R2-R4): when torchaudio is missing, warn and return the input
+Graceful-degradation contract: when torchaudio is missing, warn and return the input
 unchanged rather than fail the run.
 """
 from __future__ import annotations
@@ -39,6 +38,27 @@ def resample_audio(audio: np.ndarray, source_sr: int, target_sr: int) -> np.ndar
     except (ValueError, RuntimeError) as e:
         logger.warning("Audio resampling failed (%d -> %d): %s", source_sr, target_sr, e)
         return audio
+
+
+def to_mono_16k(audio, sr: int, *, downmix: str = "mean", as_numpy: bool = False):
+    """Resample to 16 kHz and collapse channels. Returns the same tensor object unchanged
+    when the rate already matches and ``as_numpy`` is False (no resample, squeeze, or copy)."""
+    torch, torchaudio = _torch()
+    if torch is None:
+        logger.warning("torchaudio not installed, to_mono_16k returning input unchanged")
+        return audio
+    if not isinstance(audio, torch.Tensor):
+        audio = torch.tensor(audio)
+    changed = False
+    if sr != 16000:
+        audio = torchaudio.functional.resample(audio, sr, 16000)
+        changed = True
+    if not as_numpy and not changed and audio.ndim == 1:
+        return audio
+    x = audio.squeeze()
+    if x.ndim > 1:
+        x = x.mean(dim=0) if downmix == "mean" else x[0]
+    return x.numpy() if as_numpy else x
 
 
 def time_stretch(audio: np.ndarray, rate: float) -> np.ndarray:

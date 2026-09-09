@@ -1,7 +1,7 @@
-"""A2 pins (CRITIQUE.md): CSE must never over-share.
+"""CSE must never over-share.
 
 Two branch nodes collapse iff their canonical key matches; the key drops params equal to a
-registered ``param_defaults`` constant (S7). That drop is sound ONLY when the handler's
+registered ``param_defaults`` constant. That drop is sound ONLY when the handler's
 absent-param fallback is that same constant in every config. A param whose absent value is
 config-inherited (the index node's ``store`` inherits the global ``vector_db.type``) must
 not be declared — an explicit value and the inherited global would collapse into one node
@@ -9,7 +9,7 @@ and one branch would silently run with the other's backend.
 """
 
 from evaluator.pipeline.graph.cse import collapse_common_subexpressions
-from evaluator.pipeline.graph.registry import _NODE_REGISTRY, StageNode
+from evaluator.pipeline.graph.registry import NODE_REGISTRY, StageNode
 
 # Every registered param_defaults entry needs a row here, added only after checking the
 # handler's absent-param fallback is this exact constant regardless of config.
@@ -21,7 +21,7 @@ SOUND_CSE_DEFAULTS: dict = {
 def test_param_defaults_are_allowlisted_constant_fallbacks():
     declared = {
         stage: dict(node_def.param_defaults)
-        for stage, node_def in _NODE_REGISTRY.items()
+        for stage, node_def in NODE_REGISTRY.items()
         if node_def.param_defaults
     }
     assert declared == SOUND_CSE_DEFAULTS, (

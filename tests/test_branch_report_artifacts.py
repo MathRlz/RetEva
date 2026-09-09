@@ -1,4 +1,4 @@
-"""P1 pins: the thesis-artifact emitters (previously untested)."""
+"""The thesis-artifact emitters."""
 
 import pytest
 

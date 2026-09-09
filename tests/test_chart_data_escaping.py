@@ -1,9 +1,10 @@
-"""V1 pin: chart data is escaped for the <script> context it is interpolated into.
+"""Chart data is escaped for the <script> context it is interpolated into.
 
 Chart labels carry `experiment_name`, which comes from a user-authored config, through
 sqlite, into an inline `<script>` block. `json.dumps` does NOT escape `<`, so a name
-containing `</script>` used to break out of the tag (stored injection). Jinja's `|tojson`
-emits `\\u003c`; these tests fail if anyone reverts to a pre-dumped `|safe` string.
+containing `</script>` would break out of the tag (stored injection) without escaping.
+Jinja's `|tojson` emits `\\u003c`; these tests fail if anyone reverts to a pre-dumped `|safe`
+string.
 """
 
 from evaluator.storage import ExperimentStore

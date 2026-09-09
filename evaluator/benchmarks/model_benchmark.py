@@ -2,10 +2,9 @@
 
 import gc
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict, Union
+from typing import Callable, List, Optional, Any, Dict
 from datetime import datetime
 
-import numpy as np
 import torch
 
 from .timer import Timer, PerformanceStats
@@ -31,7 +30,6 @@ def get_memory_usage() -> Dict[str, float]:
 
 
 def clear_memory() -> None:
-    """Clear Python garbage and GPU cache."""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -106,28 +104,33 @@ class BenchmarkResult:
 
 
 class ModelBenchmark:
-    """Benchmarking utility for ASR, embedding, and retrieval models.
-
-    Example:
-        benchmark = ModelBenchmark()
-
-        # Benchmark ASR model
-        result = benchmark.benchmark_asr(whisper_model, audio_samples)
-        print(result)
-
-        # Benchmark embedding model
-        result = benchmark.benchmark_embedding(labse_model, texts)
-        print(result)
-    """
+    """Benchmarking utility for ASR, embedding, and retrieval models."""
 
     def __init__(self, verbose: bool = False):
         """If ``verbose``, print progress during benchmarking."""
         self.verbose = verbose
 
     def _log(self, message: str) -> None:
-        """Log message if verbose mode is enabled."""
         if self.verbose:
             print(f"[Benchmark] {message}")
+
+    def _warm_up(self, warmup: int, iteration: Callable[[], Any], timer_name: str):
+        """Snapshot memory, run ``warmup`` untimed iterations, reset the CUDA peak counters and
+        hand back ``(memory_before, timer)`` ready for the measured loop."""
+        clear_memory()
+        mem_before = get_memory_usage()
+
+        self._log(f"Running {warmup} warmup iterations...")
+        for _ in range(warmup):
+            iteration()
+
+        clear_memory()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+        timer = Timer(timer_name)
+        self._log("Running benchmark iterations...")
+        return mem_before, timer
 
     def benchmark_asr(
         self,
@@ -147,19 +150,13 @@ class ModelBenchmark:
         audio_tensors = [s["audio"] for s in samples]
         sampling_rates = [s.get("sampling_rate", 16000) for s in samples]
 
-        clear_memory()
-        mem_before = get_memory_usage()
-
-        self._log(f"Running {warmup} warmup iterations...")
-        for _ in range(warmup):
-            model.transcribe(audio_tensors[:1], sampling_rates[:1], language=language)
-
-        clear_memory()
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-        timer = Timer("asr_transcribe")
-        self._log("Running benchmark iterations...")
+        mem_before, timer = self._warm_up(
+            warmup,
+            lambda: model.transcribe(
+                audio_tensors[:1], sampling_rates[:1], language=language
+            ),
+            "asr_transcribe",
+        )
 
         for i, (audio, sr) in enumerate(zip(audio_tensors, sampling_rates)):
             with timer:
@@ -208,20 +205,10 @@ class ModelBenchmark:
 
         self._log(f"Starting embedding benchmark with {len(texts)} texts...")
 
-        clear_memory()
-        mem_before = get_memory_usage()
-
-        self._log(f"Running {warmup} warmup iterations...")
         warmup_texts = texts[:min(batch_size, len(texts))]
-        for _ in range(warmup):
-            model.encode(warmup_texts)
-
-        clear_memory()
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-        timer = Timer("embedding_encode")
-        self._log("Running benchmark iterations...")
+        mem_before, timer = self._warm_up(
+            warmup, lambda: model.encode(warmup_texts), "embedding_encode"
+        )
 
         num_batches = (len(texts) + batch_size - 1) // batch_size
 
@@ -258,127 +245,3 @@ class ModelBenchmark:
             }
         )
 
-    def benchmark_retrieval(
-        self,
-        store: Any,
-        queries: Union[List[np.ndarray], np.ndarray],
-        warmup: int = 3,
-        k: int = 10,
-    ) -> BenchmarkResult:
-        """Benchmark vector store search() performance; ``queries`` may be a list of
-        vectors or an (N, D) array."""
-        if isinstance(queries, np.ndarray):
-            if queries.ndim == 1:
-                queries = [queries]
-            else:
-                queries = [queries[i] for i in range(len(queries))]
-
-        if not queries:
-            raise ValueError("queries list cannot be empty")
-
-        self._log(f"Starting retrieval benchmark with {len(queries)} queries...")
-
-        clear_memory()
-        mem_before = get_memory_usage()
-
-        self._log(f"Running {warmup} warmup iterations...")
-        for _ in range(warmup):
-            store.search(queries[0], k=k)
-
-        clear_memory()
-
-        timer = Timer("retrieval_search")
-        self._log("Running benchmark iterations...")
-
-        for i, query in enumerate(queries):
-            with timer:
-                store.search(query, k=k)
-
-            if self.verbose and (i + 1) % 100 == 0:
-                self._log(f"  Processed {i + 1}/{len(queries)} queries")
-
-        mem_after = get_memory_usage()
-        stats = timer.stats
-
-        return BenchmarkResult(
-            name="Retrieval",
-            timing_stats=stats,
-            throughput=len(queries) / timer.total_time if timer.total_time > 0 else 0,
-            throughput_unit="queries/sec",
-            memory_before_mb=mem_before.get("cpu_mb", 0),
-            memory_after_mb=mem_after.get("cpu_mb", 0),
-            memory_peak_mb=mem_after.get("cpu_mb", 0),
-            gpu_memory_mb=mem_after.get("gpu_mb", 0),
-            gpu_memory_peak_mb=mem_after.get("gpu_max_mb", 0),
-            num_samples=len(queries),
-            num_warmup=warmup,
-            extra_metrics={
-                "k": k,
-                "avg_query_time_ms": stats.mean * 1000,
-                "queries_per_second": 1 / stats.mean if stats.mean > 0 else 0,
-            }
-        )
-
-    def benchmark_audio_embedding(
-        self,
-        model: Any,
-        samples: List[Dict[str, Any]],
-        warmup: int = 3,
-    ) -> BenchmarkResult:
-        """Benchmark audio embedding model encode_audio() performance. Each sample
-        needs 'audio' and 'sampling_rate' keys; ``warmup`` untimed iterations run
-        first."""
-        if not samples:
-            raise ValueError("samples list cannot be empty")
-
-        self._log(f"Starting audio embedding benchmark with {len(samples)} samples...")
-
-        audio_tensors = [s["audio"] for s in samples]
-        sampling_rates = [s.get("sampling_rate", 16000) for s in samples]
-
-        clear_memory()
-        mem_before = get_memory_usage()
-
-        self._log(f"Running {warmup} warmup iterations...")
-        for _ in range(warmup):
-            model.encode_audio(audio_tensors[:1], sampling_rates[:1])
-
-        clear_memory()
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-        timer = Timer("audio_embedding")
-        self._log("Running benchmark iterations...")
-
-        for i, (audio, sr) in enumerate(zip(audio_tensors, sampling_rates)):
-            with timer:
-                model.encode_audio([audio], [sr])
-
-            if self.verbose and (i + 1) % 10 == 0:
-                self._log(f"  Processed {i + 1}/{len(samples)} samples")
-
-        mem_after = get_memory_usage()
-        stats = timer.stats
-
-        total_audio_duration = sum(
-            len(audio) / sr for audio, sr in zip(audio_tensors, sampling_rates)
-        )
-
-        return BenchmarkResult(
-            name=f"Audio Embedding ({model.name()})",
-            timing_stats=stats,
-            throughput=len(samples) / timer.total_time if timer.total_time > 0 else 0,
-            throughput_unit="samples/sec",
-            memory_before_mb=mem_before.get("cpu_mb", 0),
-            memory_after_mb=mem_after.get("cpu_mb", 0),
-            memory_peak_mb=mem_after.get("cpu_mb", 0),
-            gpu_memory_mb=mem_after.get("gpu_mb", 0),
-            gpu_memory_peak_mb=mem_after.get("gpu_max_mb", 0),
-            num_samples=len(samples),
-            num_warmup=warmup,
-            extra_metrics={
-                "total_audio_duration_sec": total_audio_duration,
-                "real_time_factor": (timer.total_time / total_audio_duration
-                                     if total_audio_duration > 0 else 0),
-            }
-        )

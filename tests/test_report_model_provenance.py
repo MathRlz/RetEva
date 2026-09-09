@@ -37,7 +37,7 @@ class _FakePipeline:
 
 class _FakeModelConfig:
     """Stands in for `config.model`: the run's flat global defaults (what every branch
-    without an override actually uses, and what the old buggy code always reported)."""
+    without an override actually uses)."""
 
     asr_model_type = "wav2vec2"
     asr_size = None

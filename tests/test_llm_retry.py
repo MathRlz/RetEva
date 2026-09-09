@@ -1,7 +1,7 @@
-"""A4-remainder pins (CRITIQUE.md): transient LLM failures retry; permanent ones don't.
+"""Transient LLM failures retry; permanent ones don't.
 
-One network hiccup used to drop the item (drop-and-log shrinks the eval set and biases
-paired deltas); a 401 must still fail immediately — retrying auth errors can't help.
+A single network hiccup does not drop the item (drop-and-log would shrink the eval set and
+bias paired deltas); a 401 must still fail immediately — retrying auth errors can't help.
 """
 
 import json

@@ -1,9 +1,6 @@
-"""One-line help for the config-form / builder fields whose names don't explain themselves.
-
-A small glossary, exposed via ``/api/introspection/schema`` (so the builder can reuse it) and
-rendered as field tooltips on the config form. Keyed by the form ``name`` / config field, so a
-template can look up ``field_help.get(name)`` directly.
-"""
+"""One-line help for the config-form / builder fields whose names don't explain themselves,
+exposed via ``/api/introspection/schema`` and rendered as field tooltips. Keyed by the form
+``name`` / config field, so a template can look up ``field_help.get(name)`` directly."""
 
 FIELD_HELP = {
     "retrieval_mode": "dense = embedding similarity · sparse = BM25 keywords · hybrid = fuse both.",
@@ -16,7 +13,7 @@ FIELD_HELP = {
     "quick_test": "Cap the dataset to ~20 samples for a fast smoke run.",
     "output_dir": "Where results and the leaderboard sqlite are written.",
     "dataset_name": "A registered dataset id; its column schema + default metrics come with it.",
-    # ── builder node-param switches (operator discriminators + knobs) ──
+    # builder node-param switches (operator discriminators + knobs)
     "family": "Which measurement this node performs (transcription / retrieval / answer / judge).",
     "op": "Which operation this node runs — re-resolves the form's fields to match.",
     "method": "The algorithm variant for this operation.",
@@ -36,7 +33,7 @@ FIELD_HELP = {
     "target": "Which terminal effect this sink performs (finalize / aggregate / dataset / …).",
     "gpu_id": "Which GPU the index lives on (faiss_gpu only).",
     "temperature": "LLM sampling temperature — 0 is deterministic.",
-    # ── model Params fields (declared on a model's inner Params; help shared across models) ──
+    # model Params fields (declared on a model's inner Params; help shared across models)
     "pooling": "How frame embeddings are pooled into one vector: mean · cls · attention.",
     "compute_type": "faster-whisper precision: int8 (fast/small) · float16 · float32.",
     "tgt_lang": "Target language code the model decodes into (e.g. eng).",

@@ -24,3 +24,13 @@ DEFAULT_BATCH_SIZE = 32
 
 # Number of clusters for IVF index
 DEFAULT_FAISS_NLIST = 1024
+
+# The rank cutoffs the report always publishes (recall/precision/ndcg @ each). The retriever
+# must return at least the deepest one, else `retrieved[:10]` is a `[:k]` slice in disguise and
+# `@10` silently equals `@k` — the report would print a cutoff it never measured.
+IR_CUTOFFS = (1, 5, 10)
+RETRIEVAL_DEPTH = max(IR_CUTOFFS)
+
+# Reducer names accepted by `variant_rollup:` — the single source for both the config check
+# and the reducer table in evaluation/aggregate.py, which is keyed by this tuple.
+ROLLUP_REDUCERS = ("mean", "min", "max")

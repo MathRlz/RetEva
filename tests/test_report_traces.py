@@ -1,4 +1,4 @@
-"""G5: the report is the single source for traces/judge (no top-level duplicates)."""
+"""The report is the single source for traces/judge (no top-level duplicates)."""
 
 from evaluator.evaluation.handlers.rag import (
     _attach_traces_to_report,
@@ -8,7 +8,7 @@ from evaluator.evaluation.handlers.rag import (
 
 class _State:
     """Minimal RunState stand-in: a tiny (producer_id, artifact) -> value bus + the current
-    node's bindings — enough for `_attach_traces_to_report`'s bus/sibling reads (R4)."""
+    node's bindings — enough for `_attach_traces_to_report`'s bus/sibling reads."""
 
     def __init__(self, bindings=(), bus=None):
         self._bindings = bindings

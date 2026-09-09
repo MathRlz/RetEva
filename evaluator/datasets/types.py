@@ -32,7 +32,8 @@ from typing import Mapping, TYPE_CHECKING, List, Sequence
 
 from ..config.types import DatasetType
 from .core import QueryDataset
-from .descriptor import DatasetDescriptor, register_dataset
+from ..config.dataset_descriptors import DatasetDescriptor
+from .descriptor import register_dataset
 
 if TYPE_CHECKING:
     from ..config.data import DataConfig
@@ -57,9 +58,9 @@ class EvalDataset(QueryDataset):
     domain: str = "general"
     required_data_fields: Sequence[str] = ()
     #: Column schema {name: registered artifact}; empty = per-type default
-    #: (descriptor.FIELDS_BY_DATASET_TYPE). Shown on the DAG's dataset node.
+    #: (config.dataset_descriptors.FIELDS_BY_DATASET_TYPE). Shown on the DAG's dataset node.
     fields: Mapping[str, str] = {}
-    #: Embedding-space id when a column carries precomputed vectors (§4.1 T4).
+    #: Embedding-space id when a column carries precomputed vectors.
     embedding_space: str | None = None
     #: Splits the dataset offers (empty = none); default_split used when unset.
     splits: Sequence[str] = ()
@@ -84,8 +85,6 @@ class EvalDataset(QueryDataset):
     def _dataset_id(cls) -> str:
         return getattr(cls, "_registered_id", cls.__name__)
 
-
-# ── Type base classes ────────────────────────────────────────────────────────
 
 class AudioTranscriptionDataset(EvalDataset):
     """Audio in, transcription out. Any retrieval corpus is derived from transcriptions."""
@@ -125,8 +124,6 @@ class MultimodalQADataset(TextRetrievalDataset):
     supports_generation = True
     evaluation_mode = "qa_retrieval"
 
-
-# ── Class-based registration ─────────────────────────────────────────────────
 
 def register_eval_dataset(*, id: str, description: str = ""):
     """Class decorator: register an :class:`EvalDataset` subclass as a dataset.

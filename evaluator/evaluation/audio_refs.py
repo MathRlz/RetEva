@@ -1,12 +1,8 @@
-"""Audio refs on the bus (§4.1 P4).
+"""Audio refs on the bus.
 
-The ``query_audio`` artifact carries **refs** (file paths keyed by query_id), never
-decoded waveforms — memory stays bounded and audio-axis nodes (augment_audio) can
-republish perturbed refs. ASR / audio-embedding consume refs **bus-first**:
-when the newest bound refs differ from the dataset's own audio paths, the dataset is
-wrapped in a :class:`RefAudioDatasetView` that decodes from the refs while keeping the
-base item metadata (transcription, relevance, …) joined by question_id; when they match
-(default graphs), the dataset object passes through untouched — byte-identical parity.
+The ``query_audio`` artifact carries **refs** (file paths keyed by query_id), never decoded
+waveforms — memory stays bounded, and audio-axis nodes can republish perturbed refs. ASR /
+audio-embedding consume refs bus-first, falling back to the dataset's own audio when refs match.
 """
 
 from __future__ import annotations
@@ -15,25 +11,23 @@ from typing import Any, Optional
 
 from ..logging_config import get_logger
 from .item_set import ItemSet, lineage_parent as _lineage_parent
+from ..datasets.core import load_audio_file
 
 logger = get_logger(__name__)
 
 
 class RefAudioDatasetView:
-    """Dataset adapter: base items with audio decoded from bus refs.
-
-    Order and cardinality follow the refs (supports fan-out: a variant id maps to
-    its lineage parent's metadata). Decoding is lazy per item (paths, not arrays).
-    """
+    """Dataset adapter: base items with audio decoded from bus refs. Order and cardinality
+    follow the refs (supports fan-out: a variant id maps to its lineage parent's metadata).
+    Decoding is lazy per item (paths, not arrays)."""
 
     def __init__(self, base: Any, refs: ItemSet, extra_bases: Optional[list] = None):
         self._base = base
         self._ids = [str(i) for i in refs.ids]
         self._paths = {str(i): str(v) for i, v in zip(refs.ids, refs.values)}
-        # id → (owning base, index). First base wins; extra bases (multi-source /
-        # union graphs) fill the rest so a unioned ref set resolves metadata too.
-        # Question-based datasets expose ``questions`` (question_id); sample-based ones
-        # (AudioSamplesQueryDataset — admed_voice) expose ``samples`` (sample_id).
+        # id → (owning base, index). First base wins; extra bases (multi-source/union
+        # graphs) fill the rest so a unioned ref set resolves metadata too. Question-based
+        # datasets expose ``questions``; sample-based ones (admed_voice) expose ``samples``.
         self._owner: dict = {}
         for b in [base, *(extra_bases or [])]:
             if b is None:
@@ -51,8 +45,6 @@ class RefAudioDatasetView:
         return len(self._ids)
 
     def __getitem__(self, idx: int) -> dict:
-        from ..datasets.core import load_audio_file
-
         qid = self._ids[idx]
         owner = self._owner.get(qid) or self._owner.get(_lineage_parent(qid))
         item = self._base_metadata(owner) if owner is not None else {}
@@ -64,15 +56,12 @@ class RefAudioDatasetView:
 
     @staticmethod
     def _base_metadata(owner: tuple) -> dict:
-        """Metadata for a base question WITHOUT going through ``base.__getitem__``.
-
-        The base's item accessor decodes the base waveform (discarded here — the ref
-        audio replaces it) and refuses questions without an ``audio_path``. That check is
-        the base's business, not the view's: on a journal-resumed run the tts levels are
-        skipped, the reloaded questions carry no audio_path, and the old
-        ``dict(base[idx])`` call crashed every audio consumer with a misleading
-        "has no audio_path" — even though the refs held all the audio needed.
-        """
+        """Metadata for a base question WITHOUT going through ``base.__getitem__`` — that
+        accessor decodes the base waveform (discarded here; the ref audio replaces it) and
+        refuses questions without an ``audio_path``. On a journal-resumed run the tts levels
+        are skipped and the reloaded questions carry no audio_path, so going through it
+        crashed every audio consumer with a misleading "has no audio_path" error, even
+        though the refs held all the audio needed."""
         base, i = owner
         rows = getattr(base, "questions", None) or getattr(base, "samples", None)
         q = rows[i]
@@ -124,13 +113,12 @@ def audio_refs_from_questions(questions: Any) -> "Optional[tuple]":
 
 def publish_audio_refs(s: Any, dataset: Any) -> None:
     """Publish ``query_audio`` as an ItemSet of audio REFS — file paths, never decoded
-    waveforms (§4.1 P4; memory rule). The bus ref is what audio-axis nodes
-    (augment_audio) republish; ASR/audio-embedding consume refs bus-first and fall
-    back to the dataset object when the refs match it (parity-preserving)."""
+    waveforms. The bus ref is what audio-axis nodes (augment_audio) republish; ASR/
+    audio-embedding consume refs bus-first and fall back to the dataset object when the
+    refs match it (parity-preserving)."""
     refs = audio_refs_from_questions(getattr(dataset, "questions", None))
     if refs is None:
         return
-    from .item_set import ItemSet
 
     ids, paths = refs
     s.put_artifact("query_audio", ItemSet(ids, paths))
@@ -149,8 +137,7 @@ def resolve_audio_dataset(s: Any, dataset: Any) -> Any:
     if not isinstance(refs, ItemSet) or not refs.ids:
         # Falling back to the dataset object is correct for graphs whose refs mirror it,
         # but when this node is explicitly BOUND to a query_audio producer that published
-        # nothing, the fallback usually ends in a misleading "no audio_path" crash — say
-        # so here, at the decision point.
+        # nothing, the fallback usually ends in a misleading "no audio_path" crash — say so here.
         try:
             bound = [pid for art, pid in getattr(s.current_node, "bindings", ()) if art == "query_audio"]
         except Exception:  # noqa: BLE001 - diagnostics only

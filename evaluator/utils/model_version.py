@@ -1,10 +1,8 @@
-"""Resolve a model's *version* for cache-key invalidation (task T3).
+"""Resolve a model's *version* for cache-key invalidation.
 
-Caching keys on ``model_name`` alone is unsound: swap the weights behind the same name (a new
-HF revision, a fine-tune checkpoint) and a stale artifact is silently reused → wrong numbers. A
-version folded into the key fixes that. Models aren't required to expose a version, so this is a
-best-effort probe with a stable order of preference; ``None`` means "no version known" and leaves
-the legacy key unchanged (back-compat — existing caches still hit).
+Keying on ``model_name`` alone is unsound: swapped weights behind the same name (new HF
+revision, fine-tune) would silently reuse a stale cached artifact. ``None`` means no version
+was found and the unversioned key is used (existing caches still hit).
 """
 
 from __future__ import annotations
@@ -16,13 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_model_version(model: Any) -> Optional[str]:
-    """Best-effort version/revision string for ``model`` (``None`` if unknown).
-
-    Order of preference:
-    1. an explicit ``model.version()`` / ``model.model_version`` (a family that knows its rev);
-    2. the HuggingFace commit hash on the wrapped ``transformers`` config / module;
-    3. an explicit ``revision`` attribute.
-    """
+    """Best-effort version/revision string for ``model`` (``None`` if unknown); no single
+    attribute is guaranteed, so several likely spots are probed in order, including the
+    wrapped HF module's commit hash."""
     if model is None:
         return None
 

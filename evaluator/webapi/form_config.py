@@ -1,10 +1,6 @@
-"""Form → validated run-config conversion for the WebAPI.
-
-The config half of the form builder: take a submitted HTML form (flat string dict),
-overlay it on the selected preset's full config (config-first — nothing the preset sets
-is dropped), and produce a validated :class:`EvaluationConfig`. The UI/option-rendering
-half lives in ``form_builder.py`` (which re-exports these names for back-compat).
-"""
+"""Form → validated run-config conversion for the WebAPI: take a submitted HTML form, overlay it
+on the selected preset's config, and produce a validated :class:`EvaluationConfig`. The
+UI/option-rendering half lives in ``form_builder.py`` (re-exported here for back-compat)."""
 
 from __future__ import annotations
 
@@ -16,6 +12,11 @@ from typing import Any, Dict, List
 from evaluator import ConfigurationError, EvaluationConfig
 from evaluator.datasets import validate_dataset_runtime_config
 from evaluator.pipeline.factory import check_backend_dependencies
+from evaluator.pipeline.graph.operators import node_kind, ALIASES, expand_alias, is_operator
+from evaluator.evaluation.validation import validate_graph_embedding_spaces
+from evaluator.pipeline import build_graph_for_config
+from evaluator.config.graph_config import GraphConfigError, build_evaluation_config_kwargs
+from evaluator.pipeline.graph.wiring import has_port_edges, emit_edges
 
 
 def load_config(
@@ -27,7 +28,7 @@ def load_config(
     return config
 
 
-#: Dataset path fields a form can set; confined under EVALUATOR_DATA_ROOT when it is set (L1).
+#: Dataset path fields a form can set; confined under EVALUATOR_DATA_ROOT when it is set.
 _DATASET_PATH_FIELDS = (
     "questions_path", "corpus_path", "prepared_dataset_dir",
     "audio_dir", "data_path", "transcripts_file",
@@ -35,7 +36,7 @@ _DATASET_PATH_FIELDS = (
 
 
 def _enforce_data_root(config: EvaluationConfig) -> None:
-    """Confine form-supplied dataset paths under ``EVALUATOR_DATA_ROOT`` when it is set (L1).
+    """Confine form-supplied dataset paths under ``EVALUATOR_DATA_ROOT`` when it is set.
 
     Opt-in: with the env unset (the default single-user / local deployment) there is no
     restriction, so absolute local paths keep working. When set — for a shared/multi-tenant
@@ -63,10 +64,9 @@ def prepare_run_config(
     config = load_config(payload_config, auto_devices=auto_devices)
     _enforce_data_root(config)
     check_backend_dependencies(config.vector_db)
-    template = config.graph_template
     validate_dataset_runtime_config(
         config,
-        retrieval_required=(template != "asr_only"),
+        retrieval_required=(config.graph_label != "asr_only"),
     )
     return config
 
@@ -74,7 +74,6 @@ def prepare_run_config(
 def _require_dataset_choice(spec: Dict[str, Any]) -> None:
     """Reject a builder run whose ``dataset_source`` has no dataset chosen — an empty one would
     silently fall back to the EvaluationConfig default rather than the dataset the user drew."""
-    from evaluator.pipeline.graph.operators import node_kind
 
     for node in spec.get("nodes") or []:
         if not isinstance(node, dict):
@@ -95,8 +94,6 @@ def build_validated_run_config(
     Returns ``(config, graph)`` — the built graph is returned too (not rebuilt by callers that
     need it, e.g. for edit-time advice) since building it is already required to run the
     embedding-space check."""
-    from evaluator.evaluation.validation import validate_graph_embedding_spaces
-    from evaluator.pipeline import build_graph_for_config
 
     _require_dataset_choice(spec)
     config_dict = graph_spec_to_config_dict(spec, experiment_name=experiment_name)
@@ -106,16 +103,16 @@ def build_validated_run_config(
     return config, graph
 
 
-#: The graph-block keys a builder canvas spec carries (mode/nodes/edges/branches). Anything
-#: else on the spec (e.g. a global ``llm``) is a top-level config block, not a graph key.
-_GRAPH_SPEC_KEYS = ("mode", "nodes", "edges", "branches")
+#: The graph-block keys a builder canvas spec carries (mode/nodes/edges). Anything else on
+#: the spec (e.g. a global ``llm``) is a top-level config block, not a graph key.
+_GRAPH_SPEC_KEYS = ("mode", "nodes", "edges")
 
 
 def _strip_display_params(nodes: list) -> None:
     """Drop the transient display schema (fields/extra_outputs/suppress_outputs) the canvas
     carries on dataset_source cards — preview metadata, re-derived from the dataset descriptor
-    at build; persisting it back would narrow the run's outputs and break edge validation
-    (E5). Mutates the node dicts in place."""
+    at build; persisting it back would narrow the run's outputs and break edge validation.
+    Mutates the node dicts in place."""
     for n in nodes:
         if isinstance(n, dict) and isinstance(n.get("params"), dict):
             for key in ("fields", "extra_outputs", "suppress_outputs"):
@@ -134,8 +131,6 @@ def _spec_params(spec: Any) -> dict:
 def _validate_node_types(nodes: list) -> None:
     """Reject an unknown node type up front (so a typo'd type is caught even though the structural
     plumbing the builder *doesn't* draw is auto-derived)."""
-    from evaluator.config.graph_config import GraphConfigError
-    from evaluator.pipeline.graph.operators import ALIASES, expand_alias, is_operator
 
     for n in nodes:
         # expand first: a retired-operator spelling (convert{op:asr}) resolves to its
@@ -150,7 +145,7 @@ def graph_spec_to_config_dict(
 ) -> Dict[str, Any]:
     """Translate a builder canvas spec into a legacy ``EvaluationConfig`` dict.
 
-    The canvas exports ``{mode, nodes:[{id,type,params}], edges:[{from,to}], branches?, llm?}``
+    The canvas exports ``{mode, nodes:[{id,type,params}], edges:[{from,to}], llm?}``
     — a node-centric ``graph`` block plus an optional global ``llm``. We wrap it and run it
     through :func:`graph_config.build_evaluation_config_kwargs` (the same translator the YAML
     loader uses), so a graph built in the UI takes the identical path as a hand-written config.
@@ -159,7 +154,6 @@ def graph_spec_to_config_dict(
     graph with no resolvable dataset passes translation but is rejected downstream by
     :func:`prepare_run_config`.
     """
-    from evaluator.config.graph_config import build_evaluation_config_kwargs
 
     # Deep-copy up front: this local `graph` gets mutated below (display-param stripping,
     # derived edges) before being handed off, and the caller's spec must never be altered
@@ -173,21 +167,20 @@ def graph_spec_to_config_dict(
     # (palette drafts, legacy saved graphs with ordering-only edges) gets its edge set
     # derived here — the same emit_edges the CLI offers; canvas port edges pass through
     # untouched and stay authoritative.
-    from evaluator.pipeline.graph.wiring import _has_port_edges, emit_edges
 
-    if graph.get("nodes") and not _has_port_edges(graph.get("edges")):
+    if graph.get("nodes") and not has_port_edges(graph.get("edges")):
         ordering = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
         graph["edges"] = emit_edges(graph["nodes"]) + ordering
     # The builder authors only meaningful operations; the derived structural plumbing (the
     # metrics/traces/finalize nodes never drawn on the canvas) is appended by
-    # `build_evaluation_config_kwargs` itself now (`pipeline/graph/modes.py:
+    # `build_evaluation_config_kwargs` itself (`pipeline/graph/build.py:
     # complete_structural_plumbing`, called for every explicit graph — CLI YAML and this UI
     # path alike, one implementation instead of two staying in sync).
     config_dict: Dict[str, Any] = {"graph": graph, "experiment_name": experiment_name}
     if spec.get("llm"):
         config_dict["llm"] = deepcopy(spec["llm"])
     # A drawn feature node (judge / answer-gen / tts / …) enables its capability and carries its
-    # params — the loader's _FEATURE_NODE_CONFIG fold handles both from node presence.
+    # params — the loader's FEATURE_NODE_CONFIG fold handles both from node presence.
     _validate_node_types(graph.get("nodes") or [])
     return build_evaluation_config_kwargs(config_dict)
 

@@ -1,20 +1,8 @@
-"""ItemSet: keyed, per-item artifact container (architecture A1).
+"""ItemSet: keyed, per-item artifact container.
 
-Per-item artifacts (query texts, embeddings, retrieved results, per-item scores) used to
-be aligned **positional lists** indexed by query position — brittle the moment a node
-changes cardinality (augmentation N-variants, ``multi_query`` expansion) or drops a failed
-item. ``ItemSet`` makes the identity explicit: an ordered list of ``ids`` with a ``values``
-column aligned 1:1, so:
-
-* **transform** keeps the ids (``with_values`` / ``map_values``),
-* **failure / filter** drops ids → a *sparse* set; consumers ``align`` by id (gaps tolerated),
-* **fan-out** mints lineage ids (``q42 → q42·aug0``) with the parent recoverable,
-* **join** lines two sets up by id, not by position.
-
-Columnar (ids + aligned values) rather than ``dict[id→value]`` so the vectorized batch path
-is preserved: ``values`` may be a plain list *or* a 2-D ``np.ndarray`` (one row per id).
-
-See ``evaluator-architecture.md`` §3.
+Replaces positional lists (aligned by query position — brittle once a node changes cardinality,
+e.g. augmentation fan-out, or drops a failed item) with an ordered ``ids`` list and an aligned
+``values`` column, so identity, not position, is the invariant transforms/filters/joins rely on.
 """
 
 from __future__ import annotations
@@ -49,30 +37,26 @@ class ItemSet:
                 f"ItemSet: {len(ids)} ids but {n_vals} values (must align 1:1)"
             )
         if len(set(ids)) != len(ids):
-            # O(n) duplicate report (was O(n²) via list.count per id) — only on this
-            # already-invalid error path, but cheap to keep linear (H2).
             from collections import Counter
 
             dupes = sorted(i for i, c in Counter(ids).items() if c > 1)
             raise ValueError(f"ItemSet: duplicate ids {dupes}")
         self._ids: List[str] = ids
         self._values: Any = values
-        # Lazily-built id→row index, cached because ItemSet is immutable (M1).
+        # Lazily-built id→row index, cached because ItemSet is immutable.
         self._index_cache: dict = None
 
-    # ── constructors ──────────────────────────────────────────────────
+    # constructors
     @classmethod
     def empty(cls) -> "ItemSet":
         return cls([], [])
 
     @classmethod
     def concat(cls, parts: "Iterable[ItemSet]") -> "ItemSet":
-        """Concatenate ItemSets in order into one (the windowed-execution accumulator, 3a).
-
-        Ids stay in part-then-row order and must be globally unique (the ctor enforces it, so
+        """Concatenate ItemSets in order into one (the windowed-execution accumulator). Ids
+        stay in part-then-row order and must be globally unique (the ctor enforces it, so
         overlapping windows are a loud error). All-list parts stay a list; all-ndarray parts
-        with matching width stack into one 2-D array (the vectorized path is preserved). An
-        empty input is the empty set."""
+        with matching width stack into one 2-D array. An empty input is the empty set."""
         parts = [p for p in parts]
         if not parts:
             return cls.empty()
@@ -87,7 +71,7 @@ class ItemSet:
             values.extend(list(p._values))
         return cls(ids, values)
 
-    # ── access ────────────────────────────────────────────────────────
+    # access
     @property
     def ids(self) -> List[str]:
         return list(self._ids)
@@ -112,7 +96,7 @@ class ItemSet:
     def value_for(self, item_id: str) -> Any:
         return self._row(self._index[item_id])
 
-    # ── transforms (ids preserved) ────────────────────────────────────
+    # transforms (ids preserved)
     def with_values(self, values: Any) -> "ItemSet":
         """Same ids, new aligned ``values`` (the output of a transform node)."""
         return ItemSet(self._ids, values)
@@ -121,34 +105,25 @@ class ItemSet:
         """Elementwise map over values (list path); ids preserved."""
         return ItemSet(self._ids, [fn(self._row(i)) for i in range(len(self._ids))])
 
-    # ── subset / reorder ──────────────────────────────────────────────
-    def select(self, ids: Sequence[str]) -> "ItemSet":
-        """Subset/reorder to exactly ``ids`` (every id must be present)."""
-        missing = [i for i in ids if i not in self._index]
-        if missing:
-            raise KeyError(f"ItemSet.select: ids not present {missing}")
-        rows = [self._index[i] for i in ids]
-        return ItemSet(list(ids), self._take(rows))
-
+    # subset / reorder
     def filter(self, keep: Callable[[str, Any], bool]) -> "ItemSet":
         """Keep items where ``keep(id, value)`` is truthy (order preserved)."""
         rows = [i for i, item_id in enumerate(self._ids) if keep(item_id, self._row(i))]
         return ItemSet([self._ids[i] for i in rows], self._take(rows))
 
-    # ── join (align two sets by id) ───────────────────────────────────
+    # join (align two sets by id)
     def align(
         self,
         other: "ItemSet",
         *,
         other_key: Optional[Callable[[str], str]] = None,
     ) -> Tuple[List[str], List[Any], List[Any]]:
-        """Inner-join with ``other`` by id (this set's order). Returns
-        ``(ids, self_values, other_values)`` over the shared ids — the basis for metric
-        nodes (scored vs ground-truth) and cross-branch deltas.
-
-        ``other_key`` maps an id that missed directly to the id to read from ``other``
-        instead (the lineage join: variant ``q42·aug0`` reads ``other``'s ``q42``). The
-        returned ids stay this set's ids, so variants remain distinct items."""
+        """Inner-join with ``other`` by id (this set's order) -> ``(ids, self_values,
+        other_values)`` over the shared ids — the basis for metric nodes (scored vs
+        ground-truth) and cross-branch deltas. ``other_key`` maps an id that missed
+        directly to the id to read from ``other`` instead (the lineage join: variant
+        ``q42·aug0`` reads ``other``'s ``q42``). The returned ids stay this set's ids, so
+        variants remain distinct items."""
         ids: List[str] = []
         a: List[Any] = []
         b: List[Any] = []
@@ -162,11 +137,12 @@ class ItemSet:
                 b.append(other.value_for(key))
         return ids, a, b
 
-    # ── internals ─────────────────────────────────────────────────────
+    # internals
     @property
     def _index(self) -> dict:
-        # Built once and cached (M1: was rebuilt on every has/value_for/select/align call,
-        # i.e. O(n) per lookup → O(n²) over an align loop). Safe because ItemSet is immutable.
+        # Built once and cached — has/value_for/align run in loops, and rebuilding this dict
+        # each time would make an align loop O(n²) instead of O(n). Safe because ItemSet is
+        # immutable.
         idx = self._index_cache
         if idx is None:
             idx = {item_id: i for i, item_id in enumerate(self._ids)}

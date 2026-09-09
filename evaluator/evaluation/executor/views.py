@@ -1,8 +1,7 @@
 """Per-worker state view for intra-level parallel execution.
 
-``_NodeView`` isolates the swap-sensitive / per-query attrs (``_VIEW_LOCAL_ATTRS``) per branch while
-delegating everything else to the shared base ``RunState``.
-"""
+``_NodeView`` isolates the swap-sensitive/per-query attrs (``_VIEW_LOCAL_ATTRS``) per
+branch while delegating everything else to the shared base ``RunState``."""
 
 from __future__ import annotations
 
@@ -12,39 +11,37 @@ from typing import Any, Dict
 from .state import RunState, per_branch_field_names
 
 # Fields a parallel worker keeps *private* (per-node) so concurrent branch handlers don't
-# clobber each other (T5): the node it runs, the swap-sensitive pipeline attrs (`_node_pipeline`
-# / corpus_index rebind these transiently), and the per-query scratch accumulators. Everything
-# else (ctx, drop_sink, config, cache, service_provider, results, stage_times) is shared — those
-# are either thread-safe (ctx/drop_sink) or only written by serial/solo nodes. Cross-node data
-# flows via the keyed `ctx`, not these accumulators (Phase R), so isolating them is safe.
+# clobber each other: the node it runs, the swap-sensitive pipeline attrs, and the
+# per-query scratch accumulators. Everything else (ctx, drop_sink, config, cache,
+# service_provider, results, stage_times) is shared — thread-safe (ctx/drop_sink) or only
+# written by serial/solo nodes. Cross-node data flows via the keyed `ctx`, not these
+# accumulators, so isolating them is safe.
 #
-# Derived from the RunState field `scope` markers (M1b) — not hand-maintained. Adding a
+# Derived from the RunState field `scope` markers — not hand-maintained. Adding a
 # RunState field without a scope marker fails the classification test; marking it
 # `scope: node` automatically isolates it here.
 _VIEW_LOCAL_ATTRS = per_branch_field_names()
 
 
 class _NodeView:
-    """Per-worker view of ``RunState`` for intra-level parallel execution (T5).
-
-    Reads/writes of the private attrs (see ``_VIEW_LOCAL_ATTRS``) are isolated per worker —
-    initialised from the base's current values, then diverging locally — so two branch handlers
-    running concurrently never stomp each other's ``current_node`` or transiently-swapped
-    pipeline. Everything else delegates to the shared base; method calls (``put_artifact`` …)
-    are re-bound to the view so they use the view's ``current_node`` over the shared, thread-safe
-    ``ctx``."""
+    """Per-worker view of ``RunState`` for intra-level parallel execution. Reads/writes of
+    the private attrs (see ``_VIEW_LOCAL_ATTRS``) are isolated per worker — initialised from
+    the base's current values, then diverging locally — so two branch handlers running
+    concurrently never stomp each other's ``current_node`` or transiently-swapped pipeline.
+    Everything else delegates to the shared base; methods are re-bound to the view so they
+    use its ``current_node`` over the shared, thread-safe ``ctx``."""
 
     def __init__(self, base: "RunState", node: Any) -> None:
         object.__setattr__(self, "_base", base)
         # Seed each private attr from the base's *current* value (so the branch inherits the
-        # shared-prefix state, e.g. a transiently-swapped pipeline). Today every scope:node
-        # field is an OBJECT reference (the four pipelines + current_node) — shared by
+        # shared-prefix state, e.g. a transiently-swapped pipeline). Every scope:node field
+        # today is an OBJECT reference (the four pipelines + current_node) — shared by
         # reference on purpose: a branch isolates *which* pipeline it sees by rebinding its
-        # own `local` slot (via __setattr__), and the pipeline objects must NOT be deep-copied
-        # (that would duplicate loaded models). The list/dict shallow-copy below is defensive
-        # for any FUTURE scope:node field that is a container.
+        # own `local` slot, and the pipeline objects must NOT be deep-copied (that would
+        # duplicate loaded models). The list/dict shallow-copy below is defensive for any
+        # FUTURE scope:node field that is a container.
         #
-        # L5 contract: a scope:node container field must be REPLACED wholesale by handlers
+        # The contract: a scope:node container field must be REPLACED wholesale by handlers
         # (``view.acc = new``), never mutated nested-in-place (``view.acc[0]['k'] = v``), since
         # this copy is one level deep. Cross-node/cross-branch data flows through the keyed,
         # thread-safe ``ctx`` — not these accumulators — so the replace-not-mutate rule holds.

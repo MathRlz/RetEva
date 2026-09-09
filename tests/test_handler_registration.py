@@ -1,8 +1,8 @@
-"""R9 pins: handler registration is explicit-import driven and double-import safe.
+"""Handler registration is explicit-import driven and double-import safe.
 
 The stage registry raises on a REAL name collision but tolerates the same handler
 re-registered (a module imported under a second sys.modules name re-executes its
-decorators — previously a hard crash).
+decorators without crashing).
 """
 
 import importlib.util

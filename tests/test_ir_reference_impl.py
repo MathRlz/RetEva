@@ -1,4 +1,4 @@
-"""A5 pins (CRITIQUE.md): metrics/ir.py matches the trec_eval reference implementation.
+"""metrics/ir.py matches the trec_eval reference implementation.
 
 The IR metric layer is hand-rolled; this cross-checks every registry-served IR metric
 (recall@k / precision@k / ndcg@k / mrr / map) against ``pytrec_eval`` (the trec_eval

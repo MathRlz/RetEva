@@ -1,11 +1,11 @@
-"""B3/F16: ModelServiceProvider builds service-bucket keys via one `_key_for(family, **kw)`.
+"""ModelServiceProvider builds service-bucket keys via one `_key_for(family, **kw)`.
 
 Pins the per-family tuple shape so a future field reorder can't silently split the get key.
 """
 
 import pytest
 
-from evaluator.services.model_provider import ModelServiceProvider
+from evaluator.pipeline.model_provider import ModelServiceProvider
 
 
 def test_key_for_tuple_shapes_match_legacy():

@@ -8,12 +8,20 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict
 
 from ..stage_registry import get_stage_spec
 from ...logging_config import get_logger, node_logger
 from ...pipeline.graph.operators import node_kind
 from .state import RunState
+from ..artifact_dump import maybe_dump_node_artifacts
+from .offload import _plan_stage_offloads
+from .views import _NodeView
+from .parallel import _node_device
+from ..helpers import _branch_of
+from ..progress import ProgressSink
+from ..run_journal import snapshot_state, RunJournal, run_key, try_restore
 
 logger = get_logger(__name__)
 
@@ -22,9 +30,8 @@ _STAGE_TIMES_LOCK = threading.Lock()
 
 def _failed_ancestor(state: "RunState", node: Any) -> str | None:
     """Root failed node this node transitively depends on, or None when all clear.
-
     ``depends_on`` is the full ordering contract (a superset of the data bindings), so it
-    covers structural nodes too. A skipped dependency propagates its own root, keeping the
+    covers structural nodes too; a skipped dependency propagates its own root, keeping the
     attribution pointed at the node that actually raised."""
     for dep in getattr(node, "depends_on", ()):
         if dep in state.failed_nodes:
@@ -38,19 +45,15 @@ def _run_one_node(
     state: "RunState", node: Any, sink: Any = None, level: int = 0,
     absorb_errors: bool = True,
 ) -> None:
-    """Run a single node's handler (with timing) against ``state`` (a base or a view).
+    """Run a single node's handler (with timing) against ``state`` (a base or a view). Emits
+    ``node_start``/``node_complete``/``node_error``/``node_skipped`` events to ``sink`` so an
+    observer sees the DAG advance node by node, with each node's wall time.
 
-    Emits ``node_start`` / ``node_complete`` / ``node_error`` / ``node_skipped`` events to
-    ``sink`` (T10) so an observer sees the DAG advance node by node mid-run, with each
-    node's wall time.
-
-    Branch fail-fast: a handler exception marks the node failed instead of aborting the
-    run, and every node downstream of a failed node is skipped without running — a broken
-    branch stops at its error, sibling branches keep going. ``KeyboardInterrupt`` /
-    ``SystemExit`` (BaseException, not caught here) still abort the whole run.
-
-    ``absorb_errors=False`` (the windowed-streaming path) re-raises after recording:
-    streaming's recovery model is crash → window-journal resume, not branch skipping."""
+    Branch fail-fast: a handler exception marks the node failed instead of aborting the run,
+    and every downstream node is skipped without running. ``KeyboardInterrupt``/``SystemExit``
+    (BaseException, not caught here) still abort the whole run. ``absorb_errors=False`` (the
+    windowed-streaming path) re-raises after recording: streaming's recovery model is crash →
+    window-journal resume, not branch skipping."""
     spec = get_stage_spec(node.stage)
     skip_root = _failed_ancestor(state, node)
     if skip_root is not None:
@@ -68,8 +71,8 @@ def _run_one_node(
             )
         return
     state.current_node = node  # so handlers put/get artifacts by node id
-    # Node-granular console marker (replaces the old per-phase banners, N2): every DAG
-    # node announces itself by id + stage, so the log tracks the graph, not fixed phases.
+    # Node-granular console marker: every DAG node announces itself by id + stage, so the
+    # log tracks the graph, not fixed phases.
     node_logger.info("▶ node %s (stage=%s, level=%d)", node.id, node.stage, level)
     if sink is not None:
         sink.emit("node_start", node=node.id, level=level, stage=node.stage)
@@ -90,8 +93,8 @@ def _run_one_node(
         dur = time.perf_counter() - _t
         # stage_times is shared; a lock keeps the += from losing updates under parallelism.
         with _STAGE_TIMES_LOCK:
-            # Every node, including `self_timed` ones (which own a bucket but historically
-            # left the LLM stages untimed) — this is the per-node breakdown the report shows.
+            # Every node, including `self_timed` ones (whose own bucket doesn't cover the LLM
+            # stages) — this is the per-node breakdown the report shows.
             state.node_times[node.id] = state.node_times.get(node.id, 0.0) + dur
             if not spec.self_timed:
                 state.stage_times[spec.time_key] = (
@@ -121,26 +124,18 @@ def _run_one_node(
                     stage=node.stage,
                     duration_s=round(dur, 3),
                 )
-        # Opt-in mid-run artifact inspection (R7) — no-op unless EVALUATOR_DUMP_ARTIFACTS lists
+        # Opt-in mid-run artifact inspection — no-op unless EVALUATOR_DUMP_ARTIFACTS lists
         # this node, so the normal run path is untouched.
-        from ..artifact_dump import maybe_dump_node_artifacts
 
         maybe_dump_node_artifacts(state, node)
 
 
 def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> None:
-    """Dispatch each DAG node to its handler in topological order.
-
-    The stage graph is the single source of truth for what runs and in what order. Independent
-    nodes in the same topological level (e.g. the ref/asr/corr branches of the thesis apparatus)
-    run **concurrently** when ``config.parallel_enabled`` — each on a private ``_NodeView`` so they
-    don't clobber shared mutable state, and serialized per device so two nodes never contend for
-    one GPU (T5). Single-node levels (the whole single-branch path) run exactly as before, serial.
-    """
-    from .offload import _plan_stage_offloads
-    from .views import _NodeView
-    from .parallel import _run_level_parallel
-    from ..handlers.metrics import _branch_of
+    """Dispatch each DAG node to its handler in topological order. The stage graph is the
+    single source of truth for what runs and in what order. Independent nodes in the same
+    topological level run **concurrently** when ``config.parallel_enabled`` — each on a
+    private ``_NodeView`` so they don't clobber shared mutable state, serialized per device
+    so two nodes never contend for one GPU. Single-node levels run serial."""
 
     query_opt_enabled = query_opt_config is not None and getattr(
         query_opt_config, "enabled", False
@@ -156,7 +151,7 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
     ) and branched
     # Persistent per-branch state: the "main" (shared-prefix) branch runs on the base; each
     # divergent branch carries its own _NodeView across all levels, so a branch's positional
-    # node-scoped control attrs survive level→level for its own metrics node (T5).
+    # node-scoped control attrs survive level→level for its own metrics node.
     views: Dict[str, Any] = {}
 
     def _ctx_for(node: Any) -> Any:
@@ -169,12 +164,11 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
             views[branch] = _NodeView(state, node)
         return views[branch]
 
-    # Full-run checkpoint/resume (T6): snapshot resumable state at each level boundary; a rerun
+    # Full-run checkpoint/resume: snapshot resumable state at each level boundary; a rerun
     # with the same config + graph resumes at the first incomplete level instead of recomputing.
     journal, start_level = _setup_run_journal(state, flat_nodes)
 
-    # Live, node-granular progress to the callback + optional JSONL sink (T10).
-    from ..progress import ProgressSink
+    # Live, node-granular progress to the callback + optional JSONL sink.
 
     sink = ProgressSink.from_env(
         callback=state.cb, total_levels=len(levels)
@@ -222,8 +216,6 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
             # Once any node has failed, stop advancing the journal: it stays at the last
             # fully-clean level, so a rerun resumes there and RE-ATTEMPTS the failed branch
             # instead of replaying a level that silently omitted it.
-            from ..run_journal import snapshot_state
-
             journal.save(i, snapshot_state(state))
     if journal is not None:
         if state.failed_nodes:
@@ -235,7 +227,7 @@ def _execute_stage_graph(state: "RunState", stage_graph, query_opt_config) -> No
 
 
 def _setup_run_journal(state: "RunState", flat_nodes) -> tuple:
-    """Build the run journal + resume point (T6). Returns ``(journal, start_level)``; the
+    """Build the run journal + resume point. Returns ``(journal, start_level)``; the
     journal is ``None`` (no checkpointing) unless a cache dir + experiment id + a positive
     ``checkpoint_interval`` are configured. On a matching journal, restores the snapshot and
     resumes at the level after the last completed one."""
@@ -245,7 +237,6 @@ def _setup_run_journal(state: "RunState", flat_nodes) -> tuple:
         and state.checkpoint_interval > 0
     ):
         return None, 0
-    from ..run_journal import RunJournal, run_key
 
     key = run_key(state.config, tuple(n.id for n in flat_nodes))
     journal = RunJournal(state.cache_manager.checkpoints_dir, key)
@@ -254,9 +245,34 @@ def _setup_run_journal(state: "RunState", flat_nodes) -> tuple:
         loaded = journal.load()
         if loaded is not None:
             last_level, blob = loaded
-            from ..run_journal import try_restore
 
             if try_restore(state, blob):
                 start_level = last_level + 1
                 node_logger.info("resuming run from level %d (journal %s)", start_level, key)
     return journal, start_level
+
+
+def _run_level_parallel(
+    state: "RunState", level, ctx_for, sink: Any = None, level_idx: int = 0
+) -> None:
+    """Run a level's nodes concurrently on their per-branch views, serialized per device.
+
+    Threads (not processes): the heavy work is GPU/LLM/IO-bound and releases the GIL, and a
+    shared in-process ``ctx`` is how branches exchange artifacts. A per-device lock means
+    same-device nodes still run one-at-a-time (no single-GPU contention/OOM), while nodes on
+    distinct devices overlap. Handler exceptions are absorbed by ``_run_one_node`` (branch
+    fail-fast); only BaseException (KeyboardInterrupt/SystemExit) escapes to the re-raise
+    below and aborts the run."""
+    device_locks: Dict[str, threading.Lock] = {
+        _node_device(n, state): threading.Lock() for n in level
+    }
+    max_workers = min(len(level), len(device_locks)) or 1
+
+    def _worker(node: Any) -> None:
+        with device_locks[_node_device(node, state)]:
+            _run_one_node(ctx_for(node), node, sink, level_idx)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_worker, node) for node in level]
+        for fut in as_completed(futures):
+            fut.result()  # re-raise the first worker exception

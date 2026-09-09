@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Optional, Any, Callable
 
 from .monitor import GPUMonitor, get_monitor
+from .pool import get_active_pool
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ def suggest_batch_size(
     min_batch: int = 1,
     safety_factor: float = 1.5,
 ) -> int:
-    """Suggest a batch size that fits in ``free_gb`` given a per-item memory estimate (§8).
+    """Suggest a batch size that fits in ``free_gb`` given a per-item memory estimate.
 
     Replaces "discover the safe batch by OOM-ing and halving" with an *estimate*: a one-sample
     warm-up (or a cached prior) measures ``per_item_gb``, and this returns
@@ -47,14 +48,7 @@ class MemorySnapshot:
 
 
 class MemoryManager:
-    """Manages GPU memory optimization and monitoring.
-
-    Provides utilities for:
-    - Clearing GPU cache periodically vs. on-demand
-    - Monitoring peak memory usage
-    - Batched cleanup operations
-    - Memory-efficient context managers
-    """
+    """Manages GPU memory optimization and monitoring."""
 
     def __init__(
         self,
@@ -85,7 +79,6 @@ class MemoryManager:
             logger.warning(f"Failed to clear GPU cache: {e}")
 
     def collect_garbage(self) -> None:
-        """Trigger Python garbage collection to free memory."""
         collected = gc.collect()
         logger.debug(f"Garbage collection freed {collected} objects")
 
@@ -146,7 +139,7 @@ class MemoryManager:
         min_batch: int = 1,
         safety_factor: float = 1.5,
     ) -> int:
-        """Suggest a batch size for the current free memory on ``device_idx`` (§8).
+        """Suggest a batch size for the current free memory on ``device_idx``.
 
         Reads the live free-memory snapshot and defers to :func:`suggest_batch_size`. Returns
         ``max_batch`` when the device is unavailable (CPU / no CUDA), preserving today's
@@ -169,7 +162,7 @@ class MemoryManager:
         min_batch: int = 1,
         safety_factor: float = 1.5,
     ) -> int:
-        """Estimate a safe batch size from a one-sample warm-up (§8 Roadmap 1b).
+        """Estimate a safe batch size from a one-sample warm-up.
 
         Snapshots free memory, runs ``measure_fn`` once (a single-item forward), snapshots
         again, derives ``per_item_gb`` from the *used* delta, and returns
@@ -194,45 +187,6 @@ class MemoryManager:
             after.free_mb / 1024.0, per_item_gb,
             max_batch=max_batch, min_batch=min_batch, safety_factor=safety_factor,
         )
-
-    def get_peak_memory_usage(self, device_idx: int = 0) -> Optional[float]:
-        """Peak memory used on a device in MB, or None if never recorded."""
-        key = f"peak_used_{device_idx}"
-        return self._peak_memory.get(key)
-
-    def get_memory_stats(self) -> dict[str, Any]:
-        """Memory statistics per tracked device (peak/avg/min over snapshots)."""
-        if not self._memory_snapshots:
-            return {"error": "No memory snapshots recorded"}
-
-        stats = {}
-
-        by_device = {}
-        for snapshot in self._memory_snapshots:
-            if snapshot.device not in by_device:
-                by_device[snapshot.device] = []
-            by_device[snapshot.device].append(snapshot)
-
-        for device, snapshots in by_device.items():
-            used_values = [s.used_mb for s in snapshots]
-            util_values = [s.utilization_percent for s in snapshots]
-
-            stats[device] = {
-                "peak_used_mb": max(used_values),
-                "avg_used_mb": sum(used_values) / len(used_values),
-                "min_used_mb": min(used_values),
-                "peak_util_percent": max(util_values),
-                "avg_util_percent": sum(util_values) / len(util_values),
-                "snapshots": len(snapshots),
-            }
-
-        return stats
-
-    def reset_stats(self) -> None:
-        """Reset all collected statistics."""
-        self._peak_memory.clear()
-        self._memory_snapshots.clear()
-        self._operation_count = 0
 
     @contextmanager
     def batch_processing_scope(
@@ -294,7 +248,6 @@ class BatchProcessor:
         return snapshot
 
     def get_stats(self) -> dict[str, Any]:
-        """Get processing statistics."""
         if not self.snapshots:
             return {"batches_processed": self.batch_count}
 
@@ -312,7 +265,6 @@ _default_memory_manager: Optional[MemoryManager] = None
 
 
 def get_memory_manager() -> MemoryManager:
-    """Get the default memory manager instance."""
     global _default_memory_manager
     if _default_memory_manager is None:
         _default_memory_manager = MemoryManager()
@@ -320,7 +272,7 @@ def get_memory_manager() -> MemoryManager:
 
 
 def _is_oom_error(exc: BaseException) -> bool:
-    """True if ``exc`` is a CUDA out-of-memory error (the retryable case for T7)."""
+    """True if ``exc`` is a CUDA out-of-memory error (the retryable case)."""
     try:
         import torch
 
@@ -338,7 +290,7 @@ def run_with_oom_backoff(
     *,
     min_batch: int = 1,
 ) -> list:
-    """Run ``fn(items)`` and, on a CUDA OOM, halve the batch and retry — instead of crashing (T7).
+    """Run ``fn(items)`` and, on a CUDA OOM, halve the batch and retry — instead of crashing.
 
     ``fn`` maps a list of inputs to an aligned sequence of outputs. On out-of-memory the GPU
     cache is cleared and the batch is split in two and processed recursively, so an oversized
@@ -346,7 +298,7 @@ def run_with_oom_backoff(
 
     An OOM at ``len <= min_batch`` is a capacity problem, not a batching one: the GPU is
     packed with other (usually idle) models. Before giving up, the active GPUPool is asked
-    to evict its LRU-parked models one at a time, retrying after each (T7b); only when
+    to evict its LRU-parked models one at a time, retrying after each; only when
     nothing evictable remains does the OOM re-raise. Non-OOM errors propagate unchanged."""
     if not items:
         return []
@@ -370,15 +322,13 @@ def run_with_oom_backoff(
 def _retry_after_evictions(
     fn: Callable[[list], Any], items: list, original: BaseException
 ) -> list:
-    """Minimal-batch OOM recovery (T7b): evict pool-managed LRU models from GPU one at a
+    """Minimal-batch OOM recovery: evict pool-managed LRU models from GPU one at a
     time, clearing the CUDA cache and retrying ``fn`` after each. Re-raises the original
     OOM when no pool is active or every evictable model is already off-GPU. The failing
     model itself sits at the LRU tail (touched at build), so parked idle models go first;
     if it is the last one standing its own eviction moves it to CPU and the retry runs
     there — slow, but the run survives."""
     import re
-
-    from .pool import get_active_pool
 
     pool = get_active_pool()
     if pool is None:

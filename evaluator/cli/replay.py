@@ -1,6 +1,6 @@
 """``evaluator replay`` — re-run a single query id through the full graph with a per-node trace.
 
-Item-level diagnostics (Roadmap 2d): per-item seeding already makes one item deterministic,
+Item-level diagnostics: per-item seeding already makes one item deterministic,
 so replaying one query id reproduces exactly what it did in a full run. This command keeps the
 corpus whole, slices the query side to the one id, dumps every node's artifacts (the existing
 ``EVALUATOR_DUMP_ARTIFACTS`` hook) with debug logging on, and prints the per-node trace.
@@ -15,6 +15,11 @@ import os
 import sys
 from pathlib import Path
 from typing import List, Optional
+from evaluator.config import EvaluationConfig
+from evaluator.services.evaluation_service import run_from_config
+from evaluator.logging_config import setup_logging
+from evaluator.pipeline import build_graph_for_config
+from evaluator.storage.cache import CacheManager
 
 
 def parse_replay_args(args: Optional[List[str]] = None) -> argparse.Namespace:
@@ -54,12 +59,6 @@ def _print_trace(dump_dir: Path, node_order: List[str], query_id: str) -> None:
 
 
 def run_replay(args: argparse.Namespace) -> int:
-    from evaluator.config import EvaluationConfig
-    from evaluator.evaluation.runner import run_evaluation_from_config
-    from evaluator.logging_config import setup_logging
-    from evaluator.pipeline import build_graph_for_config
-    from evaluator.storage.cache import CacheManager
-
     if not Path(args.config).exists():
         print(f"Error: config not found: {args.config}", file=sys.stderr)
         return 1
@@ -86,7 +85,7 @@ def run_replay(args: argparse.Namespace) -> int:
         cache_dir=config.cache.cache_dir, enabled=config.cache.enabled
     )
     try:
-        run_evaluation_from_config(
+        run_from_config(
             config, cache_manager=cache_manager, query_ids={args.query_id}
         )
     except Exception as exc:  # surface the failure but still show whatever was dumped

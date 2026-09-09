@@ -1,16 +1,9 @@
-"""Terminal sink nodes: persist the aggregate ``report`` (architecture A6).
+"""Terminal sink nodes: persist the aggregate ``report``.
 
-The ``aggregate`` node computes the ``report`` (per-branch scalars, deltas, provenance);
-sink nodes *persist* it, keeping computation pure (the report is the single source of truth,
-sinks are explicit graph I/O — mirrors ``dataset_sink``). ``leaderboard_sink`` writes the
-report to a JSON sidecar (a leaderboard can index these); ``tracking_sink`` logs a summary
-(MLflow/other tracking is optional). Both no-op without a ``report``.
-
-These are graph-native persistence; the runner's existing out-of-graph leaderboard ingest
-(``services/evaluation_service``) stays the default, so the sinks are opt-in (added to a graph
-explicitly) and never double-write.
-
-See ``evaluator-architecture.md`` §8.
+The ``aggregate`` node computes the ``report``; sink nodes *persist* it, keeping computation
+pure (mirrors ``dataset_sink``). These are graph-native and opt-in — the runner's existing
+out-of-graph leaderboard ingest (``services/evaluation_service``) stays the default, so the
+sinks never double-write.
 """
 
 from __future__ import annotations

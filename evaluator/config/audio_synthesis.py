@@ -5,63 +5,20 @@ from typing import Optional
 
 @dataclass
 class AudioSynthesisConfig:
-    """
-    Configuration for offline audio synthesis from text.
-
-    Used for text-only benchmark questions where audio needs to be synthesized.
-    Supports various TTS providers for generating synthetic speech.
-
-    Attributes:
-        enabled: Whether audio synthesis is enabled. Default: False.
-        provider: TTS provider to use. Default: "piper".
-            Options: "piper", "xtts_v2", "mms".
-        voice: Voice identifier or language code. Default: "en_US-lessac-medium".
-        sample_rate: Audio sample rate in Hz. Default: 16000.
-        speed: Speech speed multiplier. Default: 1.0.
-        pitch: Pitch shift multiplier. Default: 1.0.
-        volume: Volume multiplier. Default: 1.0.
-        language: Language code for TTS. Default: "en".
-        speaker_id: Vocoder speaker index for providers with multi-speaker vocoders
-            (m4t: 0-199). Default: None (provider default, m4t: 0).
-        seed: Random seed for reproducibility. Default: 42.
-        output_dir: Directory for synthesized audio files. Default: "prepared_benchmarks/audio".
-        cache_dir: Directory for caching synthesized audio. Default: None (auto-derived
-            from output_dir).
-        skip_cache: Skip all caches and force re-synthesis on every call. Default: False.
-        device: Device for GPU-capable providers (m4t, mms: transformers `.to(device)`;
-            xtts_v2: Coqui's own `.to(device)`). Ignored by piper (CPU-only subprocess
-            binary — no device concept). Default: "cpu" (unchanged behavior for anyone not
-            setting it — these providers never moved off CPU before this field existed).
-
-    Examples:
-        >>> config = AudioSynthesisConfig(
-        ...     enabled=True,
-        ...     provider="piper",
-        ...     voice="en_US-lessac-medium",
-        ...     cache_dir=".tts_cache"
-        ... )
-        >>> xtts_cfg = AudioSynthesisConfig(
-        ...     enabled=True,
-        ...     provider="xtts_v2",
-        ...     language="en",
-        ... )
-        >>> mms_cfg = AudioSynthesisConfig(
-        ...     enabled=True,
-        ...     provider="mms",
-        ...     language="pl",
-        ... )
-    """
+    """Configuration for offline audio synthesis from text (for text-only benchmark
+    questions)."""
     enabled: bool = False
-    provider: str = "piper"
+    provider: str = "piper"  # piper | xtts_v2 | mms
     voice: str = "en_US-lessac-medium"
     sample_rate: int = 16000
     speed: float = 1.0
     pitch: float = 1.0
     volume: float = 1.0
     language: str = "en"
+    # multi-speaker vocoders only (m4t: 0-199); None = provider default
     speaker_id: Optional[int] = None
     seed: int = 42
     output_dir: str = "prepared_benchmarks/audio"
-    cache_dir: Optional[str] = None
+    cache_dir: Optional[str] = None  # None = auto-derived from output_dir
     skip_cache: bool = False
-    device: str = "cpu"
+    device: str = "cpu"  # GPU-capable providers only (m4t/mms/xtts_v2); ignored by piper (CPU-only)

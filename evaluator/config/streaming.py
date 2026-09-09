@@ -1,4 +1,4 @@
-"""Streaming / windowed-execution configuration (Roadmap 3a)."""
+"""Streaming / windowed-execution configuration."""
 
 from dataclasses import dataclass
 from typing import Optional
@@ -9,12 +9,9 @@ class StreamingConfig:
     """Opt-in windowed query-side execution for corpus-scale runs.
 
     ``window_size`` slices the query set into windows the executor runs one at a time —
-    the corpus is embedded + indexed once and shared, so only one window's query audio /
-    vectors are resident at a time (the report is reduced over windows, unchanged). ``None``
-    (the default) keeps today's whole-dataset execution.
-
-    This is the config + groundwork; the windowed executor driver consumes it (the corpus /
-    query / finalize phase partition lives in ``evaluation/executor/streaming.py``).
+    the corpus is embedded/indexed once and shared, so only one window's data is resident
+    at a time. ``None`` (default) keeps whole-dataset execution. See
+    ``evaluation/executor/streaming.py`` for the driver.
     """
 
     window_size: Optional[int] = None

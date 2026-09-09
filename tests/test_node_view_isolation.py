@@ -1,4 +1,4 @@
-"""L5: _NodeView isolates the per-branch scope:node attrs. Two concurrent branch views from
+"""_NodeView isolates the per-branch scope:node attrs. Two concurrent branch views from
 the same base must not see each other's pipeline rebinding / current_node, and a top-level
 container replacement in one view must not affect the base or a sibling view."""
 

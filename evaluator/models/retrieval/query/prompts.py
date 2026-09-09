@@ -1,10 +1,5 @@
-"""Medical-domain specific prompt templates for query optimization.
-
-This module provides prompt templates for various query optimization techniques
-including query rewriting, HyDE (Hypothetical Document Embeddings), query
-decomposition, and multi-query generation. All prompts are tailored for
-medical information retrieval.
-"""
+"""Medical-domain prompt templates for query optimization: rewriting, HyDE, decomposition,
+and multi-query generation."""
 
 from typing import Optional
 
@@ -119,7 +114,6 @@ SELF_RAG_CRITIQUE_USER_PROMPT = (
 
 
 def get_self_rag_prompt(query: str, context: str) -> tuple[str, str]:
-    """System + user prompts for the self-RAG critique refine strategy."""
     return (
         SELF_RAG_CRITIQUE_SYSTEM_PROMPT,
         SELF_RAG_CRITIQUE_USER_PROMPT.format(query=query, context=context),
@@ -127,15 +121,6 @@ def get_self_rag_prompt(query: str, context: str) -> tuple[str, str]:
 
 
 def get_rewrite_prompt(query: str, context: Optional[str] = None) -> tuple[str, str]:
-    """Get system and user prompts for query rewriting.
-
-    Args:
-        query: Original query to rewrite.
-        context: Optional context from initial retrieval results.
-
-    Returns:
-        Tuple of (system_prompt, user_prompt).
-    """
     system_prompt = QUERY_REWRITE_SYSTEM_PROMPT
 
     if context:
@@ -150,42 +135,18 @@ def get_rewrite_prompt(query: str, context: Optional[str] = None) -> tuple[str, 
 
 
 def get_hyde_prompt(query: str) -> tuple[str, str]:
-    """Get system and user prompts for HyDE.
-
-    Args:
-        query: Query for which to generate hypothetical document.
-
-    Returns:
-        Tuple of (system_prompt, user_prompt).
-    """
     system_prompt = HYDE_SYSTEM_PROMPT
     user_prompt = HYDE_USER_PROMPT.format(query=query)
     return system_prompt, user_prompt
 
 
 def get_decompose_prompt(query: str) -> tuple[str, str]:
-    """Get system and user prompts for query decomposition.
-
-    Args:
-        query: Complex query to decompose.
-
-    Returns:
-        Tuple of (system_prompt, user_prompt).
-    """
     system_prompt = QUERY_DECOMPOSE_SYSTEM_PROMPT
     user_prompt = QUERY_DECOMPOSE_USER_PROMPT.format(query=query)
     return system_prompt, user_prompt
 
 
 def get_multi_query_prompt(query: str) -> tuple[str, str]:
-    """Get system and user prompts for multi-query generation.
-
-    Args:
-        query: Query for which to generate variations.
-
-    Returns:
-        Tuple of (system_prompt, user_prompt).
-    """
     system_prompt = MULTI_QUERY_SYSTEM_PROMPT
     user_prompt = MULTI_QUERY_USER_PROMPT.format(query=query)
     return system_prompt, user_prompt

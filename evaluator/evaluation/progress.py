@@ -1,14 +1,8 @@
-"""Live, node-granular run observability (task T10).
+"""Live, node-granular run observability.
 
-Before this, progress was phase-granular and per-query traces only materialised at run end, so a
-long run was opaque while it executed. ``ProgressSink`` emits a structured event at each node's
-start and completion (with duration + cumulative stage timing) to:
-
-- the existing ``progress_callback`` (so the in-process webapi job log updates live), and
-- an optional JSONL file (``EVALUATOR_PROGRESS_FILE``) that *any* observer — the webapi polling a
-  subprocess, a CLI ``tail -f`` — can read incrementally to watch the DAG advance node by node.
-
-Thread-safe so T5's parallel branch workers can emit concurrently.
+``ProgressSink`` emits a structured event at each node's start/completion to the existing
+``progress_callback`` and/or a JSONL file (``EVALUATOR_PROGRESS_FILE``); thread-safe so
+parallel branch workers can emit concurrently.
 """
 
 from __future__ import annotations
@@ -27,11 +21,10 @@ logger = get_logger(__name__)
 
 @dataclass
 class ProgressEvent:
-    """The typed, stable progress contract (R7) an external dashboard can consume.
+    """The typed, stable progress contract an external dashboard can consume.
 
-    A node-lifecycle event with the DAG position; ``extra`` carries event-specific fields
-    (e.g. ``duration_s`` on ``node_complete``). ``to_record`` is the JSONL wire form — the
-    same flat dict the file/callback already emitted, so this typing is additive.
+    A node-lifecycle event with the DAG position; ``extra`` carries event-specific fields.
+    ``to_record`` reproduces the flat JSONL dict already emitted, so this typing is additive.
     """
 
     ts: float

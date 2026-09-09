@@ -1,4 +1,4 @@
-"""V3 pins: a shaped spec reaches the page as parseable JSON with its table twin.
+"""A shaped spec reaches the page as parseable JSON with its table twin.
 
 Guards the seam between the pure shaping (test_chart_data.py) and the template macro:
 the spec must ship inside <script type="application/json"> (so untrusted labels are never

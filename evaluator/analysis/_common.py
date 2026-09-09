@@ -1,8 +1,7 @@
-"""Shared helpers for the analysis exporters (B1/F14).
+"""Shared helpers for the analysis exporters.
 
-``_escape_latex`` and ``load_results`` previously had byte-divergent copies across
-``export.py`` / ``significance.py`` / ``branch_report.py``. One canonical definition each
-lives here; the others import from this module.
+One canonical definition of ``_escape_latex`` and ``load_results`` lives here; ``export.py``,
+``significance.py``, and ``branch_report.py`` import from this module instead of duplicating them.
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ _LATEX_REPLACEMENTS = (
 
 
 def _escape_latex(text: str) -> str:
-    """Escape LaTeX special characters in ``text`` (backslash handled first)."""
     result = text
     for old, new in _LATEX_REPLACEMENTS:
         result = result.replace(old, new)

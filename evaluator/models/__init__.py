@@ -1,11 +1,4 @@
-"""Models package for evaluation framework.
-
-This package contains all model implementations organized by category:
-- ASR models: Automatic Speech Recognition models
-- Text embedding models: Models for encoding text into embeddings
-- Audio embedding models: Models for encoding audio directly into embeddings
-- Reranker models: Models for reranking retrieval results
-"""
+"""Models package: ASR, text/audio embedding, reranker, and TTS model implementations."""
 
 # Base classes
 from .base import ASRModel, TextEmbeddingModel, AudioEmbeddingModel
@@ -32,7 +25,7 @@ from .factory import (
 )
 
 # Concrete model classes are exported lazily (PEP 562): importing
-# ``evaluator.models`` no longer loads every torch/transformers-heavy model
+# ``evaluator.models`` does not load every torch/transformers-heavy model
 # module — the submodule is imported on first attribute access. Registry
 # population is independent of this: each ModelRegistry imports its family
 # module on first lookup (see .registry).

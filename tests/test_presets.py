@@ -8,11 +8,15 @@ from evaluator.config.model_presets import list_presets
 def test_presets_are_discoverable():
     presets = list_presets()
     assert presets, "no presets found in configs/"
-    assert "e2e_pubmed_qa_small" in presets
+    assert "pubmed_qa_rag_fulltext" in presets
 
 
 @pytest.mark.parametrize(
-    "name", ["e2e_pubmed_qa_small", "evaluation_config_admed_selfretr_asr_text"]
+    # pubmed_qa_rag_fulltext itself is a text-only retrieval graph (no asr/audio_embedding
+    # query head), so its label is legitimately None (only asr/audio_embedding graphs get one)
+    # — its _refine_voice sibling adds an asr node and carries a real label, so it exercises
+    # the same preset family for this assertion.
+    "name", ["pubmed_qa_rag_fulltext_refine_voice", "evaluation_config_admed_selfretr_asr_text"]
 )
 def test_named_preset_loads(name):
     from evaluator.config.evaluation import EvaluationConfig
@@ -20,7 +24,7 @@ def test_named_preset_loads(name):
     if name not in list_presets():
         pytest.skip(f"{name} not present")
     cfg = EvaluationConfig.from_preset(name, validate=False)
-    assert cfg.graph_template is not None
+    assert cfg.graph_label is not None
 
 
 @pytest.mark.parametrize(
@@ -53,10 +57,10 @@ def test_underscore_override_resolution(key, expected):
 def test_from_preset_applies_underscore_and_dotted_overrides():
     from evaluator.config.evaluation import EvaluationConfig
 
-    if "e2e_pubmed_qa_small" not in list_presets():
+    if "pubmed_qa_rag_fulltext" not in list_presets():
         pytest.skip("preset not present")
     cfg = EvaluationConfig.from_preset(
-        "e2e_pubmed_qa_small", validate=False,
+        "pubmed_qa_rag_fulltext", validate=False,
         model_asr_device="cpu",              # underscore → model.asr_device
         vector_db_k=11,                      # underscore multi-word → vector_db.k
     )

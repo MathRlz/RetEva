@@ -1,10 +1,8 @@
 """Per-node model-override context managers.
 
-When a branch
-node names a model in its params, these swap the relevant pipeline (or reranker config)
-on the run state transiently and restore it on exit, so per-node/per-branch model
-divergence works without disturbing the shared global pipelines.
-"""
+When a branch node names a model in its params, these swap the relevant pipeline (or
+reranker config) transiently and restore it on exit, so per-node/per-branch model
+divergence works without disturbing the shared global pipelines."""
 
 from __future__ import annotations
 
@@ -13,6 +11,13 @@ from dataclasses import replace
 
 from ...logging_config import get_logger
 from .state import RunState
+from ...config.graph_config import resolved_model_config
+from ...devices.memory import get_memory_manager
+from ...pipeline import factory
+from ...pipeline.asr_pipeline import ASRPipeline
+from ...pipeline.text_embedding_pipeline import TextEmbeddingPipeline
+from ...pipeline.audio_embedding_pipeline import AudioEmbeddingPipeline
+from ...models import create_reranker
 
 logger = get_logger(__name__)
 
@@ -22,12 +27,10 @@ _NODE_PIPELINE_ATTR = {
     "audio_embedding": "audio_embedding_pipeline",
 }
 
-# The swap this context manager performs is transient — `s.<attr>` reverts the moment the
-# node's own handler returns, so anything reading `s.asr_pipeline` / `s.text_embedding_pipeline`
-# later in the run (the report/provenance assembler, which runs after every branch's nodes)
-# only ever sees the last-restored value, not this branch's override. Publishing the resolved
-# identity as a node artifact here — while the override is live — lets those later readers
-# fetch it back through the bus (`sibling_artifact`), which stays branch-scoped.
+# This swap is transient — `s.<attr>` reverts when the node's handler returns, so later
+# readers (report/provenance) only see the last-restored value, not this branch's override.
+# Publishing the resolved identity as a node artifact here lets them recover it via
+# `sibling_artifact` instead.
 _PROVENANCE_ARTIFACT = {
     "asr": "asr_model_provenance",
     "text_embedding": "text_embedding_model_provenance",
@@ -71,7 +74,7 @@ def _publish_node_model_provenance(s: "RunState", stage: str, pipeline, eff_mode
 
 @contextmanager
 def _node_pipeline(s: "RunState", stage: str, params):
-    """Per-node model override (R1, generalizes `_node_reranking`): when a branch node names
+    """Per-node model override (generalizes `_node_reranking`): when a branch node names
     a model (`params.model`/`params.name`) for ``stage``, build it (via the service provider,
     else the factory) and swap the relevant pipeline on ``s`` transiently; restore on exit.
     No model params → no-op (the shared global pipeline is used)."""
@@ -83,8 +86,6 @@ def _node_pipeline(s: "RunState", stage: str, params):
     saved = getattr(s, attr)
     pipeline = None
     try:
-        from ...config.graph_config import resolved_model_config
-
         eff_model = resolved_model_config(s.config, s.current_node)
         pipeline = _build_node_pipeline(s, stage, params)
         setattr(s, attr, pipeline)
@@ -103,11 +104,11 @@ def _node_pipeline(s: "RunState", stage: str, params):
 
 
 def _release_node_model(s: "RunState", pipeline) -> None:
-    """Aggressive lifecycle (`on_use_soft_cpu`): park the node's model on CPU the moment
-    its node finishes and return its GPU-pool reservation, so the GPU only ever holds the
-    actively-executing node's models. The provider keeps the instance warm (bounded LRU),
-    so a later node using the same model reactivates it with a CPU→GPU move instead of a
-    reload; the pool key travels on the model (``_gpu_pool_key``, set at build)."""
+    """Aggressive lifecycle (`on_use_soft_cpu`): park the node's model on CPU the moment its
+    node finishes and return its GPU-pool reservation, so the GPU only holds the
+    actively-executing node's models. The provider keeps the instance warm (bounded LRU), so
+    a later node reactivates it via CPU→GPU move instead of a reload; the pool key travels on
+    the model (``_gpu_pool_key``, set at build)."""
     model = getattr(pipeline, "model", None)
     if model is None:
         return
@@ -118,7 +119,6 @@ def _release_node_model(s: "RunState", pipeline) -> None:
         key = getattr(model, "_gpu_pool_key", None)
         if pool is not None and key is not None:
             pool.release(key)
-        from ...devices.memory import get_memory_manager
 
         get_memory_manager().clear_gpu_cache()
         logger.info(
@@ -134,48 +134,36 @@ _BUILDER_METHOD = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding"
 
 def _build_node_pipeline(s: "RunState", stage: str, params: dict):
     """Build a per-node pipeline from the node's params overlaid on the global model config.
-
-    Honors the FULL model param set (``model_path`` / ``dim`` / ``pooling`` (via
-    ``params``) / ``embedding_space`` / ``quantization`` / ``size``) by overlaying the node's
-    params onto a copy of ``config.model`` and building through ``_ModelBuilders`` — routed via
-    the run's shared ``service_provider`` (same as ``_node_reranking``) so two nodes that resolve
-    to the SAME model (type/name/device/params) share one loaded instance instead of each paying
-    for its own load; a node with a genuinely different override still gets its own cache key.
-    Also threads the run's ``device_pool`` (was hardcoded ``None`` — a multi-variant graph's
-    per-node model overrides never went through memory-aware allocation/eviction at all,
-    regardless of a configured ``device_pool:``) so a per-node override is packed/evicted the
-    same way the shared global pipeline already was."""
+    Honors the FULL model param set by overlaying the node's params onto a copy of
+    ``config.model`` and building through ``factory.ModelBuilders`` — routed via the run's
+    shared ``service_provider`` so two nodes that resolve to the SAME model share one loaded
+    instance instead of each paying for its own load. Also threads the run's
+    ``device_pool``, so a per-node override is packed/evicted the same way the shared
+    global pipeline is."""
     from types import SimpleNamespace
 
-    from ...config.graph_config import resolved_model_config
-    from ...pipeline.factory import _ModelBuilders
 
     node = SimpleNamespace(stage=stage, params=params)
     eff_model = resolved_model_config(s.config, node)
     model = getattr(
-        _ModelBuilders(
+        factory.ModelBuilders(
             SimpleNamespace(model=eff_model), s.service_provider, getattr(s, "device_pool", None),
         ),
         _BUILDER_METHOD[stage],
     )()
     cache = s.cache_manager
     if stage == "asr":
-        from ...pipeline.asr_pipeline import ASRPipeline
-
         return ASRPipeline(model, cache)
     if stage == "text_embedding":
-        from ...pipeline.text_embedding_pipeline import TextEmbeddingPipeline
-
         return TextEmbeddingPipeline(model, cache)
-    from ...pipeline.audio_embedding_pipeline import AudioEmbeddingPipeline
 
     return AudioEmbeddingPipeline(model, cache)
 
 
 @contextmanager
 def _node_reranking(rp, params, provider):
-    """Temporarily apply a rerank node's per-instance config to the retrieval pipeline
-    (D3): swap in its reranker (built from ``params.model`` via the provider/factory) +
+    """Temporarily apply a rerank node's per-instance config to the retrieval pipeline:
+    swap in its reranker (built from ``params.model`` via the provider/factory) +
     reranking settings, restore on exit. No params → use the pipeline's global reranker.
     """
     # Only an actual per-node reranker override triggers the swap — not the operator
@@ -208,8 +196,6 @@ def _node_reranking(rp, params, provider):
                     model_name=model_name, device=device
                 )
             else:
-                from ...models import create_reranker
-
                 rp.reranker = create_reranker(
                     model_type="cross_encoder", model_name=model_name, device=device
                 )

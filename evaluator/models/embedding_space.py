@@ -1,15 +1,8 @@
-"""Embedding-space identity (architecture A2).
+"""Embedding-space identity.
 
-A vector is only comparable to another from the **same embedding space** (same
-model/projection). Each embedder declares an ``embedding_space`` via registry
-metadata; absent that, the space defaults to a unique id per ``(model_type,
-model_name)`` so distinct models never accidentally compare equal.
-
-The *validators* that enforce this at pre-flight live in
-``evaluation/validation.py`` (they are validation, not model construction);
-this module owns only the registry-side identity resolution.
-
-See ``evaluator-architecture.md`` §4.
+A vector is only comparable to another from the same embedding space; validators
+enforcing this at pre-flight live in ``evaluation/validation.py``. See
+``evaluator-architecture.md`` §4.
 """
 
 from __future__ import annotations
@@ -29,12 +22,10 @@ def resolve_embedding_space(
     return f"{model_type}:{name}"
 
 
-# ── Cross-modal compatible-space registry (Roadmap 2b) ───────────────
-# Two DISTINCT space ids declared cross-comparable: their vectors live in the same geometry
-# even though they are registered under different ids (e.g. the audio and text encoders a
-# CLAP-style model projects into one shared contrastive space). Same-id spaces are always
-# compatible and need no entry. Model authors / plugins populate this via
-# ``register_compatible_spaces`` — the declarative replacement for hard-coding a model pair.
+# Distinct space ids declared cross-comparable: their vectors live in the same geometry
+# even though registered under different ids (e.g. the audio and text encoders of a
+# CLAP-style model projecting into one shared contrastive space). Same-id spaces are
+# always compatible and need no entry.
 _COMPATIBLE_SPACES: Set[FrozenSet[str]] = set()
 
 

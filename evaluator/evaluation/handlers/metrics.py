@@ -1,15 +1,7 @@
 """Metrics stage handlers: per-branch aggregate report + the single-branch metrics node.
 
-Registers the ``metrics`` and ``aggregate`` handlers at import time. The metric **registry**
-is the one place metrics are computed; the
-flat ``WER``/``MRR``/``Recall@k``/... keys are report-derived aliases (`_derive_bare_keys`).
-Diagnostics the report does not carry + the per-item intermediates the rag/judge stages consume
-are computed from the aligned per-item state. WER/CER score the ASR hypothesis (`query_text`,
-immutable) — no separate raw_query_text snapshot.
-
-Two concerns are extracted to siblings: the provenance assembly (``metrics_provenance``) and the
-IR diagnostics (``metrics_diagnostics``); this core owns the report assembly + the typed metric
-nodes (transcription / retrieval / metrics / aggregate).
+The metric registry is the single place metrics are computed; other flat keys are
+report-derived aliases.
 """
 
 from __future__ import annotations
@@ -19,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
-from ..helpers import _search_results_to_keys
+from ..helpers import _branch_of, _search_results_to_keys
 from ..executor.state import RunState
 from ..result_schema import RunResults
 from .retrieval import _retrieved_from_bus
@@ -38,22 +30,24 @@ from ...metrics import (
     character_error_rate,
 )
 from ...metrics.ir import recall_at_k
+from .embedding import _stage_embedding_alignment_metrics
+from .rag import (
+    _stage_answer_judge,
+    _stage_answer_metrics,
+    _stage_build_query_traces,
+)
+from ._dispatch import dispatch_operator
+from ..item_set import ItemSet
+from ..aggregate import build_report, flatten_report, reduce_scores, rollup_variants
+from ..metric_registry import compute_metrics
+from ..executor.cpu_parallel import run_per_item
 
 logger = get_logger(__name__)
 
 
 @register_stage_handler("measure", self_timed=True)
 def _stage_measure(s: RunState) -> None:
-    """The ``measure`` operator: dispatch by family / trace to the typed comparison,
-    report-assembler, trace-builder, or judge body (all unchanged; answer/trace/judge live
-    in the rag handlers, alignment in the embedding handlers)."""
-    from .embedding import _stage_embedding_alignment_metrics
-    from .rag import (
-        _stage_answer_judge,
-        _stage_answer_metrics,
-        _stage_build_query_traces,
-    )
-    from ._dispatch import dispatch_operator
+    """The ``measure`` operator: dispatches by family / trace to the typed handler."""
 
     return dispatch_operator("measure", {
         "transcription_metrics": _stage_transcription_metrics,
@@ -66,26 +60,13 @@ def _stage_measure(s: RunState) -> None:
     }, s)
 
 
-def _branch_of(producer_id: str) -> str:
-    """Branch label encoded in a node id (``retrieval@corr`` → ``corr``; else ``main``)."""
-    return producer_id.split("@", 1)[1] if "@" in producer_id else "main"
-
-
 def _branched_items(s: "RunState", artifact: str, *, branch_exclusive: bool = False):
-    """``(by_branch, only_shared)`` for an artifact's bound-and-published ItemSets: each
-    branch's own value, plus the lone value when a single producer serves every branch —
+    """``(by_branch, only_shared)`` for an artifact's bound ItemSets. The second element is
     None once the artifact is branched, so a branch never reads another branch's copy.
-    binding-scoped (the aggregate declares + binds what it reads).
-
-    A lone producer is normally shared: CSE collapses an identical prefix across branches
-    into ONE node (``asr@asr`` feeding every branch), so a branch-namespaced id does not
-    imply exclusivity. ``branch_exclusive`` marks an artifact whose ABSENCE in a branch is
-    meaningful — ``corrected_query_text``: a branch with correction disabled has no
-    corrector node at all, so a lone namespaced publisher belongs to its own branch only.
-    Sharing it would score the uncorrected baseline as if it had been corrected, making a
-    single-corrector comparison read as exactly zero effect (found by an Ollama smoke run).
+    ``branch_exclusive`` marks an artifact whose absence in a branch is meaningful (e.g.
+    ``corrected_query_text`` with correction disabled) — sharing it would score the baseline
+    as if corrected, reading a single-corrector comparison as exactly zero effect.
     """
-    from ..item_set import ItemSet
 
     published = [pid for pid in s._producers(artifact) if s.ctx.has(pid, artifact)]
     by_branch: Dict[str, Any] = {}
@@ -102,43 +83,33 @@ def _branched_items(s: "RunState", artifact: str, *, branch_exclusive: bool = Fa
 
 
 def _is_ir_metric(name: str) -> bool:
-    """IR (retrieval) metric names — dropped from the report when the dataset join is disjoint
-    (B5), since with no relevant doc in the corpus they would be a misleading 0, not 'n/a'.
+    """IR (retrieval) metric names — dropped from the report when the dataset join is disjoint,
+    since with no relevant doc in the corpus they would be a misleading 0, not 'n/a'.
     """
     return name in ("mrr", "map") or name.startswith(("recall@", "precision@", "ndcg@"))
 
 
 def _drop_ir_if_disabled(s: "RunState", scores: Dict[str, Any]) -> Dict[str, Any]:
-    """Remove IR metrics from a branch's score set when `s.disable_ir_metrics` (B5)."""
     if not s.disable_ir_metrics:
         return scores
     return {k: v for k, v in scores.items() if not _is_ir_metric(k)}
 
 
-# ── Shared reduction utilities (M7): one registry-scoring + provenance + attach path
-# used by both the single-branch metrics node and the multi-branch aggregate. ──
+# Shared by the single-branch metrics node and the multi-branch aggregate.
 
 
 def _corrected_metrics_enabled(s: "RunState") -> bool:
-    """C7 opt-in: corrected-text + drug-aware (rx) metrics fire only when the run's
-    query_correction config sets ``corrected_metrics`` (reports/m1c otherwise unchanged).
-
-    Reads the query_correction node's own RESOLVED config (stashed by _stage_query_correction —
-    this runs under the metrics node, a different node, so `s.resolved_config()` can't see it),
-    falling back to the flat default when no query_correction node ran this branch."""
+    """Reads the query_correction node's stashed resolved config, not `s.resolved_config()`
+    (this runs under a different node, which can't see it); falls back to the flat default
+    when no query_correction node ran this branch."""
     cfg = getattr(s, "query_correction_resolved_config", None) or s.query_correction_config
     return bool(getattr(cfg, "corrected_metrics", False))
 
 
 def _branch_scores(s: "RunState", artifacts: Dict[str, Any]) -> Dict[str, Any]:
-    """Score one branch's artifacts via the metric registry (collect-all, or the config's
-    `metrics:` allowlist when set — B1), with the B5 IR gate applied — the single scoring
-    call both report paths share. The C7 opt-in metrics are computed only when the run
-    enables ``corrected_metrics`` (or names them in the allowlist). Lineage variants are
-    rolled up to parent level here so every consumer (report, retrieval-WER-impact, the
-    WER↔recall correlation) pairs and reduces on the cluster-safe unit."""
-    from ..aggregate import rollup_variants
-    from ..metric_registry import compute_metrics
+    """Score one branch's artifacts via the metric registry — the single scoring call both
+    report paths share. Rolls up lineage variants to parent level here so every consumer
+    pairs and reduces on the cluster-safe unit."""
 
     scores = compute_metrics(
         artifacts,
@@ -152,59 +123,10 @@ def _branch_scores(s: "RunState", artifacts: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _attach_report(results, report) -> None:
-    """Attach the keyed report + surface its flattened keys to the leaderboard (M4)."""
-    from ..aggregate import flatten_report
+    """Attach the keyed report + surface its flattened keys to the leaderboard."""
 
     results["report"] = report
     results.update(flatten_report(report))
-
-
-def attach_judge_metrics(s: "RunState", own_report: dict) -> None:
-    """Merge the LLM-judge per-query scores into ``own_report``'s report as registry metrics
-    (J3).
-
-    The judge node runs *downstream* of the report assembler, so its keyed ``judge_*``
-    ItemSets are not on the bus when the report is first scored. This terminal pass — called
-    from the finalize node, after every report producer has run — scores those ItemSets
-    through the SAME metric registry + reducer and merges the scalars into
-    ``report['branches'][<branch>]`` + the flat leaderboard keys. No-op when the judge did not
-    run (no ``judge_*`` ItemSets published), so a judge-off run (the parity default) is
-    byte-identical. ``own_report`` is THIS finalize node's own dict (R4/multi-variant) — never
-    the shared ``s.results``."""
-    report = own_report.get("report") if own_report else None
-    if not isinstance(report, dict):
-        return
-    from ..item_set import ItemSet
-
-    # the judge ItemSets are read through the finalize node's DECLARED bindings
-    # (judge_scores / judge_pass / every judge_aspect_* is a declared optional input now).
-    judge_arts: Dict[str, ItemSet] = {}
-    for art, pid in getattr(s.current_node, "bindings", ()):
-        if not (art in ("judge_scores", "judge_pass") or art.startswith("judge_aspect_")):
-            continue
-        if s.ctx.has(pid, art):
-            val = s.ctx.get(pid, art)
-            if isinstance(val, ItemSet):
-                judge_arts[art] = val  # last bound producer wins
-    if not judge_arts:
-        return
-    from ..metric_registry import compute_metrics
-    from ..aggregate import flatten_report, reduce_scores
-
-    # collect_all → exactly the judge_* metrics fire (only judge artifacts are present);
-    # the config's `metrics:` allowlist (B1) applies here too.
-    scores = compute_metrics(judge_arts, only=s.metric_allowlist)
-    if not scores:
-        return
-    # Attach to the run's mode branch when present (single-branch), else the first branch.
-    branches = report.setdefault("branches", {})
-    target = s.mode if s.mode in branches else next(iter(branches), s.mode)
-    branch = branches.setdefault(target, {})
-    for name, item_scores in scores.items():
-        branch[name] = reduce_scores(
-            item_scores, with_ci=getattr(s, "compute_confidence_intervals", False)
-        )
-    own_report.update(flatten_report(report))
 
 
 def _retrieval_wer_impact(
@@ -212,7 +134,7 @@ def _retrieval_wer_impact(
 ) -> Dict[str, Dict[str, Any]]:
     """Retrieval-WER-Impact: recall lost vs the oracle baseline, per recall@k —
     `Recall(baseline) − Recall(branch)` over id-aligned items (the degradation
-    ASR/correction imposes on retrieval). M3; extracted from the aggregate (M7)."""
+    ASR/correction imposes on retrieval)."""
     base_scores = per_branch.get(baseline, {})
     impact: Dict[str, Dict[str, Any]] = {}
     for branch, scores in per_branch.items():
@@ -237,22 +159,21 @@ def _retrieval_wer_impact(
 def _collect_branch_artifacts(s: RunState):
     """Assemble + score each branch's artifacts (id-JOINED, never trimmed — the
     multi-branch path's alignment semantics). Returns ``(per_branch, branch_ids)``."""
-    from ..item_set import ItemSet
 
     relevant = _ctx_first(s, "relevant_docs")
     reference = _ctx_first(s, "reference_text")
     # ASR-quality metrics pair against the spoken transcription when the asr node
-    # published it (M1c-3 reconciliation of the M1a trap); reference_text (question)
-    # remains the fallback — identical on TTS-bridge datasets where spoken == question.
+    # published it; reference_text (question) remains the fallback — identical on
+    # TTS-bridge datasets where spoken == question.
     ref_transcription = _ctx_first(s, "reference_transcription")
     if isinstance(ref_transcription, ItemSet):
         reference = ref_transcription
     # Per-branch query_text = the branch's ASR hypothesis for WER/CER. query_text is
     # immutable (correction/optimization emit distinct names) so the only producers are
-    # asr / dataset_source — no correction preference needed (Phase 4).
+    # asr / dataset_source — no correction preference needed.
     qtext_by_branch, only_shared = _branched_items(s, "query_text")
 
-    # C7 (opt-in): the branch's corrected text, for the corrected_* metrics (an
+    # Opt-in: the branch's corrected text, for the corrected_* metrics (an
     # uncorrected branch scores none — its artifacts simply lack the input).
     corrected_by_branch: Dict[str, ItemSet] = {}
     only_shared_corrected: Optional[ItemSet] = None
@@ -261,7 +182,7 @@ def _collect_branch_artifacts(s: RunState):
             s, "corrected_query_text", branch_exclusive=True
         )
 
-    # Items dropped per-item upstream (T1) are excluded from the keyed report so a
+    # Items dropped per-item upstream are excluded from the keyed report so a
     # placeholder/empty result never reaches a metric — the report measures survivors only.
     dropped_ids = s.drop_sink.all_dropped_ids()
     per_branch: Dict[str, Dict[str, ItemSet]] = {}
@@ -278,7 +199,6 @@ def _collect_branch_artifacts(s: RunState):
             retrieved = retrieved.filter(lambda i, _v: i not in dropped_ids)
         branch = _branch_of(pid)
         branch_ids[branch] = set(retrieved.ids)
-        # retrieved values are per-query (payload, score) lists → doc-id keys for IR metrics
         keyed = retrieved.with_values(
             [_search_results_to_keys(r) for r in retrieved.values]
         )
@@ -302,7 +222,7 @@ def _collect_branch_artifacts(s: RunState):
 
 def _attach_cross_stage_diagnostics(report, per_branch, baseline, s: RunState) -> None:
     """WER↔Recall correlation, Retrieval-WER-Impact, and the join warning."""
-    # Cross-stage: per-branch Pearson(WER, Recall@5) — does worse ASR cost retrieval? (M2)
+    # Cross-stage: per-branch Pearson(WER, Recall@5) — does worse ASR cost retrieval?
     for branch, scores in per_branch.items():
         wer, rec = scores.get("wer"), scores.get("recall@5")
         if wer is None or rec is None:
@@ -318,17 +238,12 @@ def _attach_cross_stage_diagnostics(report, per_branch, baseline, s: RunState) -
     if impact:
         report["retrieval_wer_impact"] = impact
     if s.disable_ir_metrics and s.join_warning:
-        report["join_warning"] = s.join_warning  # B5: why IR metrics are absent
+        report["join_warning"] = s.join_warning
 
 
 def _stage_aggregate(s: RunState) -> None:
-    """Terminal report builder (W6/A9): per-branch metrics + cross-branch deltas.
-
-    Reads every bound ``retrieved`` producer (one per branch, per-producer keyed),
-    scores each against the shared ground-truth artifacts via the metric registry,
-    and builds the report with paired deltas vs a baseline branch. Owns ``results['report']``
-    when present (supersedes the single-branch metrics-node report)."""
-    from ..aggregate import build_report
+    """Terminal report builder: per-branch metrics + cross-branch deltas. Owns
+    ``results['report']`` when present (supersedes the single-branch metrics-node report)."""
 
     per_branch, branch_ids = _collect_branch_artifacts(s)
     if not per_branch:
@@ -339,7 +254,7 @@ def _stage_aggregate(s: RunState) -> None:
         (b for b in ("ref", "main") if b in per_branch), sorted(per_branch)[0]
     )
     # Per-branch drops vs the full run (union of all branches' query ids): which items each
-    # branch lost, so the shrinking paired denominator (S1) is auditable at report level (S2).
+    # branch lost, so the shrinking paired denominator is auditable at report level.
     full_ids: set = set().union(*branch_ids.values()) if branch_ids else set()
     dropped_by_branch = {
         b: sorted(full_ids - ids) for b, ids in branch_ids.items() if full_ids - ids
@@ -361,28 +276,24 @@ def _stage_aggregate(s: RunState) -> None:
 
 
 def _asr_hypothesis(s: RunState) -> list:
-    """The ASR hypothesis bound to THIS node (``query_text`` from an asr producer —
-    graph truth; empty for a node fed by dataset/reference text). It is immutable —
-    correction / optimization publish distinct names — so this is always the
-    un-rewritten ASR output WER/CER score against."""
+    """The ASR hypothesis bound to this node; immutable (correction/optimization publish
+    distinct names), so always the un-rewritten output WER/CER scores against."""
     return asr_hypothesis(s)
 
 
 def _wer_cer_pair(pair):
     """Pure ``(WER, CER)`` for one ``(reference, hypothesis)`` pair. Top-level (not a closure)
-    so the ``process`` CPU-stage backend can pickle it (Roadmap 4b)."""
+    so the ``process`` CPU-stage backend can pickle it."""
     gt_text, hyp_text = pair
     return word_error_rate(gt_text, hyp_text), character_error_rate(gt_text, hyp_text)
 
 
 def _asr_item_scores(s: RunState):
-    """Per-item raw-ASR WER/CER lists (consumed by the answer-gen / judge / trace stages).
-
-    The per-item WER/CER map is a pure, CPU-bound, order-preserving fold."""
+    """Per-item raw-ASR WER/CER lists — a pure, order-preserving fold (consumed by
+    answer-gen/judge/trace)."""
     hyp = _asr_hypothesis(s)
     if not hyp:  # only a node fed by an ASR hypothesis carries WER/CER
         return [], []
-    from ..executor.cpu_parallel import run_per_item
 
     pairs = list(zip(_reference_transcriptions(s), hyp))
     scored = run_per_item(s, _wer_cer_pair, pairs)
@@ -406,9 +317,8 @@ _BARE_KEY_FOR = {
 
 
 def _derive_bare_keys(results: "RunResults", scores: Dict[str, Any], asr_mode: bool) -> None:
-    """Surface the registry per-item scores as the legacy flat bare keys (report-derived
-    aliases) — the registry is the single scalar source. WER/CER are gated to ASR runs
-    (``asr_mode``; audio_emb/audio_text carry no WER)."""
+    """Surfaces registry per-item scores as legacy flat bare keys; WER/CER are gated to
+    ASR runs (audio_emb/audio_text carry no WER)."""
     for name, items in scores.items():
         key = _BARE_KEY_FOR.get(name)
         if key is None:
@@ -471,11 +381,8 @@ def _stage_retrieval_metrics(s: RunState) -> None:
 
 
 def _stage_metrics(s: RunState) -> None:
-    """Report assembler: registry-native scalar report → results (single scalar source, L3).
-
-    The per-comparison computation lives in the typed ``transcription_metrics`` /
-    ``retrieval_metrics`` nodes; this node assembles the report from the registry (the
-    flat WER/MRR/Recall@k/... keys) + the per-item intermediates those nodes set."""
+    """Report assembler: registry-native scalar report → results (single scalar source).
+    Assembles from the registry + the per-item intermediates the typed metric nodes set."""
     _results_with_scores, retrieved_keys, _ids = _retrieved_from_bus(s)
     _t_step = time.perf_counter()
     s.cb("step_4_metrics", 0, s.total, "Computing metrics")
@@ -487,7 +394,6 @@ def _stage_metrics(s: RunState) -> None:
 
     _record_model_info(results, s)
 
-    # Registry report + report-derived flat bare keys (the single scalar source).
     _attach_registry_report(s, results, retrieved_keys)
 
     # Diagnostics the registry report does not carry, from the per-item score artifacts the
@@ -511,24 +417,19 @@ def _stage_metrics(s: RunState) -> None:
 
     s.stage_times["metrics_s"] = time.perf_counter() - _t_step
     s.results = results
-    # Also publish on the bus, keyed by this node's own id (R4/multi-variant): a graph with N
-    # `metrics` nodes (one per compared variant) would otherwise have each one silently
-    # overwrite `s.results` — the shared slot only ever reflects whichever ran last. Each
-    # `finalize` node reads its OWN bound metrics producer via `s.get_artifact("metrics")`
-    # (binding-scoped, not this shared assignment) — see `_stage_finalize`.
+    # Also published keyed by this node's own id: a graph with N `metrics` nodes would
+    # otherwise each silently overwrite the shared `s.results` slot. `finalize` reads its
+    # own bound producer via `s.get_artifact("metrics")` (binding-scoped, not this assignment).
     s.put_artifact("metrics", results)
 
 
 def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
-    """The single-branch report path's artifact assembly: positionally TRIMMED to the
-    keyed query-id order (the legacy zip-truncation leniency — deliberately different
-    from the multi-branch path's id-join in ``_collect_branch_artifacts``).
+    """Single-branch artifact assembly: positionally TRIMMED to the keyed query-id order
+    (legacy zip-truncation leniency), deliberately different from the multi-branch path's
+    id-join in ``_collect_branch_artifacts``. Returns {} when per-item identity is
+    unavailable (no keyed publish / duplicate ids)."""
 
-    Returns {} when per-item identity is unavailable (no keyed publish / duplicate ids)
-    — the caller's no-op condition."""
-    from ..item_set import ItemSet
-
-    # Per-item identity rides the keyed bus artifacts (M1d-2): the effective query text
+    # Per-item identity rides the keyed bus artifacts: the effective query text
     # when an asr node feeds this branch, the spoken reference otherwise. A plain (non-keyed) publish
     # means ids did not align — same no-op condition as the legacy all_query_ids check.
     keyed = s.keyed_items("query_text")
@@ -543,9 +444,8 @@ def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
     n = len(ids)
     artifacts: Dict[str, ItemSet] = {}
 
-    # Align each per-item list to the query-id order. Lists at least as long as ``ids`` are
-    # trimmed to the first n (matches the legacy zip-truncation leniency — e.g. a checkpoint
-    # resume can leave a longer, batch-overlapping hypotheses list); shorter lists are skipped.
+    # Trimmed to the first n (legacy zip-truncation leniency — e.g. a checkpoint resume can
+    # leave a longer, batch-overlapping hypotheses list); shorter lists are skipped.
     def _keyed(values, name):
         if values is None:
             return
@@ -564,31 +464,26 @@ def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
             )
         artifacts[name] = ItemSet(ids, list(values)[:n])
 
-    # Bus-first: the ASR hypothesis when an asr node feeds this branch (query_text is
-    # immutable, so this is the un-rewritten output `wer`/`cer` score); the spoken
-    # reference otherwise (there the "query" scored by text metrics is the GT).
-    # Graph truth: the hypothesis this node is actually fed (query_text bound from an
-    # asr producer), else the reference — per node, so mixed graphs (ASR arm next to
-    # text/latent arms) score each branch by what really fed it.
+    # Bus-first: this node's own ASR hypothesis when fed one, else the reference — mixed
+    # graphs (ASR arm next to text/latent arms) score each branch by what really fed it.
     reference = _reference_transcriptions(s)
     query_text = asr_hypothesis(s) or reference
     _keyed(query_text, "query_text")
-    # ASR-quality reference = the spoken transcription, never question_text (M1a guard).
+    # ASR-quality reference = the spoken transcription, never question_text.
     _keyed(reference, "reference_transcription")
     if retrieved_keys:
         _keyed(retrieved_keys, "retrieved")
     relevance = _relevant_from_bus(s)
     if "retrieved" in artifacts:
         _keyed(relevance, "relevant_docs")
-    # C7 (opt-in): the corrected text for the corrected_* metrics. Read off the bus — the
-    # metrics node reads it bus-first; compute_metric id-aligns, no trim.
+    # Opt-in corrected text: read bus-first; compute_metric id-aligns it, no trim needed.
     if _corrected_metrics_enabled(s) and "reference_transcription" in artifacts:
         corrected = _ctx_first(s, "corrected_query_text")
         if isinstance(corrected, ItemSet):
             artifacts["corrected_query_text"] = corrected
     if not artifacts:
         return {}
-    # Exclude per-item drops (T1) so a placeholder/empty result never reaches a metric.
+    # Exclude per-item drops so a placeholder/empty result never reaches a metric.
     dropped_ids = s.drop_sink.all_dropped_ids()
     if dropped_ids:
         artifacts = {
@@ -601,14 +496,10 @@ def _build_keyed_artifacts(s: RunState, retrieved_keys: list) -> Dict[str, Any]:
 def _attach_registry_report(
     s: RunState, results: "RunResults", retrieved_keys: list
 ) -> None:
-    """Compute metrics via the registry + aggregate and attach a keyed ``report`` (W4b).
-
-    Builds keyed ``ItemSet``s from the run's aligned per-item state and runs the metric
-    registry → ``build_report``. Numerically identical to the legacy headline scalars
-    (parity-proven), but keyed + branch-shaped — the basis for cross-branch deltas (W6).
-    Additive: the legacy result keys are untouched. No-op when query ids do not align.
+    """Computes metrics via the registry and attaches a keyed ``report``; numerically
+    identical to the legacy headline scalars (parity-proven) and additive (legacy keys
+    untouched). No-op when query ids do not align.
     """
-    from ..aggregate import build_report
 
     artifacts = _build_keyed_artifacts(s, retrieved_keys)
     if not artifacts:
@@ -616,9 +507,9 @@ def _attach_registry_report(
     scores = _branch_scores(s, artifacts)
     if scores:
         _derive_bare_keys(results, scores, bool(asr_hypothesis(s)))
-        # The report branch key + ``pipeline_mode`` echo carry the run's mode *label* — the
-        # executed graph's identity (``s.mode``), which the node set alone can't reconstruct
-        # (audio_emb vs audio_text share a graph). Behavior is graph-derived; only the label is.
+        # branch key + ``pipeline_mode`` carry the run's mode *label* (``s.mode``) — the node
+        # set alone can't reconstruct it (audio_emb vs audio_text share a graph); only the
+        # label is mode-derived, not behavior.
         report = build_report(
             {s.mode: scores}, provenance=_run_provenance(s),
             with_ci=getattr(s, "compute_confidence_intervals", False),

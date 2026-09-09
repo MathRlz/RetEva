@@ -1,4 +1,4 @@
-"""E3/F12: analyze_asr_errors decomposed into accumulate/tally/build — behaviour pinned."""
+"""analyze_asr_errors decomposed into accumulate/tally/build — behaviour pinned."""
 
 from evaluator.analysis.errors import analyze_asr_errors
 

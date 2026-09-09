@@ -47,7 +47,7 @@ def test_clamp_warns_once_per_distinct_device(monkeypatch, caplog):
 def test_model_builders_clamps_when_no_device_pool(monkeypatch):
     _install_fake_torch(monkeypatch, 1)
     mcfg = SimpleNamespace()
-    builders = factory_mod._ModelBuilders(SimpleNamespace(model=mcfg), service_provider=None,
+    builders = factory_mod.ModelBuilders(SimpleNamespace(model=mcfg), service_provider=None,
                                           device_pool=None)
     assert builders._get_device("text_embedding", "labse", "cuda:1") == "cuda:0"
 
@@ -58,9 +58,9 @@ def test_model_builders_leaves_device_pool_untouched(monkeypatch):
     _install_fake_torch(monkeypatch, 1)
     mcfg = SimpleNamespace()
     pool = SimpleNamespace(allocate=lambda category, memory_gb: "cuda:7")
-    builders = factory_mod._ModelBuilders(SimpleNamespace(model=mcfg), service_provider=None,
+    builders = factory_mod.ModelBuilders(SimpleNamespace(model=mcfg), service_provider=None,
                                           device_pool=pool)
-    monkeypatch.setattr(factory_mod, "estimate_model_memory_gb", lambda *a, **k: 1.0, raising=False)
+    monkeypatch.setattr(factory_mod, "estimate_model_memory_gb", lambda *a, **k: 1.0)
     import evaluator.config as config_mod
     monkeypatch.setattr(config_mod, "estimate_model_memory_gb", lambda *a, **k: 1.0)
     assert builders._get_device("text_embedding", "labse", "cuda:1") == "cuda:7"

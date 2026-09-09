@@ -1,11 +1,7 @@
 """Configuration management for evaluation framework.
 
-This package contains domain-specific configuration modules split from the
-original monolithic config.py for better organization and maintainability.
-
-Backward Compatibility:
-    All configuration classes are re-exported from this package to maintain
-    backward compatibility with existing code that imports from evaluator.config.
+Config classes are re-exported here (split from the original monolithic config.py) to
+keep backward-compatible imports from ``evaluator.config``.
 """
 
 # Import config types and errors first

@@ -1,67 +1,13 @@
-"""Shared helper functions for evaluation.
+"""Shared helper functions for evaluation: payload-key extraction, relevance-mapping
+construction, and DataLoader collate functions."""
 
-This module contains utility functions used across evaluation functions:
-- Payload key extraction
-- Relevance mapping construction
-- DataLoader collate functions
-- IR metric aggregation
-"""
-
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
 from ..models.retrieval.contracts import (
     RetrievalPayload,
     ScoredRetrievalResult,
     normalize_search_results,
 )
-
-# Human-readable labels live with the templates (``graph.templates.GRAPH_TEMPLATES``) — the single
-# source — since the four names are graph templates now.
-
-
-def detect_graph_template(
-    retrieval_pipeline: Optional[Any],
-    asr_pipeline: Optional[Any],
-    text_embedding_pipeline: Optional[Any],
-    audio_embedding_pipeline: Optional[Any],
-    configured_mode: Optional[str] = None,
-) -> str:
-    """Resolve the pipeline mode string from the set of provided pipelines.
-
-    Single source of truth for mode detection shared by every evaluation engine.
-    Pure — performs no logging — so callers control their own log output.
-
-    ``configured_mode`` (the config's resolved graph label) takes precedence: the
-    factory builds pipelines *for* that mode, and pipeline-presence detection alone cannot
-    tell ``audio_emb_retrieval`` cross-modal (audio query + text corpus → both an audio AND a
-    text pipeline) from ``audio_text_retrieval`` fusion. Detection is the fallback when no
-    config mode is available (direct pipeline callers).
-
-    Raises:
-        ValueError: If neither an audio embedding nor an ASR pipeline is provided.
-    """
-    if configured_mode:
-        return str(configured_mode)
-    if audio_embedding_pipeline is not None and text_embedding_pipeline is not None:
-        return "audio_text_retrieval"
-    if audio_embedding_pipeline is not None:
-        return "audio_emb_retrieval"
-    if asr_pipeline is not None and text_embedding_pipeline is not None:
-        if retrieval_pipeline is not None:
-            return "asr_text_retrieval"
-        return "asr_only"
-    if asr_pipeline is not None:
-        return "asr_only"
-    if text_embedding_pipeline is not None and retrieval_pipeline is not None:
-        # Text queries straight into retrieval (no voice front-end) — a legal graph: behavior
-        # branches read each node's own bindings (graph truth), not this string, which
-        # is only the run's LABEL. Used by text-RAG graphs (question text → retrieve → answer).
-        return "text_retrieval"
-    raise ValueError(
-        "Must provide a query head: (text_embedding_pipeline + retrieval_pipeline) for text "
-        "queries, (asr_pipeline + text_embedding_pipeline + retrieval_pipeline) for spoken "
-        "queries, (audio_embedding_pipeline + retrieval_pipeline), or asr_pipeline only."
-    )
 
 
 def _payload_to_key(payload: Union[RetrievalPayload, str]) -> str:
@@ -83,13 +29,8 @@ def _search_results_to_keys(
 
 
 def _build_relevant_from_item(item: Dict[str, Any]) -> Dict[str, int]:
-    """Build relevance mapping from dataset item with backwards compatibility.
-
-    Supports multiple formats:
-    - relevance_grades dict: {doc_id: grade} for graded relevance
-    - groundtruth_doc_ids list: [doc_id, ...] for binary relevance
-    - Falls back to transcription as single relevant document
-    """
+    """Relevance mapping from a dataset item: ``relevance_grades`` (graded) if present, else
+    ``groundtruth_doc_ids`` (binary), else the item's transcription as the sole relevant doc."""
     relevance = item.get("relevance_grades")
     if isinstance(relevance, dict) and len(relevance) > 0:
         return {str(k): int(v) for k, v in relevance.items()}
@@ -102,14 +43,18 @@ def _build_relevant_from_item(item: Dict[str, Any]) -> Dict[str, int]:
 
 
 def collate_fn(batch):
-    """Simple collate function for DataLoader - returns batch as-is."""
     return batch
 
 
 __all__ = [
-    "detect_graph_template",
     "_payload_to_key",
     "_search_results_to_keys",
     "_build_relevant_from_item",
+    "_branch_of",
     "collate_fn",
 ]
+
+
+def _branch_of(producer_id: str) -> str:
+    """Branch label encoded in a node id (``retrieval@corr`` → ``corr``; else ``main``)."""
+    return producer_id.split("@", 1)[1] if "@" in producer_id else "main"

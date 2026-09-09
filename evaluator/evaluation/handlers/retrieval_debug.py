@@ -1,8 +1,8 @@
 """Verbose per-query retrieval inspection — pure diagnostic logging.
 
-Extracted out of ``handlers/retrieval.py`` (post-decomposition audit): it has no effect on
-results (logs only), so it lives apart from the retrieval handlers that drive the run. The
-``_stage_retrieval`` finalize path calls :func:`log_retrieval_debug` after publishing.
+Has no effect on results (logs only), so it lives apart from the retrieval handlers that
+drive the run. The ``_stage_retrieval`` finalize path calls :func:`log_retrieval_debug`
+after publishing.
 """
 
 from __future__ import annotations
@@ -26,12 +26,8 @@ def log_retrieval_debug(
     all_embeddings,
     k,
 ) -> None:
-    """Verbose per-query retrieval inspection (dense + no-rerank only).
-
-    Pure diagnostic logging extracted from the retrieval phase; has no effect on
-    results. Logs DB vector stats and a re-search trace for the first 3 queries.
-    """
-    # Debug: Check vector store properties
+    """Verbose per-query retrieval inspection (dense + no-rerank only); diagnostic-only,
+    covering the first 3 queries."""
     if (
         hasattr(retrieval_pipeline.vector_store, "vectors")
         and retrieval_pipeline.vector_store.vectors is not None
@@ -63,7 +59,6 @@ def log_retrieval_debug(
 
     logger.info("RETRIEVAL DEBUG SAMPLE (first %d queries):", DEBUG_SAMPLE_LIMIT)
 
-    # Build a doc_id → text lookup from vector store payloads for ground-truth display
     _db_payloads = getattr(retrieval_pipeline.vector_store, "payloads", [])
     _doc_text_lookup: dict = {}
     for _p in _db_payloads:
@@ -79,14 +74,13 @@ def log_retrieval_debug(
     for i in range(min(DEBUG_SAMPLE_LIMIT, len(all_embeddings))):
         results_with_scores = retrieval_pipeline.search(emb_array[i], k=10)
 
-        # gt_doc_id: the expected document id
         if i < len(all_relevance) and len(all_relevance[i]) > 0:
             gt_doc_id = next(iter(all_relevance[i].keys()))
         else:
             gt_doc_id = str(all_ground_truth[i])
 
-        # query_text: what was actually searched — the node's bound query_text chain
-        # when it published (ASR hypothesis / question text), else the reference.
+        # query_text: the node's bound query_text chain when published (ASR hypothesis /
+        # question text), else the reference.
         if i < len(all_hypotheses) and all_hypotheses[i]:
             query_text = str(all_hypotheses[i])
         elif i < len(all_ground_truth):
@@ -94,7 +88,6 @@ def log_retrieval_debug(
         else:
             query_text = all_query_ids[i] if i < len(all_query_ids) else "?"
 
-        # gt_doc_text: the text of the expected document (from corpus)
         gt_doc_text = _doc_text_lookup.get(gt_doc_id, "")
 
         logger.info(f"\nQuery {i+1}:")

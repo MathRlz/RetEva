@@ -1,4 +1,4 @@
-"""Saved builder graphs — persist a named canvas spec and reopen it (P1).
+"""Saved builder graphs — persist a named canvas spec and reopen it.
 
 The builder can save the graph it's drawing and reopen one from a gallery. A saved graph is the
 canvas export; ``GET`` returns it plus a render payload so the canvas can redraw it directly.

@@ -37,7 +37,7 @@ def test_error_excerpt_short_log_verbatim():
 
 
 def test_cache_prune_command(tmp_path):
-    # L4: `evaluator cache prune` runs (compact orphans + optional LRU size eviction).
+    # `evaluator cache prune` runs (compact orphans + optional LRU size eviction).
     from evaluator.cli.main import _cmd_cache
 
     rc = _cmd_cache(["prune", "--cache-dir", str(tmp_path / "c"), "--max-size-gb", "1"])

@@ -22,13 +22,13 @@ from .loaders import (
     create_dataset_loader,
 )
 from .profiles import DatasetCapabilityProfile, resolve_dataset_profile, list_known_dataset_names
-from .descriptor import (
+from ..config.dataset_descriptors import (
     DatasetDescriptor,
-    register_dataset,
     get_descriptor,
     list_registered_datasets,
     resolve_dataset_descriptor,
 )
+from .descriptor import register_dataset
 from .runtime import (
     AudioSamplesQueryDataset,
     LazyAudioQueryDataset,

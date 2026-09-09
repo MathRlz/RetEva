@@ -8,11 +8,11 @@ import json
 import hashlib
 from typing import Optional, Any, Dict
 
-# Bump policy (audit M4): bump when a key's *format* changes (new hashed parameter,
-# different serialization), since per-model keys do NOT fold this version — old hashes
-# simply miss and recompute, but their files + manifest rows linger. When bumping, add a
-# one-shot migration in CacheManager._initialize_manifest_db (delete-by-pattern of the
-# old entries); fingerprint-based keys (vector_db / unique_texts manifests) fold the
+# Bump policy: bump when a key's *format* changes (new hashed parameter, different
+# serialization), since per-model keys do NOT fold this version — old hashes simply miss
+# and recompute, but their files + manifest rows linger. When bumping, add a one-shot
+# migration in CacheManager._initialize_manifest_db (delete-by-pattern of the old
+# entries); fingerprint-based keys (vector_db / corpus_embeddings manifests) fold the
 # version and invalidate on bump by themselves.
 CACHE_SCHEMA_VERSION = "v1"
 
@@ -20,10 +20,10 @@ CACHE_SCHEMA_VERSION = "v1"
 def _typed_default(obj: Any) -> str:
     """``json.dumps`` fallback for a non-JSON-native arg: a *typed* representation so two
     distinct objects that share a ``str()`` (e.g. an enum member and its ``.value`` string)
-    don't collide to the same cache key (M4 — was a bare ``str()`` coercion). JSON-native args
-    (str/int/float/bool/None/list/dict — all current callers) never reach here, so their keys
-    are unchanged; a future caller passing a rich object now gets a distinct, type-qualified
-    key instead of a silent collision."""
+    don't collide to the same cache key. JSON-native args (str/int/float/bool/None/list/dict
+    — all current callers) never reach here, so their keys are unchanged; a future caller
+    passing a rich object now gets a distinct, type-qualified key instead of a silent
+    collision."""
     return f"<{type(obj).__module__}.{type(obj).__qualname__}:{obj!r}>"
 
 
@@ -128,9 +128,9 @@ def preprocessing_fingerprint(
 def model_key(
     audio_hash: str, model_name: str, model_version: Optional[str] = None
 ) -> str:
-    """Cache key for ASR model features. ``model_version`` (T3) is folded in when
-    given so updated weights under the same name invalidate the cache; ``None``
-    leaves the key identical to the pre-T3 hash (back-compat)."""
+    """Cache key for ASR model features. ``model_version`` is folded in when given
+    so updated weights under the same name invalidate the cache; ``None`` leaves
+    the key unchanged so existing cache entries still hit."""
     if model_version:
         return _compute_hash(audio_hash, model_name, model_version)
     return _compute_hash(audio_hash, model_name)
@@ -140,7 +140,7 @@ def embedding_key(
     text: str, model_name: str, model_version: Optional[str] = None
 ) -> str:
     """Cache key for text embeddings. ``model_version``: optional weights revision
-    (T3; folded in when given, else no-op)."""
+    (folded in when given, else no-op)."""
     if model_version:
         return _compute_hash(text, model_name, model_version)
     return _compute_hash(text, model_name)
@@ -153,7 +153,7 @@ def transcription_key(
     model_version: Optional[str] = None,
 ) -> str:
     """Cache key for transcriptions. ``language``: optional code for multilingual
-    models. ``model_version``: optional weights revision (T3; folded in when given,
+    models. ``model_version``: optional weights revision (folded in when given,
     else no-op)."""
     if model_version:
         return _compute_hash(audio_hash, model_name, language, model_version)
@@ -164,7 +164,7 @@ def audio_embedding_key(
     audio_hash: str, model_name: str, model_version: Optional[str] = None
 ) -> str:
     """Cache key for audio embeddings. ``model_version``: optional weights revision
-    (T3; folded in when given, else no-op)."""
+    (folded in when given, else no-op)."""
     if model_version:
         return _compute_hash(audio_hash, model_name, model_version)
     return _compute_hash(audio_hash, model_name)

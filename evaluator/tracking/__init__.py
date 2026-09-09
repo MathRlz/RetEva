@@ -1,8 +1,7 @@
 """Experiment tracking module for evaluation runs.
 
-This module provides tracking backends for logging evaluation metrics,
-parameters, and artifacts. Currently supports MLflow and a no-op tracker
-for when tracking is disabled.
+Tracking backends for logging metrics, parameters, and artifacts: MLflow and a no-op
+tracker for when tracking is disabled.
 """
 
 from .base import NoOpTracker

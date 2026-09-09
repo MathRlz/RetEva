@@ -1,4 +1,4 @@
-"""C2 pin (CRITIQUE.md): EvaluationResults.to_dataframe gives the tidy metric table."""
+"""EvaluationResults.to_dataframe gives the tidy metric table."""
 
 from evaluator import EvaluationConfig, EvaluationResults
 

@@ -58,11 +58,10 @@
 <div class="panel">
   <h2>Pipeline builder</h2>
   <p class="muted">Click a node on the canvas to edit its model + params. Add nodes from the
-    palette; import an existing config or reload the starter template. Export or validate the graph.</p>
+    palette or import an existing config. Export or validate the graph.</p>
   <div id="builder">
     <!-- toolbar: main buttons + tucked secondary menus -->
     <div id="toolbar">
-      <button id="btn-template" type="button">Reload template</button>
       <input type="file" id="import-config-file" accept=".yaml,.yml" style="display:none">
       <button type="button" id="btn-import-config">Import config <span style="display:inline-block;transform:scaleY(-1)">⤓</span></button>
       <button id="btn-export-config" type="button">Export config ⤓</button>
@@ -93,7 +92,7 @@ const canvasEl = document.getElementById('canvas');
 const editor = new Drawflow(canvasEl);
 editor.start();
 DagView.attachZoom(editor, canvasEl);  // wheel scroll-in/out + corner controls (B4c)
-let CURRENT_MODE = '{{ graph_templates[0].name if graph_templates else "" }}';
+let CURRENT_MODE = '';   // the graph's label, carried on a seed/import; blank starts custom
 let CATALOGUE = {};      // node type -> contract (from /api/graph/nodes)
 // model lists, param schemas, dataset info + the per-node form renderer live in node_form.js
 // (window.NodeForm), shared with the Config & Run page.
@@ -140,7 +139,7 @@ fetch('/api/graph/nodes').then(r => r.json()).then(d => {
     det.appendChild(menu);
     list.appendChild(det);
   });
-  if (!loadSeed()) loadTemplate(CURRENT_MODE);
+  loadSeed();
 });
 
 // Dropdown behavior shared by the toolbar menus + palette categories: only one open at a time;
@@ -164,8 +163,8 @@ function meaningfulOnly(g) {
   return Object.assign({}, g, {nodes, levels});
 }
 
-// B5: a graph handed over from the Config&Run preview (sessionStorage, ?seed=1) —
-// rendered editable; consumed once so a later visit starts from the mode template.
+// A graph handed over from the Config&Run preview (sessionStorage, ?seed=1) — rendered
+// editable; consumed once so a later visit starts from an empty canvas.
 function loadSeed() {
   if (!new URLSearchParams(window.location.search).has('seed')) return false;
   const raw = sessionStorage.getItem('dag_builder_seed');
@@ -184,34 +183,10 @@ function loadSeed() {
   } catch (e) { return false; }
 }
 
-// Starter graph: the mode's default DAG via the shared renderer (DagView.drawGraph —
-// level layout + the auto-wiring's real data bindings as edges).
-function loadTemplate(mode) {
-  document.getElementById('validation').innerHTML =
-    '<p class="muted">loading template…</p>';
-  fetch(`/api/graph/template/${mode}`).then(r => r.json()).then(full => {
-    const t = meaningfulOnly(full);   // canvas authors meaningful ops only; plumbing is derived
-    document.getElementById('validation').innerHTML = '';
-    editor.clearModuleSelected();
-    document.getElementById('param-panel').innerHTML =
-      '<em>select a node to edit its model + params</em>';
-    DagView.drawGraph(editor, t, CATALOGUE);
-    syncCounter(t.nodes);  // resets + recounts `counter` from the drawn nodes
-    syncAllVectorDb();
-    restoreVariants({});  // a fresh template starts with no branches / default LLM
-    DagView.zoomFit(editor, canvasEl);
-  }).catch(() => {
-    document.getElementById('validation').innerHTML =
-      '<p class="error">failed to load template</p>';
-  });
-}
-document.getElementById('btn-template').onclick = () => loadTemplate(CURRENT_MODE);
-
-
 // E3: drop a node with one port per declared input (required + optional) / output,
 // artifact names rendered inside the node + as port tooltips.
 let counter = {};
-// keep palette ids unique after a template/seed populated the canvas
+// keep palette ids unique after a seed populated the canvas
 function syncCounter(nodes) {
   counter = {};
   (nodes || []).forEach(n => {

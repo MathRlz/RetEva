@@ -1,23 +1,30 @@
-"""Pre-flight validation: every check that must fail BEFORE any model loads.
-
-One home for the chain that used to live inline in ``_run_core`` (with per-call
-local imports working around layering) — determinism seeding, LLM cost budget,
-embedding-space typing (config-level and per-node graph-level), and optional
-store-backend availability. The embedding-space validators moved here from
-``models/embedding_space.py``: they are *validation*, not model construction
-(``resolve_embedding_space`` stays in models/ — a registry concern).
-
-(This module previously held a dead ``validate_pubmed_dataset`` helper with zero
-callers; replaced wholesale.)
-"""
+"""Pre-flight validation: every check that must fail BEFORE any model loads — determinism
+seeding, LLM cost budget, embedding-space typing (config-level and per-node graph-level),
+and vector-store backend availability."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ..config.validation import EXTRA_VALIDATORS, configured_feature_configs
 from ..errors import ConfigurationError
 from ..logging_config import get_logger
 from ..models.embedding_space import resolve_embedding_space, spaces_compatible
+from ..llm_client.cost import COST
+from ..pipeline.factory import check_graph_backend_dependencies, effective_vector_db_config
+from ..pipeline.graph import build_graph_for_config
+from .provenance import set_global_determinism
+from .metric_registry import list_metrics
+from ..config.graph_config import resolved_model_config
+from ..pipeline.graph.operators import node_kind
+from ..models.registry import (
+    asr_registry,
+    text_embedding_registry,
+    audio_embedding_registry,
+)
+from ..models.retrieval.query.correction import list_correctors
+from ..models.retrieval.query.optimization import list_combine_strategies
+from ..pipeline.graph.registry import node_model_field
 
 logger = get_logger(__name__)
 
@@ -31,12 +38,10 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     Order matters: determinism first (everything downstream may consume RNGs),
     then the cheap config-level checks, then the graph-level ones.
     """
-    from ..llm_client.cost import COST
-    from ..pipeline.factory import check_graph_backend_dependencies
-    from ..pipeline.graph import build_graph_for_config
-    from .provenance import set_global_determinism
 
     logger.info("Validating configuration, please wait…")
+
+    validate_registries(config)
 
     run_seed = getattr(getattr(config, "audio_synthesis", None), "seed", None)
     flags = set_global_determinism(run_seed)
@@ -58,24 +63,127 @@ def run_pre_flight(config: Any) -> Dict[str, Any]:
     return flags
 
 
+_KIND_FAMILY = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding": "audio_emb"}
+
+
+def collect_registry_problems(config: Any) -> List[str]:
+    """Every config check whose authority is a registry: metric names, model types, corrector
+    and multi-query combine-strategy names. ``config/`` sits below all four registries and
+    cannot import them, so it runs these through
+    :data:`evaluator.config.validation.EXTRA_VALIDATORS` (appended at the bottom of this module).
+    """
+    errors: List[str] = []
+    _check_metric_allowlist(config, errors)
+    _check_model_types(config, errors)
+    _check_query_registries(config, errors)
+    return errors
+
+
+def validate_registries(config: Any) -> None:
+    """Raising form of :func:`collect_registry_problems`, for the run path: a config built with
+    ``validate=False`` still meets these checks before pre-flight goes any further."""
+    problems = collect_registry_problems(config)
+    if problems:
+        raise ConfigurationError(
+            "Configuration validation failed:\n  - " + "\n  - ".join(problems)
+        )
+
+
+def _check_metric_allowlist(config: Any, errors: List[str]) -> None:
+    """The `metrics:` allowlist must name registered metrics — caught at validate time
+    with the registered list named, not as a silent no-op at report time."""
+    names = getattr(config, "metrics", None)
+    if not names:
+        return
+
+    registered = {spec.name for spec in list_metrics()}
+    unknown = [n for n in names if n not in registered]
+    if unknown:
+        errors.append(
+            f"unknown metric(s) in `metrics:` allowlist: {', '.join(sorted(unknown))}. "
+            f"Registered: {', '.join(sorted(registered))}"
+        )
+
+
+def _configured_model_types(config: Any):
+    """Yield (family, model_type) for the flat default (always, all three families) plus every
+    graph node's resolved per-node override — so a branch-only model type fails here at
+    validate time instead of only surfacing as a factory.py build crash. Graph-less configs
+    (no ``graph.nodes``) contribute only the flat triple; ``config.graph`` raising is caught
+    here rather than propagated."""
+    yield "asr", config.model.asr_model_type
+    yield "text_emb", config.model.text_emb_model_type
+    yield "audio_emb", config.model.audio_emb_model_type
+
+
+    try:
+        nodes = config.graph.nodes
+    except Exception:
+        return
+    for node in nodes:
+        family = _KIND_FAMILY.get(node_kind(node.stage, node.params))
+        if family is None:
+            continue
+        mcfg = resolved_model_config(config, node)
+        yield family, getattr(mcfg, f"{family}_model_type")
+
+
+def _check_model_types(config: Any, errors: List[str]) -> None:
+    """Check every configured model type (the flat default AND any per-node branch override)
+    is registered, deduped by (family, model_type)."""
+
+    registries = {
+        "asr": (asr_registry, "ASR"),
+        "text_emb": (text_embedding_registry, "text embedding"),
+        "audio_emb": (audio_embedding_registry, "audio embedding"),
+    }
+    seen = set()
+    for family, model_type in _configured_model_types(config):
+        if model_type is None or (family, model_type) in seen:
+            continue
+        seen.add((family, model_type))
+        registry, label = registries[family]
+        if not registry.is_registered(model_type):
+            available = ", ".join(registry.list_types())
+            errors.append(
+                f"Unknown {label} model type: '{model_type}'. "
+                f"Available types: {available}. "
+                f"Tip: use one listed type or call EvaluationConfig.from_preset(...)."
+            )
+
+
+def _check_query_registries(config: Any, errors: List[str]) -> None:
+    """``query_correction.method`` and ``query_optimization.combine_strategy`` name plug-in
+    registries — a custom ``@register_corrector`` / ``@register_combine_strategy`` is valid
+    config the moment it registers, so the registry is the authority. Checked on the flat
+    default AND on every node's resolved override, since a node may set its own method."""
+
+    correctors = sorted(set(list_correctors()))
+    for cfg in configured_feature_configs(config, "query_correction"):
+        if cfg.method not in correctors:
+            errors.append(
+                f"query_correction.method must be one of {correctors}, got {cfg.method!r}"
+            )
+            break
+
+    strategies = list_combine_strategies()
+    for cfg in configured_feature_configs(config, "query_optimization"):
+        if cfg.combine_strategy not in strategies:
+            errors.append(
+                f"combine_strategy must be one of {strategies}, "
+                f"got {cfg.combine_strategy!r}"
+            )
+            break
+
+
 def validate_models(config: Any, graph: Any) -> None:
     """Fail fast — before any model loads — if the graph references a model type that isn't
-    registered, or an adapter path that doesn't exist.
-
-    Validates exactly the models the graph will build: ``config.model.*`` plus any per-node
-    overrides (a graph node's ``model``/``adapter`` params), keyed to the right family registry
-    via :func:`node_model_field`. An unused default family (e.g. the default ASR type on a pure
-    audio_emb run) is never checked, since no node references it. Collects every problem and raises
-    a single :class:`ConfigurationError` listing them all (with the available types)."""
+    registered, or an adapter path that doesn't exist. Validates exactly the models the graph
+    will build; an unused default family (e.g. the default ASR type on a pure audio_emb run)
+    is never checked, since no node references it. Collects every problem and raises a single
+    :class:`ConfigurationError` listing them all."""
     import os
 
-    from ..config.graph_config import resolved_model_config
-    from ..models.registry import (
-        asr_registry,
-        text_embedding_registry,
-        audio_embedding_registry,
-    )
-    from ..pipeline.graph.registry import node_model_field
 
     model = getattr(config, "model", None)
     if model is None:
@@ -122,9 +230,6 @@ def validate_models(config: Any, graph: Any) -> None:
         )
 
 
-# ── Embedding-space typing (architecture A2 / §4.1 P1) ────────────────
-
-
 def _resolve_space(
     registry: Any, model_type: Any, model_name: Optional[str], override: Optional[str]
 ) -> str:
@@ -137,17 +242,10 @@ def _resolve_space(
 
 
 def _node_space(node: Any, config: Any) -> Optional[str]:
-    """The embedding space a graph node instance produces vectors in, or None.
-
-    Per-node ``params.model``/``name`` win over the global model fields; a
-    dataset_source vector column carries ``params.embedding_space`` directly;
-    a fusion node's combined space is unknowable here (None = unchecked).
-    """
+    """The embedding space a graph node instance produces vectors in, or None when
+    unknowable (e.g. a fusion node's combined space)."""
     from types import SimpleNamespace
 
-    from ..config.graph_config import resolved_model_config
-    from ..models.registry import audio_embedding_registry, text_embedding_registry
-    from ..pipeline.graph.operators import node_kind
 
     params = getattr(node, "params", None) or {}
     stage = node_kind(node.stage, params)
@@ -183,19 +281,15 @@ def resolve_query_space(
     config: Any, stream_name: Optional[str], *, producer_id: Optional[str] = None
 ) -> Optional[str]:
     """The embedding space of a bound query-vector stream at runtime, or None when unknowable
-    (fused vectors, missing model info). Used by the retrieval runtime guard (2b) to assert
-    the query is comparable to the index it dots against.
+    (fused vectors, missing model info). Used by the retrieval runtime guard to assert the
+    query is comparable to the index it dots against.
 
-    ``producer_id`` (the actual bound producer node, from ``RunState.data_flow`` after
-    ``input()``/``get_artifact()`` resolved it) is resolved via ``_node_space`` FIRST — a
-    multi-variant graph's branches each carry their own per-node model override, so the flat
-    ``config.model`` default below is wrong for any node that overrides it (confirmed bug:
-    every branch asserted the SAME flat-default space regardless of which embedder it
-    actually ran, false-positively raising ``EmbeddingSpaceMismatch`` for every branch that
-    differed from the flat default). The flat-default path remains as a fallback for callers
-    with no live producer_id (legacy/direct callers) and for a producer `_node_space` can't
-    resolve (e.g. a pass-through)."""
-    from ..models.registry import audio_embedding_registry, text_embedding_registry
+    ``producer_id`` is resolved via ``_node_space`` FIRST: a multi-variant graph's branches
+    each carry their own per-node model override, so the flat ``config.model`` default is
+    wrong for any node that overrides it (confirmed bug: every branch asserted the SAME
+    flat-default space, false-positively raising ``EmbeddingSpaceMismatch`` for branches that
+    differed from it). The flat-default path remains as a fallback when there's no live
+    producer_id, or when ``_node_space`` can't resolve one (e.g. a pass-through)."""
 
     name = stream_name or "query_vectors"
     if name == "fused_query_vectors":
@@ -231,8 +325,8 @@ def resolve_query_space(
         reg, mtype, mname, override = audio
     elif name == "text_query_vectors":
         reg, mtype, mname, override = text
-    else:  # query_vectors / default: the template's primary query embedder
-        is_audio = (getattr(config, "graph_template", None) or "") == "audio_emb_retrieval"
+    else:  # query_vectors / default: the graph's primary query embedder
+        is_audio = (getattr(config, "graph_label", None) or "") == "audio_emb_retrieval"
         reg, mtype, mname, override = audio if is_audio else text
     if not mtype:
         return None
@@ -252,7 +346,6 @@ def _producer_space(
     direct = _node_space(node, config)
     if direct is not None:
         return direct
-    from ..pipeline.graph.operators import node_kind
 
     if node_kind(node.stage, node.params) in ("vector_db", "corpus_merge"):
         upstream = [p for a, p in node.bindings if a == "corpus_vectors"]
@@ -271,26 +364,23 @@ def _producer_space(
 def check_embedding_spaces(graph: Any, config: Any) -> List[str]:
     """Non-raising form of :func:`validate_graph_embedding_spaces`: collect *all*
     embedding-space mismatch messages (empty list = clean) instead of raising on the first.
-
     Feeds the builder UI, which warns on a mismatch at edit time rather than only failing at
-    run time. Same per-node V[s] check; unresolvable spaces (fusion, no model info) stay
-    unchecked — a trap-closer, not a prover.
-    """
+    run time. Unresolvable spaces (fusion, no model info) stay unchecked — a trap-closer,
+    not a prover."""
     vdb = getattr(config, "vector_db", None)
     retrieval_mode = str(getattr(vdb, "retrieval_mode", "dense")) if vdb else "dense"
     if retrieval_mode not in _VECTOR_MODES:
         return []
     by_id = {n.id: n for n in graph.nodes}
-    # Query-vector streams in one_of priority order (mirrors the retrieval input). The
-    # effective stream is the highest-priority bound producer; fused has no resolvable
-    # model space, so a fusion retrieval stays unchecked (trap-closer, not a prover).
+    # Query-vector streams in one_of priority order (mirrors the retrieval input); the
+    # effective stream is the highest-priority bound producer. Fused vectors have no
+    # resolvable model space.
     query_vector_artifacts = (
         "fused_query_vectors",
         "audio_query_vectors",
         "text_query_vectors",
         "query_vectors",
     )
-    from ..pipeline.graph.operators import node_kind
 
     issues: List[str] = []
     for node in graph.nodes:
@@ -320,15 +410,10 @@ def check_embedding_spaces(graph: Any, config: Any) -> List[str]:
 
 
 def validate_graph_embedding_spaces(graph: Any, config: Any) -> None:
-    """Per-node V[s] check: reject a dense/hybrid retrieval whose bound query-vector
-    producer and index chain live in different embedding spaces (§4.1 P1).
-
-    Catches what the config-level check cannot: explicit graphs whose per-node
-    ``params.model`` overrides diverge (e.g. ``corpus_embedding {model: labse}`` +
-    ``text_embedding {model: jina_v4}``) and dataset vector columns whose declared
-    ``embedding_space`` differs from the query embedder. Unresolvable spaces (fusion,
-    no model info) stay unchecked — this is a trap-closer, not a prover.
-    """
+    """Per-node V[s] check: reject a dense/hybrid retrieval whose bound query-vector producer
+    and index chain live in different embedding spaces. Catches what the config-level check
+    cannot — explicit graphs whose per-node ``params.model`` overrides diverge, and dataset
+    vector columns whose declared ``embedding_space`` differs from the query embedder."""
     issues = check_embedding_spaces(graph, config)
     if issues:
         raise ConfigurationError(issues[0])
@@ -348,16 +433,11 @@ def _vector_db_backend_key(vector_db_config: Any) -> Optional[tuple]:
 
 
 def validate_graph_vector_db_configs(graph: Any, config: Any) -> None:
-    """Reject two ``vector_db`` nodes that resolve to the same persistent backend +
-    collection — a silent index collision, since ``chromadb_collection_name`` and
-    ``qdrant_collection_name`` both default to ``"documents"`` (§ two-vector_db configs).
-
-    Each node's effective config is computed the same way the executor builds its
-    index (``effective_vector_db_config``), so this only fires once two nodes'
-    per-node overrides genuinely collide — not on every multi-vector_db graph.
-    """
-    from ..pipeline.factory import effective_vector_db_config
-    from ..pipeline.graph.operators import node_kind
+    """Reject two ``vector_db`` nodes that resolve to the same persistent backend + collection
+    — a silent index collision, since ``chromadb_collection_name`` and
+    ``qdrant_collection_name`` both default to ``"documents"``. Each node's effective config
+    is computed the same way the executor builds its index, so this only fires when
+    per-node overrides genuinely collide — not on every multi-vector_db graph."""
 
     seen: Dict[tuple, str] = {}
     for node in graph.nodes:
@@ -374,3 +454,9 @@ def validate_graph_vector_db_configs(graph: Any, config: Any) -> None:
                 f"the same index). Give each a distinct `collection` and/or `path`/`url`."
             )
         seen[key] = node.id
+
+
+#: config/ cannot import the registries these checks consult, so it discovers them
+#: here instead — importing this module is what wires them into config.validate().
+#: Guarded by tests/test_config_registry_hook.py.
+EXTRA_VALIDATORS.append(collect_registry_problems)

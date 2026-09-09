@@ -1,4 +1,4 @@
-"""Phase 3 — results depth: download a run's resolved config.yaml + surface provenance/cost
+"""Results depth: download a run's resolved config.yaml + surface provenance/cost
 (cache reuse, LLM cost, model identity, stage timing) on the run-detail page.
 """
 

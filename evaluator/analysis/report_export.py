@@ -1,13 +1,8 @@
-"""Tidy, stable exports of an evaluation report (architecture-improvements §6).
+"""Tidy, stable exports of an evaluation report.
 
-Two researcher-facing shapes the deeply-nested report doesn't give directly:
-
-* :func:`report_to_metrics_table` — one row per ``(branch, metric)`` with mean / CI / n,
-  the flat table leaderboards, dataframes, and paper tables actually want.
-* :func:`report_query_traces` — the per-query trace records (query, retrieved keys + scores,
-  relevance, judge verdict, per-query metrics) for downstream ML / error analysis.
-
-Writers cover CSV + JSONL (no extra deps) and optional Parquet (pandas + pyarrow).
+The deeply-nested report doesn't directly give the flat per-(branch, metric) table or the
+per-query trace records researchers want; this module shapes those, with CSV/JSONL writers
+(no extra deps) and optional Parquet (pandas + pyarrow).
 """
 
 from __future__ import annotations

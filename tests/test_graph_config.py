@@ -1,5 +1,7 @@
 """Node-centric YAML → legacy config translation, incl. the node-list DAG form."""
 
+import pytest
+
 from evaluator.config.evaluation import EvaluationConfig
 from evaluator.config.graph_config import (
     _FUSION_KEYS,
@@ -162,9 +164,9 @@ def test_bare_feature_node_enables_capability_without_params():
 def test_graph_nodes_plain_strings_unchanged():
     # Back-compat: the plain-string list form (model config in nodes: map) is untouched — the
     # AUTHORED nodes stay bare strings, in order, as a prefix. `complete_structural_plumbing`
-    # (pipeline/graph/modes.py) now appends the metrics/finalize plumbing this graph doesn't
-    # spell out (asr_text_retrieval's structural chain) — the CLI-path counterpart of the
-    # webapi behavior `tests/test_multi_variant_plumbing.py` already covers.
+    # (pipeline/graph/build.py) appends the metrics/finalize plumbing this graph doesn't spell
+    # out — the CLI-path counterpart of the webapi behavior
+    # `tests/test_multi_variant_plumbing.py` already covers.
     legacy = build_evaluation_config_kwargs(
         {
             "graph": explicit_graph(["asr", "text_embedding", "retrieval"]),
@@ -180,9 +182,12 @@ def test_graph_nodes_plain_strings_unchanged():
 
 
 def test_split_maps_to_general_field_hf_split_separate():
-    legacy = build_evaluation_config_kwargs({"dataset": {"id": "huggingface", "split": "validation"}})
+    graph = explicit_graph(["dataset_source", "text_embedding"])
+    legacy = build_evaluation_config_kwargs(
+        {"dataset": {"id": "huggingface", "split": "validation"}, "graph": graph})
     assert legacy["data"]["split"] == "validation"
-    legacy_hf = build_evaluation_config_kwargs({"dataset": {"id": "huggingface", "hf_split": "train"}})
+    legacy_hf = build_evaluation_config_kwargs(
+        {"dataset": {"id": "huggingface", "hf_split": "train"}, "graph": graph})
     assert legacy_hf["data"]["huggingface_split"] == "train"
 
 
@@ -202,10 +207,20 @@ def test_vdb_to_retrieval_is_exact_inverse_of_forward_maps():
         assert 1 <= len(path) <= 2
 
 
+def test_legacy_pipeline_mode_only_config_is_rejected_at_load():
+    """A `model.pipeline_mode` does not expand into nodes, so such a config has no graph at
+    all — say so at load, not deep inside the pipeline factory."""
+    from evaluator.config.graph_config import GraphConfigError
+
+    graph_form = legacy_yaml_to_graph_yaml({"model": {"pipeline_mode": "asr_text_retrieval"}})
+    with pytest.raises(GraphConfigError, match="graph.nodes is required"):
+        build_evaluation_config_kwargs(graph_form)
+
+
 def test_retrieval_config_round_trips_through_node_form():
     """legacy vector_db → node-centric retrieval block → legacy recovers the same fields."""
     legacy_in = {
-        "model": {"pipeline_mode": "asr_text_retrieval"},
+        "graph_override": mode_graph("asr_text_retrieval"),
         "vector_db": {
             "type": "inmemory", "k": 7, "retrieval_mode": "hybrid",
             "hybrid_fusion_method": "rrf", "rrf_k": 42,
@@ -223,3 +238,38 @@ def test_retrieval_config_round_trips_through_node_form():
     assert vdb["reranker_top_k"] == 9
     assert vdb["use_mmr"] is True
     assert vdb["type"] == "inmemory"
+
+
+def test_structural_specs_mirror_the_old_template_derivation():
+    from evaluator.pipeline.graph.build import structural_specs
+    # asr + retrieval: transcription + retrieval metrics, report, finalize
+    assert structural_specs(["dataset_source", "asr", "text_embedding", "retrieval"]) == [
+        "transcription_metrics", "retrieval_metrics", "metrics", "finalize"]
+    # asr only: no retrieval metrics
+    assert structural_specs(["dataset_source", "asr"]) == [
+        "transcription_metrics", "metrics", "finalize"]
+    # pure text retrieval: no transcription metrics
+    assert structural_specs(["dataset_source", "text_embedding", "retrieval"]) == [
+        "retrieval_metrics", "metrics", "finalize"]
+    # audio+text fusion: alignment diagnostic
+    assert structural_specs(["dataset_source", "audio_embedding", "text_embedding", "fusion", "retrieval"]) == [
+        "embedding_alignment_metrics", "retrieval_metrics", "metrics", "finalize"]
+    # answer_gen adds answer_metrics; judge adds the trace builder
+    assert structural_specs(["dataset_source", "text_embedding", "retrieval", "answer_gen", "answer_judge"]) == [
+        "retrieval_metrics", "metrics", "answer_metrics", "build_query_traces", "finalize"]
+    # no query head and no retrieval: nothing to derive
+    assert structural_specs(["dataset_source", "text_embedding"]) == []
+
+
+def test_run_label_keeps_text_retrieval_for_text_query_graphs():
+    from evaluator.pipeline.graph.build import run_label
+    assert run_label({"nodes": ["dataset_source", "text_embedding", "retrieval"]}) == "text_retrieval"
+    assert run_label({"nodes": ["dataset_source", "asr", "text_embedding", "retrieval"]}) == "asr_text_retrieval"
+    assert run_label({"nodes": ["dataset_source", "answer_gen"]}) == "custom"
+
+
+def test_nodes_less_graph_fails_loudly():
+    from evaluator.pipeline.graph.build import build_run_graph
+
+    with pytest.raises(ValueError, match="explicit graph.nodes"):
+        build_run_graph({}, eval_config=None)

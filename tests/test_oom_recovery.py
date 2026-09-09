@@ -1,5 +1,5 @@
 """Runtime OOM recovery (T7b) + per-model pool keys: allocate dedup, LRU eviction on
-minimal-batch OOM, ManualStrategy prefix matching, and _ModelBuilders pool-key identity."""
+minimal-batch OOM, ManualStrategy prefix matching, and ModelBuilders pool-key identity."""
 
 from types import SimpleNamespace
 
@@ -269,11 +269,11 @@ def test_release_node_model_survives_provider_failure():
 
 
 def test_model_builders_pool_key_distinguishes_models():
-    from evaluator.pipeline.factory import _ModelBuilders
+    from evaluator.pipeline.factory import ModelBuilders
 
     def builders(**model_fields):
         mcfg = SimpleNamespace(**model_fields)
-        return _ModelBuilders(SimpleNamespace(model=mcfg), None, None)
+        return ModelBuilders(SimpleNamespace(model=mcfg), None, None)
 
     jina = builders(text_emb_model_name="jinaai/jina-embeddings-v4")
     eam = builders(text_emb_model_path="/ckpt/eam_alignment.pt")

@@ -9,18 +9,8 @@ _BUILTIN_DIR = os.path.join(
 
 
 def load_term_weights(domain: str, path: Optional[str] = None) -> Dict[str, float]:
-    """Load term weights from a JSON file.
-
-    Args:
-        domain: Built-in domain name (e.g. ``"medical"``). Used when *path* is None.
-        path: Explicit path to a JSON file mapping term → weight. Overrides *domain*.
-
-    Returns:
-        Dict mapping lowercase term to float weight.
-
-    Raises:
-        FileNotFoundError: When neither built-in domain file nor explicit path exists.
-    """
+    """Load term weights keyed by ``domain`` (built-in, e.g. ``"medical"``) unless ``path``
+    is given (overrides ``domain``). Returns lowercase term -> weight."""
     if path is not None:
         target = path
     else:
@@ -48,16 +38,16 @@ def _load_json(name: str, path: Optional[str]) -> Any:
 
 @lru_cache(maxsize=None)
 def load_drug_terms(path: Optional[str] = None) -> tuple:
-    """Canonical drug/term names (C7): the phonetic corrector's snap vocabulary and the
-    drug-aware CEER (``ceer_rx``) critical-term extension. ``path`` overrides the bundled
-    ``resources/drug_terms.json`` (format: ``{"terms": [...]}``); cached per path."""
+    """Canonical drug/term names for the phonetic corrector's vocabulary and the ``ceer_rx``
+    critical-term extension. ``path`` overrides the bundled ``resources/drug_terms.json``
+    (format: ``{"terms": [...]}``)."""
     terms = _load_json("drug_terms.json", path)["terms"]
     return tuple(str(t).lower() for t in terms)
 
 
 @lru_cache(maxsize=None)
 def load_drug_doses(path: Optional[str] = None) -> dict:
-    """Plausible-dose table for unit-slip repair (C7.2): ``{drug: {min, max, unit}}``.
-    ``path`` overrides the bundled ``resources/drug_doses.json``; cached per path."""
+    """Plausible-dose table for unit-slip repair: ``{drug: {min, max, unit}}``.
+    ``path`` overrides the bundled ``resources/drug_doses.json``."""
     doses = _load_json("drug_doses.json", path)["doses"]
     return {str(drug).lower(): spec for drug, spec in doses.items()}

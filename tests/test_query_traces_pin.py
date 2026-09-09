@@ -1,9 +1,8 @@
-"""R3 pin: the trace builder's entry schema and id-join semantics.
+"""The trace builder's entry schema and id-join semantics.
 
 `_build_query_traces` had ZERO direct coverage while the export layer pins its keys
-(`per_query_wer`, `recall_at_5`). Written in Phase 0 against the positional side channels,
-updated in Phase 2: the per-item scores and answer details now ride the keyed bus and are
-joined by query id — the entry schema is unchanged, and a trace whose id has no score
+(`per_query_wer`, `recall_at_5`). The per-item scores and answer details ride the keyed bus
+and are joined by query id — the entry schema is unchanged, and a trace whose id has no score
 simply omits that key instead of silently borrowing its positional neighbour's.
 """
 
@@ -46,7 +45,7 @@ def _state(trace_limit=2) -> RunState:
               ItemSet(ids, ["ref one", "ref two", "ref three"]))
     s.ctx.put("dataset_source", "relevant_docs",
               ItemSet(ids, [{"d1": 1}, {"d9": 1}, {"d3": 1}]))
-    # R3-P2: per-item scores + answer details ride the keyed bus, joined by query id.
+    # per-item scores + answer details ride the keyed bus, joined by query id.
     s.ctx.put("transcription_metrics", "per_query_wer", ItemSet(ids, [0.1, 0.2, 0.3]))
     s.ctx.put("transcription_metrics", "per_query_cer", ItemSet(ids, [0.01, 0.02, 0.03]))
     s.ctx.put("retrieval_metrics", "per_query_recall5", ItemSet(ids, [1.0, 0.0, 1.0]))
@@ -84,7 +83,7 @@ def test_trace_entries_pin_schema_and_pairing():
     # The builder publishes the traces on the bus too (survives the metrics node's
     # `s.results` rebuild).
     assert s.ctx.get("build_query_traces", "query_traces") == traces
-    # No dedup-by-shared-key guard (R4/multi-variant: a graph with N build_query_traces nodes,
+    # No dedup-by-shared-key guard (multi-variant: a graph with N build_query_traces nodes,
     # one per compared variant, must build ALL N, not just the first) — a second call on the
     # SAME node id genuinely rebuilds from the bus's current state.
     s.ctx.put("transcription_metrics", "per_query_wer",
@@ -95,8 +94,8 @@ def test_trace_entries_pin_schema_and_pairing():
 
 def test_trace_limit_zero_means_no_limit():
     """0 = NO LIMIT, matching what the same knob does to the dataset (`questions[:trace_limit]`
-    only when positive) and what DataConfig documents. It used to mean "off", so one number had
-    opposite meanings at the two ends of a run. Traces are disabled by omitting the node."""
+    only when positive) and what DataConfig documents. Traces are disabled by omitting the
+    node."""
     s = _state(trace_limit=0)
     _stage_build_query_traces(s)
     assert len(s.results["query_traces"]) == 3      # every query, not none
@@ -109,8 +108,8 @@ def test_trace_limit_caps_when_positive():
 
 
 def test_scores_join_by_id_not_position():
-    """R3-P2: a sparse score set lines up by id — the item without a score omits the key
-    instead of borrowing its positional neighbour's value (the old zip-by-index bug)."""
+    """A sparse score set lines up by id — the item without a score omits the key instead
+    of borrowing its positional neighbour's value."""
     s = _state(trace_limit=3)
     # only q3 has a WER score, and it sits at position 0 of its own ItemSet
     s.ctx.put("transcription_metrics", "per_query_wer", ItemSet(["q3"], [0.7]))

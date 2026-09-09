@@ -23,6 +23,9 @@ from .query_correction import QueryCorrectionConfig
 from .embedding_fusion import EmbeddingFusionConfig
 from .rag_flow import RagFlowConfig
 from .device_pool import DevicePoolConfig
+from .subconfigs import FEATURE_SUBCONFIGS
+from .graph_config import GraphConfigError, build_evaluation_config_kwargs
+from .model_presets import get_preset
 
 
 def _merge_section_into(config_dict: dict, section_dict) -> None:
@@ -44,7 +47,7 @@ def _merge_section_into(config_dict: dict, section_dict) -> None:
 
 def _construct_subconfig(cls_: Any, data: Dict[str, Any], path: str) -> Any:
     """Build a sub-config, turning an unknown-key ``TypeError`` into a clear, path-named
-    ``ConfigurationError`` (T2): a misspelled key (e.g. ``asr_modal_type``) must fail loudly
+    ``ConfigurationError``: a misspelled key (e.g. ``asr_modal_type``) must fail loudly
     naming ``model.asr_modal_type`` — not run a silently wrong experiment or surface a cryptic
     ``__init__() got an unexpected keyword argument`` error."""
     try:
@@ -65,46 +68,28 @@ def _construct_subconfig(cls_: Any, data: Dict[str, Any], path: str) -> Any:
 def build_from_dict(cls, config_dict: Dict[str, Any], *, validate: bool = True) -> "Any":
     """Create configuration from a dictionary.
 
-    Args:
-        config_dict: Dictionary with configuration values. Nested dicts
-                    for 'cache', 'logging', 'model', 'data', 'audio_synthesis',
-                    'judge', 'vector_db', 'device_pool' are used to construct sub-configs.
-        validate: If True, validate configuration after creation. Defaults to True.
-
     Returns:
         EvaluationConfig instance.
 
     Raises:
         ConfigurationError: If validate=True and validation fails.
     """
-    from .evaluation import _FEATURE_SUBCONFIGS
 
-    # Create a copy to avoid modifying the original
     config_dict = dict(config_dict)
 
-    # Back-compat: there is no `model.pipeline_mode` field anymore — a legacy flat
-    # `model: {pipeline_mode: X}` is a graph *template* reference now. Move it onto
-    # `graph_override["template"]` (an explicit `graph_override.nodes` wins) and drop it before
-    # ModelConfig construction, which would otherwise reject the unknown key.
+    # Back-compat: model.pipeline_mode no longer exists (the graph is the spec); drop it
+    # before ModelConfig construction, which would otherwise reject the unknown key.
     _model = config_dict.get("model")
     if isinstance(_model, dict) and "pipeline_mode" in _model:
         _model = dict(_model)
-        template = _model.pop("pipeline_mode", None)
+        _model.pop("pipeline_mode", None)
         config_dict["model"] = _model
-        override = config_dict.get("graph_override") or {}
-        if template is not None and not override.get("nodes"):
-            config_dict["graph_override"] = {**override, "template": str(template)}
 
-    # The optional `runtime:`/`experiment:` blocks are flattened up into the
-    # top level (deep-merging any dict values) before sub-config construction.
+    # runtime:/experiment: blocks flatten into the top level before sub-config construction.
     _merge_section_into(config_dict, config_dict.pop("runtime", None))
     _merge_section_into(config_dict, config_dict.pop("experiment", None))
 
-    # Hard cut-over: no `features:` grouping. Each capability is a top-level sub-config, enabled
-    # by its NODE being in the graph (the spec). A stray features: block is a migration error.
     if "features" in config_dict:
-        from ..errors import ConfigurationError
-
         raise ConfigurationError(
             "The `features:` block is no longer supported — a capability is enabled by its node in "
             "the graph. Put its settings on the node (e.g. `{id: tts, type: tts, params: {...}}`) "
@@ -157,8 +142,8 @@ def build_from_dict(cls, config_dict: Dict[str, Any], *, validate: bool = True) 
 
     sub_configs["llm"] = llm_config
 
-    # The optional capability sub-configs — each a top-level field on EvaluationConfig. The three
-    # LLM-derived features inherit the shared backend defaults; the rest are plain sub-configs.
+    # Optional capability sub-configs, each a top-level EvaluationConfig field. The three
+    # LLM-derived features inherit the shared backend defaults; the rest are plain.
     sub_configs["audio_synthesis"] = AudioSynthesisConfig(
         **(config_dict.get("audio_synthesis") or {})
     )
@@ -178,23 +163,20 @@ def build_from_dict(cls, config_dict: Dict[str, Any], *, validate: bool = True) 
     )
     sub_configs["rag"] = RagFlowConfig(**(config_dict.get("rag") or {}))
 
-    # device_pool is optional
     device_pool_dict = config_dict.get("device_pool")
     sub_configs["device_pool"] = (
         DevicePoolConfig(**device_pool_dict) if device_pool_dict else None
     )
 
-    # All remaining keys are scalar fields on EvaluationConfig itself.
-    # Exclude the feature keys consumed above (they're not EvaluationConfig fields).
-    _consumed = set(sub_configs) | set(_FEATURE_SUBCONFIGS)
+    # Remaining keys are scalar EvaluationConfig fields; exclude feature keys consumed above.
+    _consumed = set(sub_configs) | set(FEATURE_SUBCONFIGS)
     main_config = {k: v for k, v in config_dict.items() if k not in _consumed}
 
     config = _construct_subconfig(cls, {**main_config, **sub_configs}, "")
 
     if validate:
         for warning in config.validate():
-            # Surface non-fatal config warnings (dim mismatch, dataset compat, …) at load —
-            # they were silently dropped before.
+            # Surface non-fatal config warnings (dim mismatch, dataset compat, …) at load.
             get_logger(__name__).warning("config: %s", warning)
 
     return config
@@ -205,12 +187,8 @@ def build_from_yaml(cls, yaml_path: str, validate: bool = True) -> "Any":
 
     The on-disk schema is the node-centric shape (experiment/dataset/graph/nodes/
     runtime); ``build_evaluation_config_kwargs`` translates it before construction.
-    Legacy-shape keys still pass through (the translator is backward-compatible), so
-    this is the single load chokepoint for the CLI, public API, and presets.
-
-    Args:
-        yaml_path: Path to YAML configuration file.
-        validate: If True, validate configuration after loading. Defaults to True.
+    Legacy-shape keys still pass through, so this is the single load chokepoint for
+    the CLI, public API, and presets.
 
     Returns:
         EvaluationConfig instance.
@@ -218,27 +196,26 @@ def build_from_yaml(cls, yaml_path: str, validate: bool = True) -> "Any":
     Raises:
         ConfigurationError: If validate=True and validation fails.
     """
-    from .graph_config import build_evaluation_config_kwargs
 
     with open(yaml_path, "r") as f:
         config_dict = yaml.safe_load(f)
     if config_dict is None:
         raise ConfigurationError("Empty configuration file.")
+    try:
+        kwargs = build_evaluation_config_kwargs(_expand_env(config_dict))
+    except GraphConfigError as exc:
+        # Name the file: a translate failure otherwise reads as a bare schema complaint with
+        # no clue which of a campaign's configs produced it.
+        raise GraphConfigError(f"{yaml_path}: {exc}") from exc
     return cls.from_dict(
-        build_evaluation_config_kwargs(_expand_env(config_dict)), validate=validate
+        kwargs, validate=validate
     )
 
 
 def _expand_env(value: Any) -> Any:
-    """Expand ``${VAR}`` / ``$VAR`` in every string of a loaded config tree.
-
-    Machine-specific absolute paths (dataset roots, model checkpoints) belong in the
-    environment, not in a committed config: a campaign config says
-    ``${APM_CHECKPOINT_DIR}/apm_whisper_jina.pt`` and runs anywhere the variable is set.
-    An UNSET variable is left verbatim (``os.path.expandvars`` semantics) so the
-    downstream path check reports the literal, un-substituted path — which names the
-    variable that was missing.
-    """
+    """Expand ``${VAR}``/``$VAR`` in every string of a config tree; an unset variable is
+    left verbatim (``os.path.expandvars`` semantics) so the downstream path check reports
+    the literal, un-substituted path that names what was missing."""
     import os
 
     if isinstance(value, str):
@@ -268,10 +245,9 @@ _OVERRIDE_SECTIONS = (
 
 
 def _resolve_underscore_override(key: str):
-    """Map a legacy ``section_subkey`` override to ``(section, sub_key)`` (F13).
+    """Map a legacy ``section_subkey`` override to ``(section, sub_key)``.
 
-    Returns ``(None, key)`` for a plain top-level key. Replaces the hand-sliced prefix
-    decoder; the dotted-path branch already does the nested assignment generically.
+    Returns ``(None, key)`` for a plain top-level key.
     """
     for section in _OVERRIDE_SECTIONS:
         prefix = section + "_"
@@ -285,28 +261,15 @@ def build_from_preset(
 ) -> "Any":
     """Create configuration from a named preset with optional overrides.
 
-    Args:
-        preset_name: Name of the preset (e.g., 'whisper_labse', 'fast_dev')
-        validate: If True, validate configuration after creation. Defaults to True.
-        **overrides: Key-value pairs to override preset values.
-                    Nested values use underscore notation, e.g.,
-                    model_asr_device='cpu' overrides model.asr_device.
+    ``**overrides`` use underscore or dotted notation for nested values (e.g.
+    ``model_asr_device`` or ``model.asr_device``) to override a preset's nested fields.
 
     Returns:
         EvaluationConfig instance.
 
     Raises:
         ConfigurationError: If validate=True and validation fails.
-
-    Example:
-        config = EvaluationConfig.from_preset(
-            'fast_dev',
-            experiment_name='my_experiment',
-            model_asr_device='cuda:1',
-            data_batch_size=16
-        )
     """
-    from .model_presets import get_preset
 
     config_dict = get_preset(preset_name)
 
@@ -314,7 +277,6 @@ def build_from_preset(
     # underscore notation is kept for backward compatibility.
     for key, value in overrides.items():
         if "." in key:
-            # Dotted path: navigate / create nested dicts
             segments = key.split(".")
             d = config_dict
             for seg in segments[:-1]:
@@ -324,7 +286,7 @@ def build_from_preset(
             d[segments[-1]] = value
             continue
 
-        # Legacy underscore notation → generic section/sub_key resolution (F13).
+        # Legacy underscore notation → generic section/sub_key resolution.
         section, sub_key = _resolve_underscore_override(key)
         if section is None:
             config_dict[key] = value

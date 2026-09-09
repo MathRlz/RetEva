@@ -1,16 +1,11 @@
-"""Operator catalogue: the 11 ``register_stage_node`` declarations + their helpers.
-
-This is the node catalogue proper — the field-parameterized operators (source / convert /
-embed / combine / transform / index / search / refine / measure / generate / sink) and the
-``callable(params)`` port/category/domain helpers that vary an operator's contract by field.
-
-Importing this module runs the ``register_stage_node(...)`` calls (at import time, in the
-order below), which populate ``registry._NODE_REGISTRY``. ``registry`` imports this module
-at the bottom of its own file, after ``register_stage_node`` is defined, so the node
-registration happens whenever ``registry`` is imported.
-"""
+"""Operator catalogue: the ``register_stage_node`` declarations and their field-parameterized
+port/category/domain helpers. Importing this module populates ``registry.NODE_REGISTRY``;
+``registry`` imports it at the bottom of its own file, after ``register_stage_node`` is defined."""
 
 from ...config.types import RETRIEVAL_MODES, RERANKER_MODES
+from ...models.retrieval import list_fusions
+from ...models.retrieval.query.correction import list_correctors
+from ...models.retrieval.query.optimization import list_combine_strategies
 from .artifacts import (
     ARTIFACT_ANSWER_SCORES,
     ARTIFACT_AUDIO_QUERY_VECTORS,
@@ -44,32 +39,21 @@ from .artifacts import (
 )
 from .registry import register_stage_node
 
-# Node catalogue. A node that runs a model declares the config field that selects it
-# (required-fields validation + per-stage lifecycle derive from one place); inputs/outputs
-# declare its data contract (edge validation). metrics has no required input — it appears
-# in asr_only too and adapts to whatever ran.
-#
-# dataset_source is the graph root: it surfaces + validates the dataset's source
-# artifacts so every downstream node hangs off it. (Dataset *loading* stays in prepare_dataset
-# before the graph; TTS synthesis is in-graph — the tts node gap-fills any missing query audio.
-# This node represents the loaded source in the executed graph.)
-# ── operator: source (dataset_source / dataset_union) ────────────────
-# dataset_source surfaces a dataset's source artifacts (role/fields narrowing lives in
-# _effective_outputs, keyed by node_kind); `union: true` is dataset_union (merges every
-# bound producer's question-axis sets). Resolved byte-identically.
+# source (dataset_source) is the graph root, surfacing the dataset's source artifacts; dataset
+# loading stays in prepare_dataset before the graph, TTS synthesis is in-graph. `union: true` is
+# dataset_union: merges every bound producer's question-axis sets; role/fields narrowing lives
+# in effective_outputs, keyed by node_kind.
 _SOURCE_FULL = (
     ARTIFACT_QUERY_AUDIO,
     ARTIFACT_QUERY_TEXT,
     ARTIFACT_CORPUS,
     ARTIFACT_RELEVANT_DOCS,
     ARTIFACT_SHORT_ANSWERS,
-    # Spoken-transcription GT (== question_text on current datasets): the sole producer
-    # now that asr/audio_embedding are pure transforms (Phase 3).
+    # Spoken-transcription GT (== question_text on current datasets); asr/audio_embedding
+    # are pure transforms, not its producer.
     ARTIFACT_REFERENCE_TRANSCRIPTION,
 )
-# Retrieval-side reference (question text) — published by the source handler, declared so
-# the branched aggregate can BIND it. Appended (not inlined above) so the tuple-order-
-# derived UI column order for the classic fields is untouched.
+# Appended (not inlined above) so the tuple-order-derived UI column order stays untouched.
 _SOURCE_FULL = _SOURCE_FULL + (ARTIFACT_REFERENCE_TEXT,)
 _UNION_OUT = (
     ARTIFACT_QUERY_AUDIO,
@@ -95,19 +79,15 @@ register_stage_node(
     outputs=_source_outputs,
     optional_inputs=_source_optional,
     param_spec={
-        # Registered dataset id (picker in the builder) or a datasets-map id (B4).
-        # A plain source just provides its outputs; the `role` narrowing (questions/corpus)
-        # is an advanced multi-source mechanism set via the datasets map / node params, not a
-        # default form field (to COMBINE datasets the builder offers the Dataset-union tile).
+        # `role` narrowing (questions/corpus) is a multi-source mechanism set via the datasets
+        # map, not a form field — the builder offers the Dataset-union tile to combine datasets.
         "dataset": {"kind": "dataset"},
     },
 )
 
 
-# ── asr (A→T) and tts (T→A): two first-class model nodes ─────────────
-# The former `convert` operator collapsed both behind an `op` discriminator; they are different
-# MODELS' nodes, so each is its own node type with a plain (non-field-resolved) contract.
-# asr is a managed MODEL (device/offload); tts runs its own TTS backend and is a transform.
+# asr (managed model, device/offload) and tts (own backend, a transform) are different node
+# types rather than one field-resolved contract.
 register_stage_node(
     "asr",
     category="model",
@@ -115,11 +95,10 @@ register_stage_node(
     model_field="model.asr_model_type",
     inputs=(ARTIFACT_QUERY_AUDIO,),
     outputs=(ARTIFACT_QUERY_TEXT,),
-    # asr's spoken-transcription ground truth (``reference_transcription``, what its query_text
-    # is scored against by WER/CER) is an optional input wired from the source.
+    # Optional input: its scoring ground truth (query_text is scored against it by WER/CER).
     optional_inputs=(ARTIFACT_REFERENCE_TRANSCRIPTION,),
     param_spec={
-        # oracle: the ASR branch uses the reference transcriptions instead of running ASR (R2).
+        # oracle: uses the reference transcriptions instead of running ASR.
         "oracle": {"kind": "bool", "default": False},
     },
 )
@@ -131,7 +110,6 @@ register_stage_node(
     inputs=(ARTIFACT_QUERY_TEXT,),
     outputs=(ARTIFACT_QUERY_AUDIO,),
     param_spec={
-        # tts synthesis params (were config.audio_synthesis; now carried on the tts node) — the
         # provider mirrors the @register_tts_model registry; add a name when one is registered.
         "provider": {"kind": "select", "choices": ["piper", "mms", "m4t", "xtts_v2"],
                      "default": "piper"},
@@ -147,12 +125,9 @@ register_stage_node(
 )
 
 
-# ── operator: embed (collapses text/audio/corpus embedding) ───────────
-# One model node whose contract varies by field (the §4.1 "axis insight" made literal):
-#   axis=query, modality=text  → query_text chain → text_query_vectors   (model.text_emb)
-#   axis=query, modality=audio → query_audio       → audio_query_vectors  (model.audio_emb)
-#   axis=corpus                → corpus            → corpus_vectors       (shared embedder)
-# Resolved byte-identically to the three former nodes (node_kind reverses each combo).
+# One model node whose contract varies by field: axis=corpus->corpus_vectors (shared embedder);
+# axis=query,modality=audio->audio_query_vectors; else query_text chain->text_query_vectors.
+# `node_kind` reverses each combo.
 def _embed_inputs(params):
     p = params or {}
     if p.get("axis") == "corpus":
@@ -174,7 +149,7 @@ def _embed_outputs(params):
 def _embed_model_field(params):
     p = params or {}
     if p.get("axis") == "corpus":
-        return None  # corpus embedding shares the query embedder instance
+        return None  # shares the query embedder instance
     if p.get("modality") == "audio":
         return "model.audio_emb_model_type"
     return "model.text_emb_model_type"
@@ -195,10 +170,8 @@ register_stage_node(
 )
 
 
-# ── operator: combine (collapses fusion / result_fusion / corpus_merge) ──
-# Three combine LEVELS: embedding (fuse the audio+text query vectors → a distinct fused
-# stream; text optional, falls back to audio), result (fuse two ranked `retrieved` sets),
-# set (concatenate every bound corpus_vectors producer). Resolved byte-identically.
+# 3 levels: embedding (fuse audio+text query vectors, text optional/falls back to audio),
+# result (fuse two ranked `retrieved` sets), set (concatenate bound corpus_vectors producers).
 def _combine_inputs(params):
     level = (params or {}).get("level")
     if level == "result":
@@ -232,12 +205,10 @@ def _combine_domain(params):
 def _combine_param_spec(params):
     """Builder form for the combine node. The result-fusion `method` choices come from the fusion
     registry (`list_fusions`), so a newly-registered strategy appears in the UI automatically."""
-    from ...models.retrieval import list_fusions
 
     return {
         "level": {"kind": "select", "choices": ["embedding", "result", "set"],
                   "default": "embedding"},
-        # embedding-fusion params (were config.embedding_fusion; now carried on the fusion node)
         "audio_weight": {"kind": "number", "default": 0.5, "show_if": {"level": ["embedding"]}},
         "text_weight": {"kind": "number", "default": 0.5, "show_if": {"level": ["embedding"]}},
         "fusion_method": {"kind": "select",
@@ -269,13 +240,7 @@ register_stage_node(
 )
 
 
-# Pre-retrieval LLM query optimization (rewrite / HyDE): a PURE text→text transform that
-# improves the query before embedding (emits optimized_query_text on the chain). The fan-out
-# methods (decompose / multi_query) live in the explicit multi_query_retrieval node.
-# ── operator: transform (type-preserving X→X) ────────────────────────
-# Collapses query_correction / query_optimization / query_refine / augmenter /
-# augment_audio. `op` selects the rewrite; `axis` (query/docs) + `modality` (text/audio)
-# flip the data axis (the §4.1 docs-axis robustness folds in here). Resolved byte-identically.
+# `op` selects the rewrite; `axis` (query/docs) + `modality` (text/audio) flip the data axis.
 def _transform_inputs(params):
     p = params or {}
     op = p.get("op")
@@ -308,7 +273,7 @@ def _transform_outputs(params):
 def _transform_optional(params):
     p = params or {}
     # the query-side augmenter can flip to the corpus axis; the optional corpus orders it
-    # after the corpus producer (matches the former augmenter's optional_inputs).
+    # after the corpus producer.
     if p.get("op") == "perturb" and p.get("modality") != "audio":
         return (ARTIFACT_CORPUS,)
     return ()
@@ -329,8 +294,6 @@ def _transform_param_spec(params):
     op = (params or {}).get("op")
     spec = {"op": _OP_SELECTOR}
     if op == "correct":
-        from ...evaluation.query_correction import list_correctors  # registry-driven
-
         spec.update({
             "method": {"kind": "select", "choices": list_correctors(), "default": "rule"},
             "enabled": {"kind": "bool", "default": True},
@@ -383,31 +346,17 @@ register_stage_node(
     optional_inputs=_transform_optional,
     param_spec=_transform_param_spec,
 )
-# Composite retrieval strategy (RAG-fusion) = the `search` operator with a `fanout`
-# (multi_query / decompose): expand the query into sub-queries, retrieve each, fuse the
-# result sets → retrieved. Runtime-variable fan-out; replaces embed+retrieve for that flow.
-# query_refine / query_correction / augmenter = the `transform` operator with op:
-# refine / correct / perturb (the query-side rewrites that chain on the query_text bus).
-# Query-set union (§4.1 T3) = the `source` operator with union:true — merges every bound
-# producer's question-axis ItemSets (refs/texts/GT) with DISJOINT query_ids enforced.
-# Audio-axis robustness = the `transform` operator with op:perturb, modality:audio
-# (perturbs each query clip — noise/speed/pitch/volume — and republishes query_audio REFS).
-# Corpus side of the graph (§4 split): the corpus embedder is the `embed` operator with
-# `axis: corpus` (same embedder instance the query side uses — offload planner accounts for
-# both, via node_kind→corpus_embedding); vector_db owns the store backend choice per node.
-# Corpus combiner = the `combine` operator with level:set (concatenate every bound
-# corpus_vectors producer); the embedded corpora become one set in the DB.
-# ── operator: index (was vector_db) — corpus_vectors → searchable index ──
+# `union:true` (on `transform`) merges bound producers' question-axis ItemSets with disjoint
+# query_ids enforced; op:perturb,modality:audio republishes perturbed query_audio refs.
 register_stage_node(
     "index",
     category="transform",
     domain="retrieval",
     inputs=(ARTIFACT_CORPUS_VECTORS,),
     outputs=(ARTIFACT_VECTOR_INDEX,),
-    # No `param_defaults` here: an omitted `store` inherits the run's global vector_db.type
-    # (`effective_vector_db_config`), so it is NOT equivalent to an explicit `inmemory` —
-    # declaring it as a CSE default would over-share the twins under a non-inmemory global
-    # (CRITIQUE A2). CSE defaults are sound only for constant, config-independent fallbacks.
+    # No `param_defaults` for `store`: an omitted value inherits the run's global vector_db.type,
+    # NOT equivalent to an explicit `inmemory` default (would over-share under a non-inmemory
+    # global).
     param_spec={
         "store": {
             "kind": "select",
@@ -420,11 +369,8 @@ register_stage_node(
         "collection": {"kind": "text", "show_if": {"store": ["chromadb", "qdrant"]}},
     },
 )
-# ── operator: search (collapses retrieval / multi_query_retrieval) ────
-# Plain search: highest-priority published vector stream (fused > audio > text > a
-# precomputed query_vectors column) + the index → ranked. A `fanout` (multi_query /
-# decompose) REPLACES the vector input with the query text (the composite expands +
-# retrieves per sub-query, runtime-variable). Resolved byte-identically.
+# Vector input is a OneOf, priority fused > audio > text > precomputed query_vectors; a
+# `fanout` (multi_query/decompose) replaces it with the query text instead.
 _SEARCH_VECTOR_ONE_OF = one_of(
     ARTIFACT_FUSED_QUERY_VECTORS,
     ARTIFACT_AUDIO_QUERY_VECTORS,
@@ -447,17 +393,14 @@ def _search_inputs(params):
 def _search_optional(params):
     if _is_fanout(params):
         return ()
-    # `query_text`/`reference_transcription` are functional (the lexical query for sparse/hybrid +
-    # audio_text scoring); `relevant_docs` is retrieval's ground truth — an optional input wired
-    # from the source (consumed by the derived retrieval_metrics node; the search handler reads it
-    # only for the off-by-default diagnostic logger).
+    # query_text/reference_transcription are functional (sparse/hybrid + audio_text scoring);
+    # relevant_docs is retrieval's ground truth, consumed by the derived retrieval_metrics node.
     return (QUERY_TEXT_CHAIN, ARTIFACT_REFERENCE_TRANSCRIPTION, ARTIFACT_RELEVANT_DOCS)
 
 
 def _search_param_spec(params):
     """Builder form for the search node. The multi-query `combine_strategy` choices come from its
     registry (`list_combine_strategies`), so a newly-registered strategy appears in the UI."""
-    from ...models.retrieval.query.optimization import list_combine_strategies
 
     return {
         "k": {"kind": "number", "default": 5},
@@ -488,11 +431,8 @@ register_stage_node(
     optional_inputs=_search_optional,
     param_spec=_search_param_spec,
 )
-# Result-level fusion = the `combine` operator with level:result (fuse the RANKED results
-# of two retrievals instead of their embeddings); consumes + produces `retrieved`.
-# Post-retrieval refinement as three composable nodes (each consumes + produces retrieved):
-# rerank (reorder) -> mmr (diversity) -> threshold (filter). Each is present only when
-# configured; they chain in that order and the last feeds metrics/answer_gen.
+# Post-retrieval refinement, 3 composable retrieved->retrieved nodes: rerank (reorder) ->
+# mmr (diversity) -> threshold (filter), each present only when configured.
 _QUERY_VECTOR_ONE_OF = one_of(
     ARTIFACT_FUSED_QUERY_VECTORS,
     ARTIFACT_AUDIO_QUERY_VECTORS,
@@ -502,9 +442,7 @@ _QUERY_VECTOR_ONE_OF = one_of(
 )
 
 
-# ── operator: refine (collapses rerank / mmr / threshold) ─────────────
-# Each is retrieved→retrieved; only the optional scoring inputs differ by op. Resolved
-# byte-identically to the three former nodes.
+# Only the optional scoring inputs differ by op.
 def _refine_optional(params):
     op = (params or {}).get("op")
     if op == "rerank":
@@ -526,39 +464,28 @@ register_stage_node(
         "mode": {"kind": "select",
                  "choices": list(RERANKER_MODES),
                  "show_if": {"op": ["rerank"]}},
-        # per-node target depth (shared by the refine chain); rerank keeps the larger
-        # fetch_k pool when an mmr node follows.
+        # k: shared by the refine chain; rerank keeps the larger fetch_k pool when mmr follows.
         "k": {"kind": "number"},
         "top_k": {"kind": "number", "show_if": {"op": ["rerank"]}},
-        # rerank tuning the handler reads via `_node_reranking` (model is the model picker):
-        # the dense↔rerank blend weight + the reranker's device. (mmr's lambda / threshold's
-        # cutoff are global config, NOT node-settable — so they are intentionally absent.)
+        # weight/device: rerank-only tuning; mmr's lambda / threshold's cutoff are global
+        # config, not node-settable, so intentionally absent here.
         "weight": {"kind": "number", "show_if": {"op": ["rerank"]}},
         "device": {"kind": "device", "show_if": {"op": ["rerank"]}},
     },
 )
-# metrics/answer_gen/finalize use optional_inputs to encode ordering: metrics after
-# retrieval (when retrieving) and after asr (asr_only); answer_gen after metrics (it reads
-# metrics intermediates); finalize last (after answer_gen when present).
-# Typed comparison nodes (Phase 5): each pairs an EXPECTED (dataset_source GT) against an
-# ACTUAL (a transform output) and is present only when both exist (diagram honesty).
-# They set the per-item RunState intermediates the report + rag/judge stages read, and
-# publish a scores artifact the `metrics` node orders after.
-# Per-aspect judge outputs (finite set — publish is config-conditional, advertising is not).
+# metrics/answer_gen/finalize use optional_inputs to encode ordering (metrics after
+# retrieval/asr, answer_gen after metrics, finalize last). Typed comparison nodes pair an
+# EXPECTED (dataset_source GT) against an ACTUAL (a transform output) and appear only when
+# both exist; each publishes a scores artifact the `metrics` node orders after.
+# Per-aspect judge outputs: a finite set, publish is config-conditional, advertising is not.
 from ...config.judge import VALID_JUDGE_ASPECTS as _VALID_JUDGE_ASPECTS  # noqa: E402
 
 _JUDGE_ASPECT_OUT = tuple(
     f"judge_aspect_{a}" for a in sorted(_VALID_JUDGE_ASPECTS)
 )
-# ── operator: measure (typed comparisons + report + traces + judge) ──
-# Collapses transcription/retrieval/answer/embedding_alignment metrics, the `metrics`
-# report assembler, `build_query_traces`, and `answer_judge`. `family` (or `trace: true`)
-# selects which; each pairs an EXPECTED GT × ACTUAL output → a scores artifact (the report
-# orders after them). build_query_traces is the one transform-category member (callable
-# category). Resolved byte-identically to the seven former nodes.
+# `family` (or `trace: true`) selects which measure kind runs; build_query_traces ("trace") is
+# the one transform-category member, the rest are metrics comparing EXPECTED GT x ACTUAL output.
 _MEASURE = {
-    # The typed comparison nodes also publish their PER-ITEM scores keyed — the
-    # trace/judge/diagnostics consumers bind + id-join them (no RunState side channel).
     "transcription": {"inputs": (),
                       "outputs": (ARTIFACT_TRANSCRIPTION_SCORES,
                                   "per_query_wer", "per_query_cer"),
@@ -569,17 +496,14 @@ _MEASURE = {
     "alignment": {"inputs": (ARTIFACT_AUDIO_QUERY_VECTORS, ARTIFACT_TEXT_QUERY_VECTORS),
                   "outputs": (ARTIFACT_EMBEDDING_ALIGNMENT,), "optional": ()},
     "answer": {"inputs": (ARTIFACT_GENERATED_ANSWERS,), "outputs": (ARTIFACT_ANSWER_SCORES,),
-               # short_answers = the dataset's yes/no/maybe label, exact-matched against the
-               # reply's `Short Answer:` line (decision accuracy)
+               # short_answers: dataset's yes/no/maybe label, exact-matched against the
+               # reply's `Short Answer:` line.
                "optional": (ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS,
                             ARTIFACT_SHORT_ANSWERS)},
     "judge": {"inputs": (ARTIFACT_QUERY_TRACES,),
-              # query_traces is the real dependency (built from generated answers + retrieved +
-              # relevant docs + expected answers). It rides the artifact bus (put_artifact), not
-              # `s.results`, so it survives the `metrics`/report node's `s.results = results`
-              # rebuild regardless of node order — no ordering edge to `metrics` needed.
-              # every aspect artifact is advertised (publish is config-conditional) so the
-              # finalize sink can BIND them — an unpublished optional is a no-op read
+              # query_traces rides the artifact bus, not `s.results`, so it survives the
+              # report node's rebuild regardless of order — no ordering edge to `metrics` needed.
+              # Every aspect artifact is advertised so finalize can bind it even when unpublished.
               "outputs": (ARTIFACT_JUDGE_SCORES, ARTIFACT_JUDGE_PASS) + _JUDGE_ASPECT_OUT,
               "optional": (ARTIFACT_GENERATED_ANSWERS,
                            ARTIFACT_RETRIEVED, ARTIFACT_RELEVANT_DOCS,
@@ -591,13 +515,11 @@ _MEASURE = {
                            "per_query_wer", "per_query_cer", "per_query_recall5")},
     "report": {"inputs": (), "outputs": (ARTIFACT_METRICS,),
                "optional": (ARTIFACT_TRANSCRIPTION_SCORES, ARTIFACT_RETRIEVAL_SCORES,
-                            # answer-quality aggregates (ROUGE / hallucination / dose safety /
-                            # context recall) — bound so the report can carry them
                             ARTIFACT_ANSWER_SCORES,
                             ARTIFACT_RETRIEVED, ARTIFACT_QUERY_TEXT,
                             ARTIFACT_REFERENCE_TRANSCRIPTION, ARTIFACT_RELEVANT_DOCS,
                             ARTIFACT_EMBEDDING_ALIGNMENT,
-                            # the C7 corrected metrics read it
+                            # the corrected metrics read it
                             ARTIFACT_CORRECTED_QUERY_TEXT,
                             # per-item scores for the IR diagnostics
                             "per_query_wer", "per_query_cer", "per_query_recall5")},
@@ -621,7 +543,6 @@ register_stage_node(
                    "choices": ["transcription", "retrieval", "answer", "alignment",
                                "judge", "report"]},
         "trace": {"kind": "bool", "default": False},
-        # judge params (were config.judge; now carried on the answer_judge node)
         "enabled": {"kind": "bool", "default": False, "show_if": {"family": ["judge"]}},
         "model": {"kind": "text", "default": "gpt-4o-mini", "show_if": {"family": ["judge"]}},
         "judge_mode": {"kind": "select", "choices": ["retrieval", "answer_quality", "both"],
@@ -648,22 +569,16 @@ register_stage_node(
         "user_prompt_template": {"kind": "text", "show_if": {"family": ["judge"]}},
     },
 )
-# ── operator: generate (was answer_gen) — query (+ context?) → answers ──
 register_stage_node(
     "generate",
     category="transform",
     domain="generation",
-    # The query (`query_text` chain) is the only hard requirement: `retrieved` is OPTIONAL
-    # *context* — present → RAG (grounded in the retrieved docs), absent → closed-book QA (a
-    # no-corpus dataset has no retrieval node, so no `retrieved` artifact). The optional
-    # `retrieved` also orders answer_gen after retrieval via its producer binding. `short_answers`
-    # is the answer's ground truth — an optional input wired from the source (the derived
-    # answer_metrics node scores the generated answer against it). The handler reads the query from
-    # `query_text` only (the dead `metrics` edge + non-asr `reference_transcription` fallback gone).
+    # `retrieved` is optional context: present -> RAG, absent -> closed-book QA; also orders
+    # answer_gen after retrieval. `short_answers` is the answer's ground truth (scored by
+    # the derived answer_metrics node), wired from the source.
     inputs=(QUERY_TEXT_CHAIN,),
     outputs=(ARTIFACT_GENERATED_ANSWERS,),
     optional_inputs=(ARTIFACT_RETRIEVED, ARTIFACT_SHORT_ANSWERS, ARTIFACT_RELEVANT_DOCS),
-    # answer-gen params (were config.answer_generation; now carried on the answer_gen node)
     param_spec={
         "enabled": {"kind": "bool", "default": False},
         "method": {"kind": "select", "choices": ["simple", "chain_of_thought", "multi_query"],
@@ -684,17 +599,14 @@ register_stage_node(
         "reference_metadata_field": {"kind": "text", "default": "long_answer"},
     },
 )
-# answer_metrics / build_query_traces / answer_judge = the `measure` operator with
-# family:answer / trace:true / family:judge (see the measure registration above).
-# ── operator: sink (terminal side-effects) ───────────────────────────
-# Collapses finalize / aggregate / dataset_sink / leaderboard_sink / tracking_sink — the
-# `target` field selects which terminal effect (+ its optional ordering inputs).
+# answer_metrics/build_query_traces/answer_judge = `measure` with family:answer/trace:true/
+# family:judge. `target` selects the sink's terminal effect + its optional ordering inputs.
 _SINK_OPTIONAL = {
     # judge_pass + the aspect artifacts must be declared here, or streaming's lifetime
-    # analysis and the graph miss the finalize sink's reads.
+    # analysis misses the finalize sink's reads.
     "finalize": (ARTIFACT_QUERY_TRACES, ARTIFACT_JUDGE_SCORES, ARTIFACT_JUDGE_PASS,
                  ARTIFACT_GENERATED_ANSWERS, ARTIFACT_RETRIEVED) + _JUDGE_ASPECT_OUT,
-    # everything the branched report reads — declared so the reads are visible in the graph
+    # everything the branched report reads, declared so the reads are visible in the graph
     "aggregate": (ARTIFACT_RETRIEVED, ARTIFACT_METRICS, ARTIFACT_QUERY_TEXT,
                   ARTIFACT_CORRECTED_QUERY_TEXT, ARTIFACT_RELEVANT_DOCS,
                   ARTIFACT_REFERENCE_TEXT, ARTIFACT_REFERENCE_TRANSCRIPTION),
@@ -705,8 +617,7 @@ _SINK_OPTIONAL = {
 
 
 def _sink_inputs(params):
-    # finalize is the only sink with a required input (the report); the rest are pure
-    # optional-ordered terminals.
+    # finalize is the only sink with a required input; the rest are pure optional-ordered terminals.
     return (ARTIFACT_METRICS,) if (params or {}).get("target") == "finalize" else ()
 
 

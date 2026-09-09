@@ -7,8 +7,8 @@ from typing import Any, Dict, Optional
 from ..config import EvaluationConfig
 from ..errors import EvaluatorError
 from ..evaluation.results import EvaluationResults
-from ..logging_config import get_logger, setup_logging
-from ..pipeline import create_pipeline_from_config
+from ..logging_config import add_run_file_handler, get_logger, runtime_logger, setup_logging
+from ..pipeline import create_pipeline_from_config, ModelServiceProvider
 from ..storage.cache import CacheManager
 from ..storage.leaderboard import ExperimentStore
 from ..tracking import MLflowTracker, NoOpTracker
@@ -17,8 +17,12 @@ from ..datasets import (
     validate_dataset_runtime_config,
 )
 from ..datasets.profiles import profile_snapshot
-from ..evaluation.load_info import LoadInfo
-from .model_provider import ModelServiceProvider
+from ..core.load_info import LoadInfo
+from ..config.validation import configured_feature_configs
+from ..evaluation.executor.run import run_from_bundle
+from ..evaluation.results_io import save_run_artifacts
+from ..evaluation.validation import run_pre_flight
+from ..pipeline.graph.build import build_graph_for_config
 
 
 def _create_tracker(config: EvaluationConfig):
@@ -46,8 +50,6 @@ def _evaluate_metrics(
     progress_callback=None,
     load_info=None,
 ):
-    from ..evaluation.executor.run import run_from_bundle
-
     with tracker:
         tracker.log_params(
             {
@@ -95,7 +97,6 @@ def _warm_up_model_services(config: EvaluationConfig, bundle: Any, logger) -> No
     logger.info("service.startup_policy mode=%s", mode)
     if mode != "eager":
         return
-    # Force metadata/name access so service-backed models are touched eagerly.
     touched = []
     if bundle.asr_pipeline is not None:
         touched.append(bundle.asr_pipeline.model.name())
@@ -115,15 +116,14 @@ def _configure_local_llm_runtime(
     override that turns on ``use_local_server`` only for one branch must not be invisible here
     (the server just wouldn't come up, and that node's resolved config would silently point at
     no local endpoint)."""
-    from ..config.validation import _configured_feature_configs
 
     judge_local = any(
         cfg.enabled and cfg.use_local_server
-        for cfg in _configured_feature_configs(config, "judge")
+        for cfg in configured_feature_configs(config, "judge")
     )
     query_local = any(
         cfg.enabled and cfg.use_local_server
-        for cfg in _configured_feature_configs(config, "query_optimization")
+        for cfg in configured_feature_configs(config, "query_optimization")
     )
     if not (judge_local or query_local):
         return
@@ -166,12 +166,11 @@ def _run_core(
 
     # Pre-flight chain (evaluation/validation.py): determinism seed, LLM budget,
     # embedding-space typing (config + per-node graph), optional store backends.
-    from ..evaluation.validation import run_pre_flight
 
     run_pre_flight(config)
 
     # Validate the dataset config pre-graph (no data load — loading is the in-graph dataset_source
-    # node now). TTS synthesis is in-graph (the tts node). Item replay (2d) rides ``load_info``
+    # node now). TTS synthesis is in-graph (the tts node). Item replay rides ``load_info``
     # into the source node, which applies the query-id slice at load (corpus kept whole).
     validate_dataset_runtime_config(
         config, retrieval_required=_run_needs_retrieval(config)
@@ -181,11 +180,10 @@ def _run_core(
 
     # Run-start summary on the shared service path (the CLI logs the full config at debug; this
     # one INFO line makes a webapi/API run diagnosable: what ran, over how much data).
-    from ..logging_config import runtime_logger
 
     runtime_logger.info(
-        "run start: template=%s retrieval=%s fusion=%s correction=%s query_opt=%s",
-        config.graph_template,
+        "run start: graph=%s retrieval=%s fusion=%s correction=%s query_opt=%s",
+        config.graph_label,
         _run_needs_retrieval(config),
         config.embedding_fusion.enabled,
         config.query_correction.enabled,
@@ -199,8 +197,8 @@ def _run_core(
     if service_provider is not None:
         _configure_local_llm_runtime(config, service_provider, logger)
 
-    # Corpus embedding + index build are the in-graph corpus_embedding + vector_db nodes (run
-    # inside run_from_bundle), so it is no longer done eagerly here.
+    # Corpus embedding + index build happen in-graph, as the corpus_embedding + vector_db
+    # nodes (run inside run_from_bundle).
     tracker = _create_tracker(config)
     metrics = _evaluate_metrics(
         config,
@@ -215,6 +213,16 @@ def _run_core(
     # caller's num_samples/metadata needs no pre-graph load.
     dataset = load_info.dataset
     return metrics, dataset
+
+
+def run_from_config(config, *, cache_manager=None, progress_callback=None,
+                    service_provider=None, query_ids=None):
+    """Build pipelines, prepare data, evaluate; returns the metrics dict."""
+    if cache_manager is None:
+        cache_manager = CacheManager(cache_dir=config.cache.cache_dir, enabled=config.cache.enabled)
+    metrics, _dataset = _run_core(config, cache_manager=cache_manager, service_provider=service_provider,
+                                  progress_callback=progress_callback, query_ids=query_ids)
+    return metrics
 
 
 def run_evaluation(
@@ -239,7 +247,6 @@ def run_evaluation(
             experiment_name=config.experiment_name,
             verbosity=config.logging.verbosity,
         )
-        from ..logging_config import add_run_file_handler
         add_run_file_handler(config.output_dir, config.experiment_name)
         cache_manager = CacheManager(
             cache_dir=config.cache.cache_dir,
@@ -271,7 +278,7 @@ def run_evaluation(
             "start_time": start_time.isoformat(),
             "end_time": end_time.isoformat(),
             "duration_seconds": duration,
-            "pipeline_mode": config.graph_template,
+            "pipeline_mode": config.graph_label,
             "dataset_profile": _resolve_profile_snapshot(config),
         }
         if hasattr(dataset, "__len__"):
@@ -293,7 +300,6 @@ def run_evaluation(
             config=config,
             metadata=metadata,
         )
-        from ..evaluation.results_io import save_run_artifacts
 
         save_run_artifacts(metrics, config, get_logger(__name__))
         store = ExperimentStore(
@@ -309,13 +315,11 @@ def run_evaluation(
 
 
 def _run_needs_retrieval(config) -> bool:
-    """Whether this run retrieves (so the corpus is required). A named mode: every mode but
-    ``asr_only``. A graph-only config (mode=None): derive it from the execution graph — a
-    ``search`` node means retrieval (graph-first Phase 4)."""
-    mode = config.graph_template
-    if mode is not None:
-        return str(mode) != "asr_only"
-    from ..pipeline.graph.modes import build_graph_for_config
+    """Whether this run retrieves (so the corpus is required). A labelled graph: every label but
+    ``asr_only``. An unlabelled one: a ``search`` node in the execution graph means retrieval."""
+    label = config.graph_label
+    if label is not None:
+        return str(label) != "asr_only"
 
     return any(n.stage == "search" for n in build_graph_for_config(config).nodes)
 
@@ -327,11 +331,9 @@ def prepare_dataset(
     cache_manager: CacheManager | None = None,
 ):
     """Validate + load the dataset. TTS synthesis of any missing query audio is **in-graph**
-    now — the ``tts`` node (``SLOT_TTS``, present in every speech template; a free no-op, no model
-    load, when nothing is missing) gap-fills, so dataset loading no longer triggers synthesis.
-    Previously a pre-graph ``_synthesize_query_audio`` fallback handled the synthesis-disabled +
-    audio-missing case; that's redundant now that the tts node runs regardless of the
-    ``audio_synthesis.enabled`` flag. ``cache_manager`` is kept for API stability (the in-graph tts
+    — the ``tts`` node (``SLOT_TTS``, present in every speech template; a free no-op, no model
+    load, when nothing is missing) gap-fills, so dataset loading itself doesn't trigger
+    synthesis. ``cache_manager`` is kept for API stability (the in-graph tts
     node caches via the run's cache manager).
     """
     validate_dataset_runtime_config(config, retrieval_required=retrieval_required)
@@ -362,5 +364,5 @@ def load_dataset_and_build_index(
     )
 
 
-# Re-exported so existing import paths stay stable after the F4 extraction.
-from .corpus_index import build_corpus_index  # noqa: E402,F401
+# Re-exported so existing import paths stay stable.
+from ..pipeline.corpus_index import build_corpus_index  # noqa: E402,F401

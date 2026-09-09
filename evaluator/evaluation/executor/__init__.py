@@ -1,8 +1,7 @@
 """Executor subpackage: the DAG execution engine, run state, and entry points.
 
-The run entry points (``run_graph`` / ``run_from_bundle``) and the run-state / context dataclasses
-are re-exported here. Importing ``run`` also imports the handler package, so every stage
-handler is registered as a side effect.
+``run_graph`` / ``run_from_bundle`` and the run-state dataclasses are re-exported here;
+importing ``run`` also imports the handler package, registering every stage handler.
 """
 
 from .state import RunState, RunFeatures, EvaluationContext

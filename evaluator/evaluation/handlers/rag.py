@@ -1,7 +1,6 @@
 """RAG stage handlers: answer generation + finalize (LLM judge, traces, latency).
 
-Each handler
-registers itself via ``@register_stage_handler`` at import time.
+Each handler registers itself via ``@register_stage_handler`` at import time.
 """
 
 from __future__ import annotations
@@ -18,15 +17,19 @@ from ..answer_gen import generate_answers
 from ..executor.state import RunState
 from .retrieval import _retrieved_from_bus
 from ._common import _relevant_from_bus, publish_keyed_or_plain
+from ...utils.progress import progress_iter
+from ..answer_gen import score_answers
+from ..item_set import ItemSet
+from ..aggregate import flatten_report, reduce_scores
+from ..metric_registry import compute_metrics
 
 logger = get_logger(__name__)
 
 
 def _answer_corpus_lookup(s: "RunState", results_with_scores) -> dict:
-    """doc_id → payload, from the full corpus + the retrieved payloads (richer metadata).
-    Used to find reference answers even for retrieval misses. The corpus base is built once
-    per run (cached on the state — get_corpus rebuilds N dicts each call); the retrieved
-    overlay is rebuilt per call (it is branch-specific)."""
+    """doc_id → payload, from the full corpus + retrieved payloads (richer metadata) —
+    used to find reference answers even for retrieval misses. The corpus base is cached
+    on the state; the retrieved overlay is rebuilt per call (it is branch-specific)."""
     base = s.corpus_lookup_base
     if base is None:
         base = {}
@@ -57,10 +60,9 @@ def _generate_answer_details(
         return {}
 
     s.cb("step_5_answer_gen", 0, s.total, "Step 5: Answer generation")
-    # Bus-only (M1d-2): the effective (most-processed) query is the QUERY_TEXT_CHAIN. Single
-    # honest source (the old non-asr `reference_transcription` fallback was removed) — so an
-    # audio-only graph WITHOUT an ASR node has no text query. Make that LOUD instead of silently
-    # emitting zero answers: the query is query_text-only by design; add an ASR node to supply it.
+    # Bus-only: query_text is the single honest source for the effective query — an
+    # audio-only graph with no ASR node has none, which we make LOUD instead of silently
+    # emitting zero answers.
     query_texts = s.input("query_text", default=[])
     if not query_texts:
         logger.warning(
@@ -78,7 +80,7 @@ def _generate_answer_details(
         embedder=s.text_embedding_pipeline,
     )
     results["answer_generation"] = answer_results
-    # Bus-published too (R4/multi-variant): a graph with N answer_gen nodes would otherwise
+    # Bus-published too (multi-variant): a graph with N answer_gen nodes would otherwise
     # have `_stage_answer_metrics`/finalize read whichever variant's dict happens to be in the
     # shared `s.results` at that point — sibling-looked-up via the `generated_answers` producer
     # id (there's no declared `answer_generation` port, so no direct `get_artifact` binding).
@@ -94,17 +96,10 @@ def _build_query_traces(
     results_with_scores,
     query_ids,
 ) -> None:
-    """Build per-query traces (+ per-speaker breakdown), at most ``trace_limit`` of them.
-
-    ``trace_limit: 0`` means NO LIMIT — every query is traced. That is what the knob already
-    means for the dataset (``datasets/runtime.py`` slices ``questions[:trace_limit]`` only when
-    positive) and what DataConfig documents ("0 = no limit"); this path used to read 0 as "off",
-    so one number meant opposite things at the two ends of the run. Traces are switched off by
-    leaving ``build_query_traces`` out of the graph.
-
-    Per-item scores and answer details come off the bus as keyed ItemSets and are joined
-    by query id: WER is published in reference order and recall in retrieved order, so a
-    positional pairing would cross them."""
+    """Build per-query traces (+ per-speaker breakdown), at most ``trace_limit`` of them
+    (0 = no limit). Per-item scores and answer details are joined by query id — WER is
+    published in reference order and recall in retrieved order, so a positional pairing
+    would cross them."""
     if not results_with_scores:
         return
 
@@ -114,7 +109,7 @@ def _build_query_traces(
     )
     references = s.get_artifact(
         "reference_transcription", default=[]
-    )  # bus-only (M1d-2)
+    )  # bus-only
     wer_items = s.keyed_items("per_query_wer")
     cer_items = s.keyed_items("per_query_cer")
     recall_items = s.keyed_items("per_query_recall5")
@@ -122,8 +117,6 @@ def _build_query_traces(
 
     def _by_id(items, qid):
         return items.value_for(qid) if items is not None and items.has(qid) else None
-
-    from ...utils.progress import progress_iter
 
     traces = []
     for i in progress_iter(range(limit), "Building query traces", total=limit, unit="query"):
@@ -183,11 +176,9 @@ def _build_query_traces(
 def _run_judge(
     s: "RunState", all_relevant, per_query_recall5, retrieved_keys, cfg
 ) -> Optional[dict]:
-    """Judge node: run the LLM judge over query traces (if enabled) + calibration. ``cfg`` is the
-    node-overlaid judge config (its params carried on the answer_judge node). Returns
-    ``{"llm_judge": ..., "judge_vs_MRR_correlation": ..., "judge_vs_Recall5_correlation": ...}``
-    (built + returned, not mutated in place — R4/multi-variant: the caller publishes it on the
-    bus under its own node id, rather than this writing into shared state directly)."""
+    """Judge node: run the LLM judge over query traces (if enabled) + calibration. ``cfg`` is
+    the node-overlaid judge config. Built + returned, not mutated in place — multi-variant
+    callers publish it on the bus under their own node id."""
     if cfg is None or not getattr(cfg, "enabled", False):
         return None
     # Read off the artifact bus, not `s.results` — the bus survives the metrics/report node's
@@ -242,12 +233,10 @@ def _run_judge(
 
 
 def _retrieved_or_text_ids(s: "RunState"):
-    """``_retrieved_from_bus``, with a query_text fallback for retrieval-free graphs.
-
-    The no-retrieval baseline (dataset_source → answer_gen → judge: the generator answers
-    from parametric knowledge) has no ``retrieved`` artifact to carry per-query identity —
-    fall back to the keyed ``query_text`` ItemSet for ids, with empty result lists (empty
-    context is exactly what that graph means). A graph WITH retrieval is unaffected."""
+    """``_retrieved_from_bus``, with a query_text fallback for retrieval-free graphs: the
+    no-retrieval baseline has no ``retrieved`` artifact, so ids fall back to the keyed
+    ``query_text``/``reference_transcription`` ItemSet, with empty result lists (exactly
+    what that graph means). A graph WITH retrieval is unaffected."""
     results_with_scores, retrieved_keys, query_ids = _retrieved_from_bus(s)
     if results_with_scores or query_ids:
         return results_with_scores, retrieved_keys, query_ids
@@ -292,13 +281,11 @@ def _fmt(value) -> str:
 
 
 def _stage_answer_metrics(s: RunState) -> None:
-    """Answer-quality comparison node: score the generated answers vs their reference
-    answers + retrieved context (ROUGE / hallucination / dose-safety / context-recall),
-    enriching the answer_generation details in place + the mean_* aggregates the report
-    reads. Was bundled inside answer generation."""
-    from ..answer_gen import score_answers
+    """Answer-quality comparison node: scores generated answers vs reference answers +
+    retrieved context, enriching the answer_generation details in place + the mean_*
+    aggregates the report reads."""
 
-    # Sibling lookup, not `s.results` (R4/multi-variant): `answer_generation` has no declared
+    # Sibling lookup, not `s.results` (multi-variant): `answer_generation` has no declared
     # port of its own, so it rides alongside the bound `generated_answers` producer.
     answer_results = s.sibling_artifact("generated_answers", "answer_generation")
     if not isinstance(answer_results, dict) or not answer_results.get("details"):
@@ -337,8 +324,8 @@ def _stage_build_query_traces(s: RunState) -> None:
     generated answers (the keyed ``generated_answers`` ItemSet, empty when no answer_gen
     ran) and the per-item WER/recall score artifacts — all id-joined off the bus.
     Always present in retrieval modes when tracing is on — so the judge + report read the
-    traces without the old ``traces_built`` state machine."""
-    # No dedup-by-shared-key guard here (R4/multi-variant): a graph with N build_query_traces
+    traces."""
+    # No dedup-by-shared-key guard here (multi-variant): a graph with N build_query_traces
     # nodes (one per compared variant) must build ALL N — each publishes its own traces on the
     # bus keyed by its own node id below. `s.results["query_traces"]` is written-then-read-back
     # as scratch space within this single call only (never read across nodes).
@@ -382,7 +369,7 @@ def _stage_answer_judge(s: RunState) -> None:
     )
     if judge_out is None:
         return
-    # Bus-published (R4/multi-variant): `finalize` sibling-looks this up via the (already
+    # Bus-published (multi-variant): `finalize` sibling-looks this up via the (already
     # bound) judge_pass/judge_scores producer — see `attach_judge_metrics`.
     s.put_artifact("judge_summary", judge_out)
     details = (judge_out.get("llm_judge") or {}).get("details") or []
@@ -393,8 +380,7 @@ def _publish_judge_scores(s: RunState, details: list, cfg=None) -> None:
     """Publish the per-query judge outputs as keyed ItemSets so the (reference-free) judge
     metrics score them through the normal path: ``judge_scores`` (overall), ``judge_pass``
     (1.0/0.0 → judge_pass_rate), and ``judge_aspect_<a>`` for each configured aspect. The
-    finalize node folds these into the report via ``attach_judge_metrics`` (J3)."""
-    from ..item_set import ItemSet
+    finalize node folds these into the report via ``attach_judge_metrics``."""
 
     ids = [str(d["query_id"]) for d in details]
     s.put_items("judge_scores", ItemSet(ids, [d["judge"]["overall"] for d in details]))
@@ -416,21 +402,20 @@ def _publish_judge_scores(s: RunState, details: list, cfg=None) -> None:
 
 def _stage_finalize(s: RunState) -> None:
     """Terminal node: assembles THIS node's own report (metrics + traces + judge + latency)
-    from its bound producers and publishes it on the bus as ``run_report`` (R4/multi-variant —
+    from its bound producers and publishes it on the bus as ``run_report`` (multi-variant —
     a graph with N finalize nodes, one per compared variant, must not share one mutable
     ``s.results``; `run_graph` collects every `run_report` at the end). Trace building lives in
     the explicit build_query_traces node; the LLM judge in answer_judge."""
     own_report: Dict[str, Any] = dict(s.get_artifact("metrics", default={}))
     s.stage_times["total_s"] = time.perf_counter() - s.t_total
     # Whole-run values (total wall time, per-node timing) — not meaningfully "per variant",
-    # same numbers land in every finalize node's own_report, same as the old shared behavior.
+    # the same numbers land in every finalize node's own_report.
     own_report["latency"] = dict(s.stage_times)
     # Per-node wall time — every node that ran, including the LLM stages the bucket-based
     # `latency` never covered (answer generation and the judge were simply absent).
     own_report["node_latency"] = dict(s.node_times)
-    # Judge metrics (J3): the judge node is downstream of the report assembler, so its per-query
+    # Judge metrics: the judge node is downstream of the report assembler, so its per-query
     # scores are merged into the report here, at the terminal node, via the metric registry.
-    from .metrics import attach_judge_metrics
 
     attach_judge_metrics(s, own_report)
     _attach_traces_to_report(s, own_report)
@@ -470,11 +455,10 @@ _JUDGE_KEYS = (
 
 def _attach_traces_to_report(s: "RunState", own_report: dict) -> None:
     """Consolidate per-query traces + failure analysis + answer-gen details into
-    ``own_report['report']['traces']`` and the LLM-judge results + calibration into
-    ``['judge']``. The terminal node owns this, so every producer (metrics → answer_gen →
-    judge) has written its part — read via the bus (own bound artifact) or a sibling lookup
-    (R4/multi-variant: this node's OWN producers only, never a global scan); the mirrored
-    top-level copies are dropped at the output boundary (`drop_mirrored_top_level_keys`)."""
+    ``own_report['report']['traces']``, and the LLM-judge results + calibration into
+    ``['judge']``. Read via the bus or a sibling lookup (this node's OWN producers only,
+    never a global scan); the mirrored top-level copies are dropped at the output boundary
+    (`drop_mirrored_top_level_keys`)."""
     report = own_report.get("report")
     if not isinstance(report, dict):
         return
@@ -499,10 +483,10 @@ def _attach_traces_to_report(s: "RunState", own_report: dict) -> None:
 
 
 def drop_mirrored_top_level_keys(results: dict) -> None:
-    """Output-boundary G5 cutover: once traces/judge are in ``report['traces']``/``['judge']``,
-    drop the duplicate top-level keys so the report is the single source in the returned result.
-    Only drops keys actually mirrored (no data loss if the report wasn't assembled). Run after
-    the whole graph (sinks read the top-level working copies during the run)."""
+    """Output boundary: once traces/judge are in ``report['traces']``/``['judge']``, drop
+    the duplicate top-level keys so the report is the single source. Only drops keys
+    actually mirrored (no data loss if the report wasn't assembled); run after the whole
+    graph (sinks read the top-level working copies during the run)."""
     report = results.get("report")
     if not isinstance(report, dict):
         return
@@ -510,3 +494,43 @@ def drop_mirrored_top_level_keys(results: dict) -> None:
     for key in (*_TRACE_KEYS, *_JUDGE_KEYS):
         if key in mirrored:
             results.pop(key, None)
+
+
+def attach_judge_metrics(s: "RunState", own_report: dict) -> None:
+    """Merge the LLM-judge per-query scores into ``own_report``'s report as registry metrics.
+    The judge node runs *downstream* of the report assembler, so its keyed ``judge_*``
+    ItemSets are not on the bus when the report is first scored — this terminal pass merges
+    them in via the same registry + reducer. No-op when the judge did not run, so a
+    judge-off run (the parity default) is byte-identical. ``own_report`` is THIS finalize
+    node's own dict (multi-variant) — never the shared ``s.results``."""
+    report = own_report.get("report") if own_report else None
+    if not isinstance(report, dict):
+        return
+
+    # the judge ItemSets are read through the finalize node's DECLARED bindings
+    # (judge_scores / judge_pass / every judge_aspect_* is a declared optional input now).
+    judge_arts: Dict[str, ItemSet] = {}
+    for art, pid in getattr(s.current_node, "bindings", ()):
+        if not (art in ("judge_scores", "judge_pass") or art.startswith("judge_aspect_")):
+            continue
+        if s.ctx.has(pid, art):
+            val = s.ctx.get(pid, art)
+            if isinstance(val, ItemSet):
+                judge_arts[art] = val  # last bound producer wins
+    if not judge_arts:
+        return
+
+    # collect_all → exactly the judge_* metrics fire (only judge artifacts are present);
+    # the config's `metrics:` allowlist applies here too.
+    scores = compute_metrics(judge_arts, only=s.metric_allowlist)
+    if not scores:
+        return
+    # Attach to the run's mode branch when present (single-branch), else the first branch.
+    branches = report.setdefault("branches", {})
+    target = s.mode if s.mode in branches else next(iter(branches), s.mode)
+    branch = branches.setdefault(target, {})
+    for name, item_scores in scores.items():
+        branch[name] = reduce_scores(
+            item_scores, with_ci=getattr(s, "compute_confidence_intervals", False)
+        )
+    own_report.update(flatten_report(report))

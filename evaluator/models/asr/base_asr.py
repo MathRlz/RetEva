@@ -1,8 +1,8 @@
 """Base class for HuggingFace-based ASR models."""
 from typing import List, Optional
 import torch
-import torchaudio
 from ..base import ASRModel
+from ...utils.audio import to_mono_16k
 
 
 class HuggingFaceASRModel(ASRModel):
@@ -14,8 +14,6 @@ class HuggingFaceASRModel(ASRModel):
     """
 
     def __init__(self, model_name: str, adapter_path: Optional[str] = None):
-        """model_name: HuggingFace identifier (e.g. 'openai/whisper-small');
-        adapter_path: optional PEFT/LoRA adapter weights."""
         self.model_name = model_name
         self.adapter_path = adapter_path
 
@@ -33,11 +31,9 @@ class HuggingFaceASRModel(ASRModel):
         self.device = torch.device("cpu")
 
     def _create_processor(self):
-        """Create and return the model-specific processor. Must be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement _create_processor()")
 
     def _create_model(self):
-        """Create and return the model architecture. Must be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement _create_model()")
 
     def _load_adapter(self, adapter_path: str):
@@ -64,24 +60,11 @@ class HuggingFaceASRModel(ASRModel):
         processed_audio = []
 
         for idx in range(len(audio_list)):
-            if not isinstance(audio_list[idx], torch.Tensor):
-                audio_list[idx] = torch.tensor(audio_list[idx])
-
             sr = sampling_rates[idx]
-            audio_sample = audio_list[idx]
-
-            if sr != 16000:
-                audio_list[idx] = torchaudio.functional.resample(audio_sample, sr, 16000)
-                sampling_rates[idx] = 16000
-
-            # Ensure 1-D mono: the feature extractors require one channel per clip; a
-            # multi-channel clip survives squeeze() and breaks batched padding. Downmix
-            # over the channel axis (the smaller dimension: channels << samples).
-            audio = audio_list[idx].squeeze()
-            if audio.dim() > 1:
-                ch_axis = int(min(range(audio.dim()), key=lambda d: audio.shape[d]))
-                audio = audio.mean(dim=ch_axis)
-            processed_audio.append(audio.numpy())
+            # Downmix over dim 0: the feature extractors require one channel per clip, and
+            # incoming clips are channel-first (channels << samples), matching to_mono_16k.
+            processed_audio.append(to_mono_16k(audio_list[idx], sr, downmix="mean", as_numpy=True))
+            sampling_rates[idx] = 16000
 
         return self._extract_features(processed_audio)
 

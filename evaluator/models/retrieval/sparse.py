@@ -1,7 +1,7 @@
 """Sparse (lexical) retrieval: minimal in-memory BM25 index.
 
-Extracted from ``pipeline/retrieval_pipeline.py`` so strategy logic lives with
-the other retrieval strategies; the pipeline only orchestrates.
+Strategy logic lives here with the other retrieval strategies; the pipeline
+(``pipeline/retrieval_pipeline.py``) only orchestrates.
 """
 
 from __future__ import annotations

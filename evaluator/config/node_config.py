@@ -1,25 +1,8 @@
 """Per-node effective feature configs, resolved once before execution.
 
-A feature node's behavior used to come from three surfaces: the global sub-config, a
-hand-maintained *overlay allowlist* consulted at run time (``RunState.node_overlay``), and
-the branch override folded into the node's params. The allowlists were the fragile part —
-each one had to be kept in sync with its dataclass by a drift test, and a key that was not
-a real field crashed only on the first run that overrode it (B4 found exactly that bug).
-
-Resolution replaces them: **the allowlist IS the dataclass's field set**, and the casts come
-from the field *types*, so neither can drift. The graph is walked once at run setup and each
-feature node gets its own frozen config instance; handlers read it via
-``RunState.resolved_config()`` and never see the global again.
-
-Semantics preserved exactly from the overlay era:
-
-* a globally-absent feature (``base is None`` — the feature was disabled in the config)
-  stays absent: node params cannot resurrect it;
-* the operator's discriminator fields (``op``/``axis``/``family``/…) never overlay — they
-  select the node's behavior, they are not config values;
-* empty (``None``/``""``) params are ignored, so an unset form field means "inherit";
-* nodes whose mere presence implies the feature (tts, fusion, answer_gen, judge,
-  augment_audio) force ``enabled=True``.
+The allowlist IS each feature config's dataclass field set (casts come from the field
+types), so it can't drift from the dataclass. The graph is walked once at run setup and
+each feature node gets its own frozen config instance, read via ``RunState.resolved_config()``.
 """
 
 from __future__ import annotations
@@ -45,7 +28,7 @@ DISCRIMINATOR_FIELDS = frozenset(
 #: relevance_feedback / self_rag_critique), while ``QueryOptimizationConfig.method`` is the
 #: rewrite/hyde/decompose/multi_query family. Overlaying one onto the other made every refine
 #: strategy name a hard ValueError, i.e. the node could not be used at all.
-_KIND_KEEP = {"query_refine": frozenset({"method"})}
+KIND_KEEP = {"query_refine": frozenset({"method"})}
 
 #: node_kind → the RunState attribute holding that feature's global config. Nodes whose
 #: presence implies the feature carry ``force_enabled``.
@@ -58,21 +41,17 @@ _FEATURE_BASES = {
     "answer_judge": ("judge_config", True),
     "fusion": ("embedding_fusion_config", True),
     "tts": ("_config.audio_synthesis", True),
-    # NB: the real EvaluationConfig field is `augmentation`, not `audio_augmentation` — using
-    # the wrong name here silently made this global unreachable (getattr always None), so
-    # augment_audio nodes only ever saw a bare default overlaid by their own params.
+    # NB: the real EvaluationConfig field is `augmentation`, not `audio_augmentation` — the
+    # wrong name here would make this global unreachable (getattr always None).
     "augment_audio": ("_config.augmentation", True),
 }
 
 
 def _cast(value: Any, field_type: Any) -> Any:
-    """Coerce a param (YAML/form values arrive as strings) to the dataclass field's type.
-    Only the scalar types the feature configs actually declare; anything else passes
-    through untouched (``Optional[...]``, containers, enums, unannotated).
-
-    ``field_type`` is usually a STRING — the config modules use
-    ``from __future__ import annotations``, so dataclass fields carry their annotation
-    unevaluated. Both spellings are handled."""
+    """Coerce a param (YAML/form values arrive as strings) to the dataclass field's type;
+    only scalar types are handled (containers/enums/unannotated pass through). ``field_type``
+    is often a plain string (``from __future__ import annotations`` leaves it unevaluated),
+    so both spellings are handled."""
     name = field_type if isinstance(field_type, str) else getattr(field_type, "__name__", "")
     if name == "bool":
         if isinstance(value, str):
@@ -137,6 +116,6 @@ def resolve_graph_node_configs(state: Any, stage_graph: Any) -> Dict[str, Any]:
             base = getattr(state, attr, None)
         resolved[node.id] = resolve_node_config(
             base, node.params, force_enabled=force,
-            keep_on_node=_KIND_KEEP.get(kind, frozenset()),
+            keep_on_node=KIND_KEEP.get(kind, frozenset()),
         )
     return resolved

@@ -149,7 +149,7 @@ class ManifestMixin:
             self._enforce_size_limit()
 
     def _rel_artifact_path(self, artifact_path: Path) -> str:
-        """Path stored in the manifest, relative to ``cache_dir`` when possible (T9).
+        """Path stored in the manifest, relative to ``cache_dir`` when possible.
 
         A relative path keeps the cache portable: move the cache dir or mount it at a
         different absolute location (another machine/container) and the entry still resolves.
@@ -164,7 +164,7 @@ class ManifestMixin:
 
     def _abs_artifact_path(self, stored: str) -> Path:
         """Resolve a manifest-stored path back to an absolute path against the *current*
-        ``cache_dir`` (T9). Legacy absolute entries are returned as-is (back-compat)."""
+        ``cache_dir``. Legacy absolute entries are returned as-is (back-compat)."""
         p = Path(stored)
         return p if p.is_absolute() else (self.cache_dir / p)
 

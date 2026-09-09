@@ -1,5 +1,5 @@
-"""Roadmap 1 — reproducibility surfacing: content fingerprint (R1a), HF revision pin (R1b),
-resolved-config sidecar (R1c)."""
+"""Reproducibility surfacing: content fingerprint, HF revision pin,
+resolved-config sidecar."""
 
 import sys
 import types
@@ -69,7 +69,7 @@ def test_hf_loader_parses_repo_at_revision(monkeypatch):
 
 
 def test_resolved_config_sidecar_written(tmp_path):
-    # Graph-first Phase 5: the resolved-config sidecar is the executed DAG as node-centric YAML
+    # the resolved-config sidecar is the executed DAG as node-centric YAML
     # (no pipeline_mode), not a flat JSON.
     import yaml
 

@@ -42,27 +42,16 @@ def analyze_asr_errors(results: dict) -> dict:
         - common_insertions: List of (inserted_word, count) tuples
         - common_deletions: List of (deleted_word, count) tuples
         - misrecognized_words: List of (word, error_count) tuples
-
-    Example:
-        >>> results = {
-        ...     "details": [
-        ...         {"reference": "the quick brown fox", "hypothesis": "the quik brown box"},
-        ...         {"reference": "hello world", "hypothesis": "hello word"}
-        ...     ]
-        ... }
-        >>> analysis = analyze_asr_errors(results)
-        >>> print(analysis["error_counts"]["substitutions"])
-        3
     """
     pairs = _extract_asr_pairs(results)
     if not pairs:
         return _empty_asr_analysis()
-    acc = _accumulate_asr_errors(pairs)  # parse + count
-    return _build_asr_analysis(acc)      # aggregate
+    acc = _accumulate_asr_errors(pairs)
+    return _build_asr_analysis(acc)
 
 
 class _AsrErrorTally:
-    """Accumulators for the ASR alignment pass (F12: separates count from aggregate)."""
+    """Accumulators for the ASR alignment pass; separates count from aggregate."""
 
     def __init__(self) -> None:
         self.substitutions: List[Tuple[str, str]] = []
@@ -80,7 +69,7 @@ class _AsrErrorTally:
 
 def _tally_alignment(chunks, ref_words: List[str], hyp_words: List[str],
                      tally: "_AsrErrorTally") -> None:
-    """Fold one pair's jiwer alignment chunks into the tally (the inner, deepest loop)."""
+    """Fold one pair's jiwer alignment chunks into the tally."""
     for chunk in chunks:
         if chunk.type == "substitute":
             for i, j in zip(
@@ -175,19 +164,6 @@ def analyze_retrieval_failures(results: dict, top_k: int = 10) -> dict:
         - near_miss_rate: Proportion of queries that were near misses
         - query_characteristics: Statistics about failing queries
         - rank_distribution: Distribution of relevant doc ranks
-
-    Example:
-        >>> results = {
-        ...     "details": [
-        ...         {"query": "what is diabetes", "retrieved": ["d1", "d2"],
-        ...          "relevant": {"d3": 1}},
-        ...         {"query": "flu symptoms", "retrieved": ["d4", "d5"],
-        ...          "relevant": {"d5": 1}}
-        ...     ]
-        ... }
-        >>> analysis = analyze_retrieval_failures(results)
-        >>> len(analysis["failed_queries"])
-        1
     """
     details = results.get("details", [])
 
@@ -207,7 +183,6 @@ def analyze_retrieval_failures(results: dict, top_k: int = 10) -> dict:
         if not relevant:
             continue
 
-        # Find rank of first relevant document
         first_relevant_rank = None
         for rank, doc_id in enumerate(retrieved[:top_k], 1):
             if relevant.get(doc_id, 0) > 0:
@@ -222,21 +197,17 @@ def analyze_retrieval_failures(results: dict, top_k: int = 10) -> dict:
         }
 
         if first_relevant_rank is None:
-            # Complete failure - no relevant in top-k
             failed_queries.append(query_info)
         elif first_relevant_rank > 1:
-            # Near miss - relevant in top-k but not top-1
             query_info["first_relevant_rank"] = first_relevant_rank
             near_misses.append(query_info)
             rank_distribution[first_relevant_rank] += 1
         else:
-            # Success - relevant in top-1
             successful_queries.append(query_info)
             rank_distribution[1] += 1
 
     total_queries = len(failed_queries) + len(near_misses) + len(successful_queries)
 
-    # Compute query characteristics that correlate with failure
     query_characteristics = _compute_query_characteristics(
         failed_queries, near_misses, successful_queries
     )
@@ -275,24 +246,9 @@ def categorize_errors(results: dict, categories: dict) -> dict:
         - category_errors: {category_name: [list of errors]}
         - category_rates: {category_name: error_rate_for_category}
         - uncategorized: List of errors not matching any category
-
-    Example:
-        >>> results = {
-        ...     "details": [
-        ...         {"reference": "take 500mg daily", "hypothesis": "take 500 mg daily"},
-        ...         {"reference": "Dr Smith", "hypothesis": "doctor Smith"}
-        ...     ]
-        ... }
-        >>> categories = {
-        ...     "numbers": ["regex:[0-9]+"],
-        ...     "abbreviations": ["mg", "dr", "ml"]
-        ... }
-        >>> analysis = categorize_errors(results, categories)
     """
-    # First, get ASR error analysis
     asr_analysis = analyze_asr_errors(results)
 
-    # Collect all error words
     all_errors: List[Tuple[str, str]] = []  # (error_type, word)
 
     for ref_word, hyp_word, count in asr_analysis.get("common_substitutions", []):
@@ -307,12 +263,10 @@ def categorize_errors(results: dict, categories: dict) -> dict:
         for _ in range(count):
             all_errors.append(("insertion", word))
 
-    # Categorize errors
     category_counts: Dict[str, int] = defaultdict(int)
     category_errors: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
     categorized_indices: Set[int] = set()
 
-    # Build matchers for each category
     matchers = _build_category_matchers(categories)
 
     for idx, (error_type, word) in enumerate(all_errors):
@@ -323,14 +277,12 @@ def categorize_errors(results: dict, categories: dict) -> dict:
                 categorized_indices.add(idx)
                 break  # Each error belongs to first matching category
 
-    # Uncategorized errors
     uncategorized = [
         (error_type, word)
         for idx, (error_type, word) in enumerate(all_errors)
         if idx not in categorized_indices
     ]
 
-    # Compute category rates (relative to total errors)
     total_errors = len(all_errors)
     category_rates = {
         cat: count / total_errors if total_errors else 0.0
@@ -349,14 +301,10 @@ def categorize_errors(results: dict, categories: dict) -> dict:
     }
 
 
-# --- Helper functions ---
-
-
 def _extract_asr_pairs(results: dict) -> List[Tuple[str, str]]:
     """Extract reference/hypothesis pairs from results dictionary."""
     pairs: List[Tuple[str, str]] = []
 
-    # Check 'details' list
     details = results.get("details", [])
     for item in details:
         if isinstance(item, dict):
@@ -365,7 +313,6 @@ def _extract_asr_pairs(results: dict) -> List[Tuple[str, str]]:
             if ref and hyp:
                 pairs.append((str(ref), str(hyp)))
 
-    # Check 'asr_details' list
     asr_details = results.get("asr_details", [])
     for item in asr_details:
         if isinstance(item, dict):
@@ -374,7 +321,6 @@ def _extract_asr_pairs(results: dict) -> List[Tuple[str, str]]:
             if ref and hyp:
                 pairs.append((str(ref), str(hyp)))
 
-    # Check per_sample format
     per_sample = results.get("per_sample", {})
     refs = per_sample.get("reference", per_sample.get("references", []))
     hyps = per_sample.get("hypothesis", per_sample.get("hypotheses", []))
@@ -386,7 +332,6 @@ def _extract_asr_pairs(results: dict) -> List[Tuple[str, str]]:
 
 
 def _empty_asr_analysis() -> dict:
-    """Return empty ASR analysis structure."""
     return {
         "error_counts": {
             "substitutions": 0,
@@ -408,7 +353,6 @@ def _empty_asr_analysis() -> dict:
 
 
 def _empty_retrieval_analysis() -> dict:
-    """Return empty retrieval analysis structure."""
     return {
         "failed_queries": [],
         "near_misses": [],
@@ -426,10 +370,8 @@ def _compute_query_characteristics(
     near_misses: List[Dict[str, Any]],
     successful: List[Dict[str, Any]],
 ) -> dict:
-    """Compute statistics about query characteristics for different outcomes."""
     characteristics = {}
 
-    # Average query length by outcome
     if failed:
         characteristics["avg_length_failed"] = sum(
             q["query_length"] for q in failed
@@ -451,7 +393,6 @@ def _compute_query_characteristics(
     else:
         characteristics["avg_length_success"] = 0.0
 
-    # Count queries by length buckets
     def _length_bucket(length: int) -> str:
         if length <= 2:
             return "short (1-2)"
@@ -476,15 +417,12 @@ def _compute_query_characteristics(
 
 
 def _build_category_matchers(categories: dict) -> Dict[str, callable]:
-    """Build matcher functions for each category."""
     matchers = {}
 
     for cat_name, pattern in categories.items():
         if callable(pattern):
-            # Already a callable
             matchers[cat_name] = pattern
         elif isinstance(pattern, list):
-            # List of words or patterns
             word_set = set()
             regex_patterns = []
 
@@ -509,7 +447,6 @@ def _build_category_matchers(categories: dict) -> Dict[str, callable]:
 
             matchers[cat_name] = make_matcher(word_set, regex_patterns)
         elif isinstance(pattern, str):
-            # Single pattern (regex or word)
             if pattern.startswith("regex:"):
                 regex = re.compile(pattern[6:], re.IGNORECASE)
                 matchers[cat_name] = lambda w, r=regex: bool(r.search(w))

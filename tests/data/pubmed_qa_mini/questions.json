@@ -1,0 +1,10 @@
+[
+  {"question_id": "q1", "question_text": "Does aspirin reduce the risk of a second heart attack?",
+   "groundtruth_doc_ids": ["d1"], "relevance_grades": {"d1": 1}, "language": "en", "metadata": {"pubid": 1}},
+  {"question_id": "q2", "question_text": "Is metformin safe in mild kidney disease?",
+   "groundtruth_doc_ids": ["d2"], "relevance_grades": {"d2": 1}, "language": "en", "metadata": {"pubid": 2}},
+  {"question_id": "q3", "question_text": "Can statins cause muscle pain?",
+   "groundtruth_doc_ids": ["d3"], "relevance_grades": {"d3": 1}, "language": "en", "metadata": {"pubid": 3}},
+  {"question_id": "q4", "question_text": "Does vitamin D supplementation prevent falls in the elderly?",
+   "groundtruth_doc_ids": ["d4"], "relevance_grades": {"d4": 1}, "language": "en", "metadata": {"pubid": 4}}
+]

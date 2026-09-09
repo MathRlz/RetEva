@@ -1,8 +1,7 @@
 """Per-stage model offload planning (model lifecycle).
 
-Maps each stage
-position to the models whose last use falls there, so the executor can release them
-mid-run (frees the device) once a model is no longer needed.
+Maps each stage position to the models whose last use falls there, so the executor can
+release them mid-run (frees the device) once a model is no longer needed.
 """
 
 from __future__ import annotations
@@ -14,14 +13,12 @@ from .state import RunState
 # Stage id -> the RunState attribute holding the pipeline whose model that stage runs (from the
 # shared stage-metadata table; corpus_embedding has no own pipeline attr and is handled below).
 from .stage_meta import PIPELINE_ATTR as _STAGE_PIPELINE_ATTR
+from ...pipeline.graph.operators import node_kind
 
 
 def _stage_model(state: "RunState", stage: str):
-    """The model a stage runs, or None for model-free stages (fusion/metrics).
-
-    The rerank stage's model is its cross-encoder reranker (when configured); it is used
-    only there, so it can be freed once reranking completes.
-    """
+    """The model a stage runs (None for model-free stages); the rerank stage's model is its
+    cross-encoder reranker, freed once reranking completes since it's used nowhere else."""
     if stage == "rerank":
         rp = getattr(state, "retrieval_pipeline", None)
         return getattr(rp, "reranker", None) if rp is not None else None
@@ -41,12 +38,9 @@ def _stage_model(state: "RunState", stage: str):
 
 
 def _plan_stage_offloads(state: "RunState", flat_nodes, query_opt_enabled: bool):
-    """Map each stage position to the models whose LAST use is there (so they can be freed).
-
-    Keyed by model *instance* so a model shared across stages (e.g. a multimodal embedder
-    used for both audio and text) is released only after its final stage. The text
-    embedder is excluded when query optimization is on, since query-opt may re-embed.
-    """
+    """Map each stage position to the models whose LAST use is there. Keyed by model
+    *instance* so a model shared across stages is released only after its final stage; the
+    text embedder is excluded when query optimization is on, since query-opt may re-embed."""
     if not state.offload_after_stage or state.service_provider is None:
         return {}
     excluded = set()
@@ -54,7 +48,6 @@ def _plan_stage_offloads(state: "RunState", flat_nodes, query_opt_enabled: bool)
         te = _stage_model(state, "text_embedding")
         if te is not None:
             excluded.add(id(te))
-    from ...pipeline.graph.operators import node_kind
 
     last: Dict[int, tuple] = {}
     for pos, node in enumerate(flat_nodes):

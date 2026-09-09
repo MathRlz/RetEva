@@ -1,4 +1,4 @@
-"""P4 pin: a lone BRANCH-NAMESPACED producer is not shared across branches.
+"""A lone BRANCH-NAMESPACED producer is not shared across branches.
 
 Found by an Ollama smoke run: with exactly one corrector branch (`asr` baseline vs `llm`),
 both branches reported identical corrected_wer/cer/ceer_rx — the single

@@ -1,18 +1,12 @@
-"""Advanced query optimization for improved retrieval.
-
-This module implements various query optimization techniques including:
-- Query rewriting: LLM-based iterative refinement
-- HyDE: Hypothetical Document Embeddings
-- Query decomposition: Breaking complex queries into sub-queries
-- Multi-query generation: Creating query variations
-"""
+"""Advanced query optimization for improved retrieval: LLM-based rewriting, HyDE, query
+decomposition, and multi-query generation."""
 
 import json
 from typing import Callable, List, Dict, Any, Optional, Tuple
 
 from ....logging_config import get_logger
 from ....config import QueryOptimizationConfig
-from ....llm_client.client import LLMClient, _cache_key
+from ....llm_client.client import LLMClient
 from .prompts import (
     get_rewrite_prompt,
     get_hyde_prompt,
@@ -20,21 +14,13 @@ from .prompts import (
     get_multi_query_prompt,
     get_self_rag_prompt,
 )
+from ..rag.hybrid import reciprocal_rank_fusion
 
 logger = get_logger(__name__)
 
 
 def _make_client(config: QueryOptimizationConfig) -> LLMClient:
     return LLMClient(config.to_llm_config(), component="query_optimization")
-
-
-def _hash_request(system_prompt: str, user_prompt: str, model: str, temperature: float) -> str:
-    """Cache key for an LLM request, matching the shared LLM client cache."""
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    return _cache_key(messages, model, temperature)
 
 
 def _call_llm(
@@ -60,7 +46,7 @@ def refine_query(
     """Reformulate ``query`` using the top retrieved documents as context — the
     post-retrieval improvement step of an iterative RAG flow. ``method`` selects a refine
     strategy (distinct from ``config.method``, which only carries the LLM settings here);
-    the strategies register in ``_REFINE_STRATEGIES`` (Phase 2 adds the others).
+    the strategies register in ``_REFINE_STRATEGIES``.
 
     Unlike :func:`rewrite_query` (whose context only applies on internal iterations), the
     refine node feeds the retrieved context to the FIRST and only call."""
@@ -137,24 +123,8 @@ def rewrite_query(
     config: QueryOptimizationConfig,
     context: Optional[List[str]] = None
 ) -> str:
-    """Rewrite query using LLM for improved retrieval.
-
-    Implements iterative query refinement, optionally using retrieval
-    context from initial results to guide refinement.
-
-    Args:
-        query: Original query text.
-        config: Query optimization configuration.
-        context: Optional list of retrieved texts for context-aware refinement.
-
-    Returns:
-        Refined query text.
-
-    Examples:
-        >>> config = QueryOptimizationConfig(enabled=True, method="rewrite")
-        >>> refined = rewrite_query("htn treatment", config)
-        >>> # Returns something like: "hypertension management guidelines..."
-    """
+    """Rewrite query using LLM for improved retrieval, optionally using retrieval context
+    from initial results to guide iterative refinement."""
     if not config.enabled or config.method != "rewrite":
         return query
 
@@ -163,21 +133,16 @@ def rewrite_query(
     current_query = query
 
     for iteration in range(config.max_iterations):
-        # Prepare context if available and configured
         context_str = None
         if config.use_initial_context and context and iteration > 0:
-            # Use top-k results as context for refinement
             top_contexts = context[:config.context_top_k]
             context_str = "\n".join([f"- {ctx}" for ctx in top_contexts])
 
-        # Get prompts
         system_prompt, user_prompt = get_rewrite_prompt(current_query, context_str)
 
-        # Call LLM
         try:
             refined_query = _call_llm(system_prompt, user_prompt, config)
 
-            # Check if query changed significantly
             if refined_query.lower() == current_query.lower():
                 logger.debug(f"Query converged after {iteration + 1} iterations")
                 break
@@ -197,24 +162,8 @@ def generate_hypothetical_document(
     query: str,
     config: QueryOptimizationConfig
 ) -> str:
-    """Generate hypothetical document using HyDE technique.
-
-    Creates a hypothetical answer to the query, which is then embedded
-    for retrieval. This can improve retrieval by matching the style and
-    content of actual documents.
-
-    Args:
-        query: Query text.
-        config: Query optimization configuration.
-
-    Returns:
-        Hypothetical document text to embed.
-
-    Examples:
-        >>> config = QueryOptimizationConfig(enabled=True, method="hyde")
-        >>> doc = generate_hypothetical_document("What causes diabetes?", config)
-        >>> # Returns a brief medical explanation
-    """
+    """Generate a hypothetical document via HyDE: a hypothetical answer to the query,
+    embedded for retrieval to match the style/content of actual documents."""
     if not config.enabled or config.method != "hyde":
         return query
 
@@ -256,7 +205,7 @@ def _fanout(
     include_original: bool,
     noun: str,
 ) -> List[str]:
-    """Shared LLM query fan-out for decompose / multi_query (B4/F18).
+    """Shared LLM query fan-out for decompose / multi_query.
 
     Guard on ``config.method`` → build prompt → call LLM → parse the listed result,
     falling back to ``[query]`` on an empty result or any LLM/parse error.
@@ -291,19 +240,8 @@ def decompose_query(
     query: str,
     config: QueryOptimizationConfig
 ) -> List[str]:
-    """Decompose complex query into simpler sub-queries.
-
-    Breaks down a complex question into multiple focused sub-queries that can be
-    searched independently and combined.
-
-    Examples:
-        >>> config = QueryOptimizationConfig(enabled=True, method="decompose")
-        >>> subqueries = decompose_query(
-        ...     "What are the symptoms and treatments for diabetes?",
-        ...     config
-        ... )
-        >>> # Returns: ["diabetes symptoms", "diabetes treatment options"]
-    """
+    """Decompose complex query into simpler sub-queries that can be searched independently
+    and combined."""
     return _fanout(
         query,
         config,
@@ -318,13 +256,7 @@ def generate_multi_queries(
     query: str,
     config: QueryOptimizationConfig
 ) -> List[str]:
-    """Generate multiple query variations (alternative phrasings of the same query).
-
-    Examples:
-        >>> config = QueryOptimizationConfig(enabled=True, method="multi_query")
-        >>> queries = generate_multi_queries("heart attack symptoms", config)
-        >>> # Returns: ["heart attack symptoms", "myocardial infarction signs", ...]
-    """
+    """Generate multiple query variations (alternative phrasings of the same query)."""
     return _fanout(
         query,
         config,
@@ -336,8 +268,6 @@ def generate_multi_queries(
 
 
 def _combine_rrf(results_list, *, k, rrf_k, weights):
-    from ..rag.hybrid import reciprocal_rank_fusion
-
     return reciprocal_rank_fusion(results_list, k=rrf_k, top_n=k)
 
 
@@ -361,7 +291,6 @@ def _combine_weighted(results_list, *, k, rrf_k, weights):
 
 
 def _combine_union(results_list, *, k, rrf_k, weights):
-    # Include all unique documents, sorted by best score.
     best: Dict[str, Tuple[Any, float]] = {}
     for results in results_list:
         for payload, score in results:
@@ -373,7 +302,6 @@ def _combine_union(results_list, *, k, rrf_k, weights):
 
 
 def _combine_intersection(results_list, *, k, rrf_k, weights):
-    # Only documents appearing in every query, scored by their average.
     payload_scores: Dict[str, List[float]] = {}
     payload_lookup: Dict[str, Any] = {}
     for results in results_list:
@@ -421,15 +349,7 @@ def combine_retrieval_results(
     weights: Optional[List[float]] = None
 ) -> List[Tuple[Any, float]]:
     """Combine results from multiple queries via the registered ``strategy``
-    (rrf / weighted / union / intersection; extensible via ``register_combine_strategy``).
-
-    Args:
-        results_list: List of result lists, each containing (payload, score) tuples.
-        strategy: Registered combination strategy name.
-        k: Number of final results to return.
-        rrf_k: RRF k parameter (for "rrf").
-        weights: Optional per-query weights (for "weighted").
-    """
+    (rrf / weighted / union / intersection; extensible via ``register_combine_strategy``)."""
     if not results_list:
         return []
     if len(results_list) == 1:

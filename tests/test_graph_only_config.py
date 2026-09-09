@@ -1,15 +1,12 @@
-"""Graph-first Phase 4: a config may specify only a DAG (graph.nodes) with NO pipeline_mode.
-
-The executed graph drives building + behavior; the run derives a display label from the built
-pipelines. ``pipeline_mode`` is legacy/simple-config sugar — not needed for an explicit graph.
+"""A config specifies only a DAG (graph.nodes): the executed graph drives building + behavior,
+and the run derives its display label from the graph's node kinds.
 """
 
 from unittest.mock import MagicMock, patch
 
 from evaluator.config.evaluation import EvaluationConfig
 from evaluator.config.graph_config import build_evaluation_config_kwargs
-from evaluator.evaluation.helpers import detect_graph_template
-from evaluator.pipeline.graph.modes import build_graph_for_config
+from evaluator.pipeline.graph.build import build_graph_for_config, graph_label
 
 
 _DATASET = {
@@ -41,7 +38,7 @@ def test_graph_only_config_has_no_mode_but_loads():
     # No graph.mode → the label is DERIVED from the graph's node kinds (the graph is the spec).
     # A graph node's own model params stay ON the node (a per-node override) — resolve them the
     # way the executor does, not off the flat default.
-    assert cfg.graph_template == "asr_text_retrieval"   # asr + text_embedding + retrieval
+    assert cfg.graph_label == "asr_text_retrieval"   # asr + text_embedding + retrieval
     from evaluator.config.graph_config import resolved_model_config
 
     nodes = {n.id: n for n in cfg.graph.nodes}
@@ -69,19 +66,12 @@ def test_graph_only_factory_builds_pipelines_and_label_is_derived():
          patch("evaluator.pipeline.factory.AudioEmbeddingPipeline"):
         from evaluator.pipeline.factory import create_pipeline_from_config
 
-        # No mode-spec validation crash despite pipeline_mode is None; build is graph-driven.
         bundle = create_pipeline_from_config(cfg, cache_manager=MagicMock())
 
     assert bundle.asr_pipeline is not None
     assert bundle.text_embedding_pipeline is not None
     assert bundle.audio_embedding_pipeline is None       # no audio node in this graph
     assert m_retr.called                                 # a search node → retrieval built
-    assert bundle.mode is None                            # graph-only bundle carries no label
-
-    # The run derives the display label from the built pipelines (what detect_graph_template does
-    # when no mode is configured): asr + text + retrieval → asr_text_retrieval.
-    label = detect_graph_template(
-        bundle.retrieval_pipeline, bundle.asr_pipeline,
-        bundle.text_embedding_pipeline, bundle.audio_embedding_pipeline,
-    )
-    assert label == "asr_text_retrieval"
+    # The label is derived from the graph's node kinds: asr + retrieval → asr_text_retrieval.
+    assert bundle.mode == "asr_text_retrieval"
+    assert graph_label(cfg.graph_override) == "asr_text_retrieval"

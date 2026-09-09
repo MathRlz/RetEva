@@ -1,23 +1,18 @@
-"""Common-subexpression elimination (in-graph branching, A8).
+"""Common-subexpression elimination (in-graph branching).
 
-When branches are expanded into namespaced node copies (``asr@ref``, ``asr@corr``, …),
-structurally-identical nodes should run *once*. Two nodes collapse iff a canonical key
-matches: ``(type, normalized params, sorted input bindings, sorted deps)`` — computed
-bottom-up so a node's input-producer ids are already canonical when its key is taken.
-Conservative by construction: it never over-shares (distinct params/inputs ⇒ distinct
-keys); under-sharing (e.g. an explicit default vs an omitted one) only costs reuse, never
-correctness. See ``evaluator-architecture.md`` §8.
+Two nodes collapse iff a canonical key matches: ``(type, normalized params, sorted input
+bindings, sorted deps)`` — computed bottom-up so producer ids are already canonical.
 """
 
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from .registry import _NODE_REGISTRY, StageNode
+from .registry import NODE_REGISTRY, StageNode
 
 
 def _freeze_params(params: Optional[dict], stage: Optional[str] = None) -> Any:
     """Canonical, hashable form of a params dict (recursively key-sorted).
 
-    Defaults are resolved against the node contract before hashing (S7): a key whose value
+    Defaults are resolved against the node contract before hashing: a key whose value
     is ``None`` or equal to the registered ``param_defaults`` for ``stage`` is dropped, so
     ``{model: <default>}`` and an omitted ``model`` produce the same key and CSE collapses the
     explicit-vs-default twin into a single run (instead of running it twice).
@@ -28,8 +23,8 @@ def _freeze_params(params: Optional[dict], stage: Optional[str] = None) -> Any:
     collapse to one (over-share = silently wrong results). ``tests/test_cse_guard.py``
     allowlists every declaration."""
     defaults: Mapping[str, Any] = {}
-    if stage is not None and stage in _NODE_REGISTRY:
-        defaults = _NODE_REGISTRY[stage].param_defaults
+    if stage is not None and stage in NODE_REGISTRY:
+        defaults = NODE_REGISTRY[stage].param_defaults
 
     def freeze(value: Any) -> Any:
         if isinstance(value, dict):

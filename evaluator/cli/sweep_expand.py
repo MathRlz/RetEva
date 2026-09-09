@@ -1,9 +1,9 @@
 """Expand a base graph config + an axes spec into an explicit multi-variant graph config.
 
-There is no ``graph.branches`` any more (see ``config/graph_config.py``): a config is one
-explicit graph, and comparing N variants of a node is just N distinctly-named node entries,
-wired from whatever they share via ordinary edges. Hand-duplicating those entries for every
-node param combination is exactly the tedious part a sweep tool should do for you.
+Every config is one explicit graph (see ``config/graph_config.py``): comparing N variants of a
+node is just N distinctly-named node entries, wired from whatever they share via ordinary edges.
+Hand-duplicating those entries for every node param combination is exactly the tedious part a
+sweep tool should do for you.
 
 Given a base config's ``graph.nodes``/``graph.edges`` and an axes spec naming which node/param
 to vary and over which values, this expands the cartesian product of the axes into that same
@@ -23,15 +23,11 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..errors import ConfigurationError
+from ..config.evaluation import EvaluationConfig
 
 
 class SweepExpandError(ConfigurationError):
     """Raised when an axes spec or base config can't be expanded."""
-
-
-# ---------------------------------------------------------------------------
-# axes spec
-# ---------------------------------------------------------------------------
 
 
 def load_axes_spec(path: str) -> Dict[str, Any]:
@@ -66,11 +62,6 @@ def _validate_axes_spec(spec: Any) -> None:
             raise SweepExpandError(
                 f"axis '{axis['node']}.{axis['param']}' needs a non-empty 'values' list"
             )
-
-
-# ---------------------------------------------------------------------------
-# base graph normalization
-# ---------------------------------------------------------------------------
 
 
 def _normalize_node(entry: Any) -> Tuple[str, str, Dict[str, Any]]:
@@ -121,11 +112,6 @@ def _combo_label(combo: Sequence[Tuple[str, str, Any]]) -> str:
     return "_".join(_sanitize_label(value) for _node, _param, value in combo)
 
 
-# ---------------------------------------------------------------------------
-# affected-set (forward reachability from varied nodes)
-# ---------------------------------------------------------------------------
-
-
 def _forward_adjacency(node_ids: Sequence[str], edges: Sequence[Dict[str, Any]]) -> Dict[str, Set[str]]:
     adj: Dict[str, Set[str]] = {nid: set() for nid in node_ids}
     for e in edges:
@@ -146,11 +132,6 @@ def _affected_set(varied_ids: Set[str], adjacency: Dict[str, Set[str]]) -> Set[s
         affected.add(nid)
         stack.extend(adjacency.get(nid, ()))
     return affected
-
-
-# ---------------------------------------------------------------------------
-# expansion
-# ---------------------------------------------------------------------------
 
 
 def expand_axes(
@@ -242,22 +223,6 @@ def _require_explicit_graph(graph: Dict[str, Any]) -> None:
         )
 
 
-def expand_config(base_config: Dict[str, Any], axes_spec: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a deep copy of ``base_config`` with ``graph.nodes``/``graph.edges`` expanded."""
-    graph = base_config.get("graph") or {}
-    _require_explicit_graph(graph)
-    new_nodes, new_edges, _combos = expand_axes(graph["nodes"], graph["edges"], axes_spec)
-    out = copy.deepcopy(base_config)
-    out["graph"]["nodes"] = new_nodes
-    out["graph"]["edges"] = new_edges
-    return out
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     import sys
@@ -314,8 +279,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     # same path a run would take.
     import tempfile
     from pathlib import Path
-
-    from ..config.evaluation import EvaluationConfig
 
     write_path = args.out
     tmp_path: Optional[str] = None

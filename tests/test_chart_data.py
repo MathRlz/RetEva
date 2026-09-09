@@ -1,4 +1,4 @@
-"""V3 pins: chart shaping is pure, JSON-safe, and never raises on a thin report.
+"""Chart shaping is pure, JSON-safe, and never raises on a thin report.
 
 The shaping is where the logic lives (the JS is a thin renderer), so this is where the
 tests go.
@@ -146,8 +146,6 @@ def test_volcano_needs_p_values():
     assert "significance testing" in spec["empty"]
 
 
-# ── V5: retrieval diagnostics ────────────────────────────────────────────────
-
 _FAIL = {
     "rank_distribution": {"3-5": 12, "1": 40, "not_found": 8, "2": 20, "6+": 4},
     "failure_categories": {"corpus_gap": 5, "asr_failure": 9, "embedding_mismatch": 2},
@@ -211,8 +209,6 @@ def test_diagnostics_explain_themselves_when_absent():
     assert failure_categories({})["empty"]
     assert recall_loss_by_k({})["empty"]
 
-
-# ── V6: per-query distributions ──────────────────────────────────────────────
 
 def _traces(n=50):
     return [{"query_id": f"q{i}",
@@ -311,8 +307,6 @@ def test_per_query_specs_stay_json_safe_and_colorless():
                  C.score_margin_histogram(_traces())):
         assert "#" not in json.dumps(spec)
 
-
-# ── V7: efficiency + cross-run ───────────────────────────────────────────────
 
 _PROV = {
     "timing": {"asr_s": 30.0, "embedding_s": 5.0, "retrieval_s": 1.0, "metrics_s": 0.0},
@@ -417,8 +411,6 @@ def test_leaderboard_over_time_is_chronological_and_connected():
     assert spec["id"] == "metric-over-time"
 
 
-# ── V8: compare page ─────────────────────────────────────────────────────────
-
 _CMP = [
     {"name": "MRR", "a": 0.50, "b": 0.60},          # +20%
     {"name": "latency_ms", "a": 100.0, "b": 40.0},  # -60%
@@ -519,8 +511,6 @@ def test_cache_bars_are_labelled_so_a_zero_row_is_not_an_invisible_bar():
                                       "text": {"hits": 3, "misses": 1}}})
     assert spec["series"][0]["text"] == ["0%", "75%"]
 
-
-# ── metric chips: the same number is stored up to three times ─────────────────
 
 _DUPED = {
     "MRR": 0.9266666, "WER": 0.3508825, "retrieval_failure_rate": 0.0,

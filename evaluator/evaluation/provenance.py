@@ -1,13 +1,6 @@
-"""Run provenance + deterministic per-item seeds (architecture A10).
-
-An eval framework's output must be reproducible/comparable, so the ``report`` carries a
-``provenance`` block: config hash, resolved model identities, the run seed, library
-versions, git commit, and per-stage timing. Augmentation is seeded *per item* —
-``item_seed(seed, query_id, node_id, variant)`` — so a given item's variant is reproducible
-regardless of batch order or parallelism.
-
-See ``evaluator-architecture.md`` §5/§8.
-"""
+"""Run provenance + deterministic per-item seeds. The ``report`` carries a ``provenance``
+block (config hash, model identities, seed, versions, git commit, timing); augmentation is
+seeded *per item* (``item_seed``) so a variant is reproducible regardless of batch/parallelism."""
 
 from __future__ import annotations
 
@@ -25,14 +18,11 @@ DEFAULT_SEED = 42
 
 
 def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
-    """Seed every RNG + request deterministic kernels at run start (S5).
-
-    Seeds ``random``/``numpy``/``torch`` (CPU+CUDA), sets cuDNN deterministic, and asks
-    torch for deterministic algorithms. The last is opt-out via ``EVALUATOR_NONDETERMINISM=1``
-    (some GPU kernels have no deterministic impl and would otherwise raise). Returns the flags
-    actually applied, for the provenance block — so a run never *claims* reproducibility it
-    couldn't enforce. Best-effort: missing torch / unsupported kernels never fail the run.
-    """
+    """Seed every RNG + request deterministic kernels at run start. The deterministic-kernels
+    request is opt-out via ``EVALUATOR_NONDETERMINISM=1`` (some GPU kernels have no
+    deterministic impl and would otherwise raise). Returns the flags actually applied, for
+    the provenance block — so a run never *claims* reproducibility it couldn't enforce.
+    Best-effort: missing torch / unsupported kernels never fail the run."""
     s = DEFAULT_SEED if seed is None else int(seed)
     import random as _random
 
@@ -81,7 +71,7 @@ def set_global_determinism(seed: Optional[int] = None) -> Dict[str, Any]:
     return flags
 
 
-# item_seed moved to utils.seeding (a pure hash util); re-exported for its callers.
+# item_seed lives in utils.seeding (a pure hash util); re-exported here for its callers.
 from ..utils.seeding import item_seed  # noqa: F401,E402
 
 
@@ -113,7 +103,7 @@ def _library_versions() -> Dict[str, str]:
 
 
 def _determinism_state() -> Dict[str, Any]:
-    """Current-process reproducibility state for the provenance block (S5): the hash seed
+    """Current-process reproducibility state for the provenance block: the hash seed
     and the torch determinism flags actually in effect (records the truth, GPU caveats and
     all)."""
     state: Dict[str, Any] = {"pythonhashseed": os.environ.get("PYTHONHASHSEED")}
@@ -135,17 +125,13 @@ def _determinism_state() -> Dict[str, Any]:
 
 
 def config_hash(config: Any) -> str:
-    """Stable short hash over the identity-bearing config (models, data, retrieval).
-
-    Folds in ``graph_override`` (T6 fix): a graph-mode config (``graph.nodes`` with
-    per-node ``params`` — e.g. an ``augment_audio`` node's ``snr_db``/``noise_type``)
-    carries its identity entirely in that override, since ``model``/``vector_db`` stay
-    empty for these configs. Without it, every config in a node-param sweep (a noise-SNR
-    or noise-color sweep, say) collapsed to the SAME hash — same ``run_key`` — so the
-    run-journal checkpoint/resume (run_journal.py) would silently resume one config's run
-    from a DIFFERENT config's leftover checkpoint after any crash, cross-contaminating
-    results between sweep points (observed live: an SNR sweep whose runs shared a stale
-    journal came back with identical metrics across several SNR values)."""
+    """Stable short hash over the identity-bearing config (models, data, retrieval). Folds
+    in ``graph_override``: a graph-mode config carries its identity entirely in that
+    override, since ``model``/``vector_db`` stay empty for these configs. Without it,
+    every config in a node-param sweep collapsed to the SAME hash — same ``run_key`` — so
+    run-journal checkpoint/resume would silently resume one config's run from a DIFFERENT
+    config's leftover checkpoint after any crash, cross-contaminating results (observed
+    live: an SNR sweep came back with identical metrics across several SNR values)."""
     model = getattr(config, "model", None)
     vdb = getattr(config, "vector_db", None)
     data = getattr(config, "data", None)
@@ -184,14 +170,11 @@ def resolved_models(config: Any) -> Dict[str, str]:
 
 
 def dataset_content_fingerprint(dataset: Any) -> Optional[Dict[str, Any]]:
-    """A content fingerprint of the evaluated dataset (R1 reproducibility).
-
-    Records the corpus + question counts and a stable SHA-256 over the corpus doc ids + text,
-    so two runs can tell whether they evaluated *the same data* — turning "the numbers moved"
-    into "the corpus changed" (or not). Deterministic for a fixed dataset; ``None`` when the
-    dataset exposes neither a corpus nor a length. The corpus is re-read once (already loaded
-    for embedding); questions are counted, not hashed (hashing them would reload audio).
-    """
+    """A content fingerprint of the evaluated dataset. Records the corpus + question counts
+    and a stable SHA-256 over the corpus doc ids + text, so two runs can tell whether they
+    evaluated *the same data* — turning "the numbers moved" into "the corpus changed" (or
+    not). Deterministic for a fixed dataset; None when the dataset exposes neither a corpus
+    nor a length. Questions are counted, not hashed (hashing would reload audio)."""
     if dataset is None:
         return None
     info: Dict[str, Any] = {}
@@ -239,19 +222,18 @@ def build_provenance(
 ) -> Dict[str, Any]:
     """Assemble the ``report.provenance`` block for a run.
 
-    ``dropped_by_branch`` makes the silently-smaller paired denominator (S1) visible at
+    ``dropped_by_branch`` makes the silently-smaller paired denominator visible at
     report level: per branch, the query ids absent from that branch (failed/dropped) so a
-    reader can see *which* items each branch lost relative to the full run (S2).
-    ``dropped_by_node`` records per-node per-item failures isolated by drop-and-log (T1) —
+    reader can see *which* items each branch lost relative to the full run.
+    ``dropped_by_node`` records per-node per-item failures isolated by drop-and-log —
     which node dropped which query ids, so a shrinking sample is attributable to a stage.
-    ``cache_stats`` records per-stage cache hit/miss counts (T3) so a reader knows which
+    ``cache_stats`` records per-stage cache hit/miss counts so a reader knows which
     artifacts were recomputed vs reused — a stale-cache or version-bump effect is auditable.
     """
     prov: Dict[str, Any] = {
         "config_hash": config_hash(config) if config is not None else None,
-        # Structured per-pipeline identity when the caller supplies it (F30 — type/size/dim/
-        # pooling/embedding_space/model_path/adapter + retrieval knobs, so a result is
-        # reproducible/groupable); else the lightweight "type:name" map from the config.
+        # Structured per-pipeline identity when the caller supplies it (else the lightweight
+        # "type:name" map from the config).
         "models": models if models is not None else resolved_models(config),
         "seed": seed,
         "versions": _library_versions(),
@@ -259,11 +241,9 @@ def build_provenance(
         "determinism": _determinism_state(),
     }
     if dataset:
-        # Content fingerprint (R1) — corpus/question counts + corpus hash so a reader can tell
-        # whether two runs evaluated the same data. Deterministic for a fixed dataset.
         prov["dataset"] = dict(dataset)
     if failure_analysis:
-        # Per-item failure attribution (R7) — only present when items were actually dropped.
+        # Per-item failure attribution — only present when items were actually dropped.
         prov["failure_analysis"] = dict(failure_analysis)
     if timing:
         prov["timing"] = dict(timing)
@@ -280,15 +260,15 @@ def build_provenance(
     if cost:
         prov["cost"] = dict(cost)
     if offload:
-        # Soft-CPU offload events (2c) — only present when a model was actually parked warm,
-        # so the default (full-free) policy leaves the block absent. Deterministic per run.
+        # Soft-CPU offload events — only present when a model was actually parked warm; the
+        # default (full-free) policy leaves the block absent.
         prov["offload"] = dict(offload)
     if optimization_fallbacks:
-        # Items whose query optimization failed and fell back to the ORIGINAL query — an
-        # unreachable LLM endpoint otherwise yields a complete report in which the
-        # optimization arm silently did nothing. Absent when every item optimized.
+        # Items whose query optimization fell back to the ORIGINAL query — an unreachable LLM
+        # endpoint otherwise yields a report in which optimization silently did nothing. Absent
+        # when every item optimized.
         prov["optimization_fallbacks"] = int(optimization_fallbacks)
     if correction_fallbacks:
-        # Same guarantee for the llm corrector arm. Absent when every item corrected.
+        # Same guarantee for the llm corrector arm; absent when every item corrected.
         prov["correction_fallbacks"] = int(correction_fallbacks)
     return prov

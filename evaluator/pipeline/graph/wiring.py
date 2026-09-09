@@ -1,12 +1,7 @@
 """Graph creation: explicit port-level edge binding + the auto-wiring authoring assistant.
 
-A CONFIG graph is explicit — ``bind_explicit_edges`` reconstructs bindings from the config's
-``{from, output, to, input}`` edge list (the loader rejects a nodes-without-edges config; E6).
-The artifact auto-wirer (``_wire_nodes``) survives as the AUTHORING assistant only: it powers
-``emit_edges`` (the ``evaluator graph --emit-edges`` generator), the builder's plumbing derive,
-the template skeletons, and the legacy ``model.pipeline_mode`` back-compat path — no config
-reaches it at load time.
-"""
+The auto-wirer (``_wire_nodes``) is an AUTHORING assistant only; no config reaches it at
+load time — ``bind_explicit_edges`` reconstructs bindings from the config's edge list."""
 
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -14,24 +9,20 @@ from .registry import (
     OneOf,
     StageGraph,
     StageNode,
-    _effective_outputs,
+    effective_outputs,
     _resolve,
     get_stage_node_def,
     validate_graph_artifacts,
 )
+from .operators import expand_alias
+from ..artifacts import artifact_modality, is_registered
 
 
 def _normalize_spec_item(item: Any) -> Tuple[str, str, Optional[dict]]:
-    """A spec item is a node-type string (``"rerank"`` → id==type) or a dict
-    ``{id, type, params}`` for a distinct instance (e.g. ``{id: "rerank_b",
-    type: "rerank", params: {...}}``).
-
-    Operator-abstraction: this is the single chokepoint that expands a legacy node-type
-    name (or an operator-authored ``{op}`` spec) into ``(operator, fields)`` — the node
-    ``id`` is left UNCHANGED (so a legacy ``"corpus_embedding"`` becomes
-    ``id="corpus_embedding", type="embed", params={axis:corpus}``, keeping keyed-artifact +
-    branch ids stable for parity)."""
-    from .operators import expand_alias
+    """A spec item is a node-type string (id==type) or a ``{id, type, params}`` dict for a
+    distinct instance. The single chokepoint expanding a legacy/operator-authored type into
+    ``(operator, fields)`` while leaving ``id`` UNCHANGED, keeping keyed-artifact + branch ids
+    stable for parity (e.g. legacy ``corpus_embedding`` -> type ``embed``, same id)."""
 
     if isinstance(item, str):
         node_id, type_, params = item, item, None
@@ -57,7 +48,7 @@ def _wire_nodes(
     params_by_id = {nid: params for nid, _, params in items}
     produced_anywhere: set[str] = set()
     for _, ntype, params in items:
-        produced_anywhere.update(_effective_outputs(ntype, params))
+        produced_anywhere.update(effective_outputs(ntype, params))
 
     def _present(art: Any) -> bool:
         """Is an optional input available anywhere in the graph (OneOf = any alternative)?"""
@@ -74,11 +65,10 @@ def _wire_nodes(
             return [
                 pid
                 for pid in prior
-                if art in _effective_outputs(type_by_id[pid], params_by_id[pid])
+                if art in effective_outputs(type_by_id[pid], params_by_id[pid])
             ]
 
-        # Resolve callable (operator) ports against this instance's params; keep OneOf
-        # objects intact (don't flatten — the wiring below binds each alternative).
+        # Keep OneOf objects intact (don't flatten) — the wiring below binds each alternative.
         node_inputs = _resolve(ndef.inputs, params)
         node_optional = _resolve(ndef.optional_inputs, params)
         wanted = list(node_inputs) + [
@@ -89,11 +79,9 @@ def _wire_nodes(
         aliases: List[Tuple[str, str]] = []
         for art in wanted:
             if isinstance(art, OneOf):
-                # Bind EVERY alternative that has an upstream producer (priority order) and
-                # record the ordered candidate list under the canonical key. ``s.input(key)``
-                # then reads the highest-priority alternative that actually *published* at
-                # run time — explicit priority (not execution order) WITH runtime fallback
-                # (e.g. fusion bails → retrieval falls back to the audio vectors).
+                # Bind every alternative with an upstream producer (priority order); `s.input`
+                # then reads the highest-priority one actually published at run time — explicit
+                # priority with runtime fallback (e.g. fusion bails -> falls back to audio vectors).
                 cands: List[str] = []
                 for alt in art:
                     producers = _producers_of(alt)
@@ -137,11 +125,10 @@ def _node_ports(ntype: str, params: Optional[dict]) -> List[Tuple[str, Tuple[str
     return ports
 
 
-def _port_modality(names: Tuple[str, ...]):
+def port_modality(names: Tuple[str, ...]):
     """The homogeneous modality of a port's declared names, or ``None`` when mixed or
     unregistered — ``None`` keeps the port's strict closed-name gate (self-guarding without
     a registration-time assert)."""
-    from ..artifacts import artifact_modality, is_registered  # lazy: import cycle
 
     mods = {artifact_modality(n) for n in names if is_registered(n)}
     return mods.pop() if len(mods) == 1 else None
@@ -150,30 +137,17 @@ def _port_modality(names: Tuple[str, ...]):
 def bind_explicit_edges(
     node_ids: Sequence[Any], edges: Sequence[dict]
 ) -> Tuple[StageNode, ...]:
-    """Explicit port-level wiring (E2): bindings come from the config's ``edges``, not from
-    artifact-name derivation. An edge ``{from, output, to, input}`` binds the producer's
-    ``output`` artifact into the consumer's ``input`` port; a portless ``{from, to}`` adds an
-    ordering dependency only. Reconstruction is deterministic and independent of YAML edge
-    order: ports are walked in declaration order, OneOf alternatives in priority order, and
-    same-artifact producers in ``graph.nodes`` order (the runtime's newest-first read keeps
-    its meaning) — so a generated edge set reproduces ``_wire_nodes``'s graph bit-for-bit.
+    """Explicit port-level wiring: bindings come from the config's ``edges``, not from
+    artifact-name derivation. Reconstruction is deterministic regardless of YAML edge order
+    (ports in declaration order, OneOf alternatives in priority order, same-artifact producers
+    in ``graph.nodes`` order), reproducing ``_wire_nodes``'s graph bit-for-bit.
 
-    **Type-open ports (B2).** Any port — a multi-name (OneOf) port or a plain (single-name)
-    one — additionally accepts any registered artifact of the SAME modality via an explicit
-    edge; the declared name(s) are a default and a tiebreak, not a closed gate. So e.g.
-    ``optimized_query_text`` can be routed into ``query_correction``'s ``query_text`` port
-    (correction-after-optimization), and ``dataset_source``'s ``query_text`` can be routed
-    into ``asr``'s plain ``reference_transcription`` port — a new text-transform stage or
-    an unconventional GT source needs no per-consumer registration edit. A port's bound
-    candidates are ranked by **derivation**: a candidate produced from another bound
-    candidate supersedes it (the most-processed variant, scoped to real producer-ancestor
-    chains — global depth would wrongly reorder parallel streams like audio vs text
-    vectors); unrelated candidates keep declared-chain order, with routed extras first and
-    producer node-list index as the final tiebreak. Canonical-order configs reproduce the
-    declared ranking bit-for-bit (golden-locked). Both port kinds resolve through the same
-    alias candidate list at run time — ``RunState.input``/``get_artifact`` both consult
-    ``input_aliases`` (``state.py:_input_candidates``), so a plain port's literal-name
-    readers transparently pick up a routed extra without a handler code change."""
+    Any port (OneOf or plain) also accepts a same-modality artifact via an explicit edge — the
+    declared name(s) are a default/tiebreak, not a closed gate. Bound candidates are ranked by
+    **derivation**: a candidate produced from another bound candidate supersedes it (scoped to
+    real producer-ancestor chains, not global depth, so parallel streams like audio/text vectors
+    aren't wrongly reordered); ties keep declared-chain order. Canonical-order configs reproduce
+    the declared ranking bit-for-bit (golden-locked)."""
     items = [_normalize_spec_item(it) for it in node_ids]
     seen: Dict[str, int] = {}
     for i, (nid, _, _) in enumerate(items):
@@ -193,7 +167,7 @@ def bind_explicit_edges(
 
     produced_anywhere: set = set()
     for _, ntype, params in items:
-        produced_anywhere.update(_effective_outputs(ntype, params))
+        produced_anywhere.update(effective_outputs(ntype, params))
 
     nodes: List[StageNode] = []
     for nid, ntype, params in items:
@@ -204,8 +178,7 @@ def bind_explicit_edges(
         aliases: List[Tuple[str, Tuple[str, ...]]] = []
         for key, names, required in ports:
             incoming = by_consumer.get((nid, key), [])
-            # B2: any port accepts same-modality routed extras — both OneOf and plain
-            # ports resolve through the alias candidate list (see get_artifact/input).
+            # Any port accepts same-modality routed extras (see get_artifact/input).
             routed_extras = _routed_extras(nid, key, names, incoming)
             producers_by_name: Dict[str, List[str]] = {}
             for src, out in incoming:
@@ -223,9 +196,7 @@ def bind_explicit_edges(
                 cands.append(alt)
             if cands and (len(names) > 1 or routed_extras):
                 # A plain port with no routed extras stays alias-free (parity with
-                # `_wire_nodes`'s auto-wiring — `_input_candidates` falls back to `(key,)`
-                # regardless); recorded only when there's a real OneOf chain or a B2 extra
-                # so `get_artifact`/`input` see the routed artifact's real name.
+                # `_wire_nodes`); recorded only for a real OneOf chain or a routed extra.
                 aliases.append((key, tuple(cands)))
             if required and not incoming and any(a in produced_anywhere for a in names):
                 raise ValueError(
@@ -259,13 +230,10 @@ def is_port_edge(e: Any) -> bool:
 
 
 def normalize_port_edge(e: dict) -> dict:
-    """Fill in the omitted ``output`` of the shorthand form.
-
-    Most port edges connect an artifact to a same-named port (`corpus` → `corpus`), so
-    ``{from, to, input: X}`` means ``output == input``. ``output`` is spelled out only where
-    the names differ — the OneOf alias chains (``text_query_vectors`` → ``query_vectors``).
-    An ``output`` without an ``input`` stays an error: which port it feeds is unknowable.
-    """
+    """Fill in the omitted ``output`` of the shorthand form: most port edges connect a
+    same-named artifact->port, so ``{from, to, input: X}`` means ``output == input``; it's
+    spelled out only for a rename (OneOf alias chains). An ``output`` without an ``input``
+    stays an error: which port it feeds is unknowable."""
     if "input" not in e:
         raise ValueError(
             f"a port edge needs 'input' (the consumer's port); add it, or drop 'output' "
@@ -279,8 +247,8 @@ def _parse_edges(
 ) -> Tuple[List[Tuple[str, str, str, str]], Dict[str, set]]:
     """Validate the raw edge list → (port_edges, ordering-only deps per consumer)."""
     type_by_id = {nid: ntype for nid, ntype, _ in items}
-    # For edge validation, ignore `suppress_outputs` — it is display-only metadata (the canvas
-    # hides ports a later transform supersedes) and must never invalidate a run-shape edge.
+    # Ignore `suppress_outputs` for edge validation — it's display-only metadata and must
+    # never invalidate a run-shape edge.
     params_by_id = {
         nid: ({k: v for k, v in params.items() if k != "suppress_outputs"} or None)
         if isinstance(params, dict) else params
@@ -310,10 +278,10 @@ def _parse_edges(
                 f"edge {src}.{out} → {dst}.{inp}: the producer must come before the "
                 f"consumer in graph.nodes."
             )
-        if out not in _effective_outputs(type_by_id[src], params_by_id[src]):
+        if out not in effective_outputs(type_by_id[src], params_by_id[src]):
             raise ValueError(
                 f"edge {src}.{out} → {dst}.{inp}: '{src}' does not produce '{out}' "
-                f"(outputs: {list(_effective_outputs(type_by_id[src], params_by_id[src]))})."
+                f"(outputs: {list(effective_outputs(type_by_id[src], params_by_id[src]))})."
             )
         key = (src, out, dst, inp)
         if key in seen:
@@ -325,17 +293,16 @@ def _parse_edges(
 
 
 def _ancestor_sets(items: list, port_edges: list) -> "Dict[str, frozenset]":
-    """Data-flow ancestor sets per node (transitive, over PORT edges only — ordering edges
-    are not data flow). graph.nodes order is topologically valid for port edges
-    (validated in _parse_edges), so one forward pass suffices. Drives the B2 candidate
-    ranking: a candidate DERIVED from another bound candidate supersedes it. (Global depth
-    is the wrong heuristic — parallel streams like audio vs text vectors differ in depth
-    without one being "more processed"; the deliberate audio-first fallback must survive.)
-    """
+    """Data-flow ancestor sets per node (transitive, over PORT edges only). Drives candidate
+    ranking: a candidate DERIVED from another bound candidate supersedes it — global depth is
+    the wrong heuristic, since parallel streams like audio vs text vectors differ in depth
+    without either being "more processed"."""
     data_in: Dict[str, set] = {}
     for src, _out, dst, _inp in port_edges:
         data_in.setdefault(dst, set()).add(src)
     ancestors: Dict[str, frozenset] = {}
+    # graph.nodes order is topologically valid for port edges (checked in _parse_edges): one
+    # forward pass suffices
     for nid, _, _ in items:
         anc: set = set()
         for src in data_in.get(nid, ()):
@@ -348,19 +315,15 @@ def _ancestor_sets(items: list, port_edges: list) -> "Dict[str, frozenset]":
 def _routed_extras(
     nid: str, key: str, names: Tuple[str, ...], incoming: list
 ) -> List[str]:
-    """Same-modality artifacts routed beyond a port's declared names (B2).
-
-    Applies to both OneOf ports (multiple declared names) and plain (single-name) ports:
-    an explicit edge naming a same-modality artifact is accepted and read through the
-    same alias-resolution ``get_artifact``/``input`` share — a mismatched modality is
-    still an error.
-    """
-    port_mod = _port_modality(names)
+    """Same-modality artifacts routed beyond a port's declared names (OneOf or plain): an
+    explicit edge naming one is accepted and read through the same alias-resolution
+    ``get_artifact``/``input`` share; a mismatched modality is still an error."""
+    port_mod = port_modality(names)
     extras: List[str] = []
     for src, out in incoming:
         if out in names or out in extras:
             continue
-        out_mod = _port_modality((out,))
+        out_mod = port_modality((out,))
         if port_mod is None or out_mod != port_mod:
             raise ValueError(
                 f"edge {src}.{out} → {nid}.{key}: port '{key}' accepts "
@@ -382,12 +345,10 @@ def _rank_port_candidates(
     ancestors: "Dict[str, frozenset]",
     index_of: "Dict[str, int]",
 ) -> List[str]:
-    """Rank a port's BOUND candidates: a candidate produced FROM another bound candidate
-    supersedes it (the most-processed variant, scoped to real derivation chains);
-    unrelated candidates keep declared-chain order (routed extras first, then producer
-    node-list index). Canonical-order configs reproduce the declared order bit-for-bit
-    (golden-locked); an inverted topology (optimize→correct) correctly ranks corrected
-    above optimized."""
+    """Rank a port's bound candidates: one produced FROM another bound candidate supersedes it
+    (scoped to real derivation chains, not just depth); unrelated candidates keep declared-chain
+    order (routed extras first, then producer node-list index). Canonical-order configs
+    reproduce the declared order bit-for-bit (golden-locked)."""
     bound = [
         a for a in tuple(names) + tuple(routed_extras)
         if a in producers_by_name
@@ -440,8 +401,8 @@ def edges_for_graph(nodes: Sequence[StageNode]) -> List[dict]:
                 producers_of[art].append(prod)
         alias_by_key = dict(getattr(n, "input_aliases", ()) or ())
         for key, names, _required in _node_ports(n.stage, n.params):
-            # B2: routed extras live only in the instance aliases — overlay them so a
-            # routed binding still maps to its port and the emit round-trip keeps it.
+            # Overlay routed extras (they live only in the instance aliases) so the emit
+            # round-trip keeps a routed binding mapped to its port.
             extras = tuple(
                 a for a in alias_by_key.get(key, ()) if a not in names
             )
@@ -451,8 +412,7 @@ def edges_for_graph(nodes: Sequence[StageNode]) -> List[dict]:
                     if tup in seen:
                         continue
                     seen.add(tup)
-                    # Shorthand when the artifact and the port share a name; `output` is
-                    # spelled out only for a rename (a OneOf alternative).
+                    # `output` is spelled out only for a rename (a OneOf alternative).
                     edge = {"from": prod, "to": n.id, "input": key}
                     if alt != key:
                         edge = {"from": prod, "output": alt, "to": n.id, "input": key}
@@ -461,16 +421,13 @@ def edges_for_graph(nodes: Sequence[StageNode]) -> List[dict]:
 
 
 def emit_edges(node_ids: Sequence[Any]) -> List[dict]:
-    """Authoring assistant (E3): the canonical port-level edge list that makes the auto-wired
-    graph explicit — ``bind_explicit_edges(nodes, emit_edges(nodes))`` reproduces
-    ``_wire_nodes(nodes)`` bit-for-bit. Canonical order: consumer in node-list order, ports in
-    declaration order, OneOf alternatives in priority order, producers in node-list order.
-    The docs-axis double-port (same artifact, same key on two ports) dedups to one edge —
-    reconstruction re-binds it through both ports."""
+    """Authoring assistant: the canonical port-level edge list making the auto-wired graph
+    explicit — ``bind_explicit_edges(nodes, emit_edges(nodes))`` reproduces ``_wire_nodes(nodes)``
+    bit-for-bit (consumer/port/OneOf-alternative/producer all in canonical order)."""
     return edges_for_graph(_wire_nodes(node_ids))
 
 
-def _has_port_edges(edges: Any) -> bool:
+def has_port_edges(edges: Any) -> bool:
     return isinstance(edges, (list, tuple)) and any(is_port_edge(e) for e in edges)
 
 
@@ -480,17 +437,11 @@ def build_graph_from_spec(
     mode: str = "custom",
     edges: Any = None,
 ) -> StageGraph:
-    """Build a validated DAG from an ordered node-id list.
-
-    ``edges`` forms:
-    - a LIST with port-level entries (``{from, output, to, input}``, plus optional
-      ordering-only ``{from, to}`` entries) → **explicit wiring**: the edges define the
-      bindings (E2; the target state — auto-derivation is the authoring assistant).
-    - a LIST of only ``{from, to}`` entries, or the legacy ``{to: [from, ...]}`` dict →
-      ordering deps on top of artifact auto-wiring (transitional).
-    Validated for satisfiable required inputs + no cycles either way.
-    """
-    if _has_port_edges(edges):
+    """Build a validated DAG from an ordered node-id list. A LIST with port-level entries
+    (``{from, output, to, input}``) is explicit wiring (edges define the bindings); a LIST of
+    only ``{from, to}`` entries, or the legacy ``{to: [from, ...]}`` dict, layers ordering deps
+    on top of artifact auto-wiring. Validated for satisfiable inputs + no cycles either way."""
+    if has_port_edges(edges):
         nodes = bind_explicit_edges(node_ids, edges)
     else:
         if isinstance(edges, (list, tuple)):  # ordering-only list → legacy dict form

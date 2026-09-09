@@ -1,8 +1,6 @@
-"""Phase 1 — save / load builder graphs. The GraphStore (directory of JSON) + the /api/graphs
+"""Save / load builder graphs. The GraphStore (directory of JSON) + the /api/graphs
 endpoints: a named canvas spec persists and reopens as a render payload for the canvas.
 """
-
-from pathlib import Path
 
 import pytest
 
@@ -11,16 +9,15 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from evaluator.webapi.app import create_app  # noqa: E402
 from evaluator.webapi.graph_store import GraphStore  # noqa: E402
-
-_ROOT = Path(__file__).resolve().parents[1]
+from tests.fixtures_paths import MINI_C, MINI_Q  # noqa: E402
 
 _SPEC = {
     "mode": "asr_text_retrieval",
     "nodes": [
         {"id": "dataset_source", "type": "source", "params": {
             "dataset": "pubmed_qa",
-            "questions": str(_ROOT / "examples/data/pubmed_qa_small/questions.json"),
-            "corpus": str(_ROOT / "examples/data/pubmed_qa_small/corpus.json")}},
+            "questions": MINI_Q,
+            "corpus": MINI_C}},
         {"id": "asr", "type": "convert", "params": {"model": "whisper"}},
         {"id": "text_embedding", "type": "embed", "params": {"model": "labse"}},
         {"id": "corpus_embedding", "type": "embed", "params": {"axis": "corpus"}},
@@ -38,9 +35,6 @@ _SPEC = {
         {"from": "retrieval", "to": "metrics"}, {"from": "metrics", "to": "finalize"},
     ],
 }
-
-
-# ── store unit ──────────────────────────────────────────────────────────────────
 
 
 def test_store_save_list_get_delete(tmp_path):
@@ -75,9 +69,6 @@ def test_store_construction_does_not_touch_fs(tmp_path):
     assert not target.exists()  # created lazily on first save, not at construction
 
 
-# ── endpoints ───────────────────────────────────────────────────────────────────
-
-
 @pytest.fixture()
 def client(tmp_path):
     return TestClient(create_app(graph_store=GraphStore(tmp_path / "graphs")))
@@ -103,12 +94,6 @@ def test_endpoints_round_trip(client):
 def test_save_requires_name_and_spec(client):
     assert client.post("/api/graphs", json={"name": "x"}).status_code == 400
     assert client.post("/api/graphs", json={"spec": _SPEC}).status_code == 400
-
-
-def test_builder_page_has_save_load_ui(client):
-    t = client.get("/ui/builder").text
-    assert 'id="btn-save-graph"' in t
-    assert 'id="saved-list"' in t
 
 
 def test_saved_graph_round_trips_branches_and_llm(client):

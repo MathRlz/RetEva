@@ -1,16 +1,7 @@
-"""Extensible artifact-type registry (architecture A11).
+"""Extensible artifact-type registry.
 
-Artifacts flowing between nodes were a fixed enum of name constants in ``stage_graph``. To
-let new fields/modalities (e.g. ``query_image``) be *additive* — register a type + an embed
-op + map a datasource field to it, with no core edit — artifact types live in a registry,
-like the model / node / dataset registries. Each type carries a ``modality`` and an
-``is_source`` flag (source artifacts may be required without an upstream producer).
-
-A datasource declares ``field → registered artifact`` (see :func:`validate_field_mapping`);
-graph validation then works over the open, registered set instead of a closed enum.
-
-See ``evaluator-architecture.md`` §2/§3.
-"""
+New fields/modalities register additively (type + embed op + datasource field map, no core
+edit) instead of a fixed enum; each type carries a ``modality`` and ``is_source`` flag."""
 
 from __future__ import annotations
 
@@ -18,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Mapping, Optional
 
-from .graph import (
+from .graph.artifacts import (
     ARTIFACT_CORPUS,
     ARTIFACT_CORPUS_VECTORS,
     ARTIFACT_GENERATED_ANSWERS,
@@ -53,12 +44,9 @@ class Modality(str, Enum):
     SCORES = "scores"  # per-item metric scores
 
 
-# Human/dev-facing concrete shape per modality (not runtime-enforced) — the default
-# ``dtype`` a registered artifact gets when it doesn't need a more precise override.
-# A dtype is a property of the ARTIFACT (every dataset producing "corpus" produces the
-# same shape via the shared publish helpers in evaluation/handlers/source.py), not of
-# the dataset that maps a column onto it — so this stays a flat, modality-keyed table
-# rather than something DatasetDescriptor.fields carries per-dataset.
+# Human/dev-facing concrete shape per modality (not runtime-enforced), the default ``dtype``
+# a registered artifact gets when it doesn't need a more precise override. A dtype is a
+# property of the ARTIFACT, not of the dataset, so this stays a flat modality-keyed table.
 MODALITY_DTYPES: Dict[Modality, str] = {
     Modality.TEXT: "str",
     Modality.AUDIO: "AudioRef",
@@ -91,11 +79,9 @@ _REGISTRY: Dict[str, ArtifactType] = {}
 def register_artifact(
     name: str, modality: Modality, *, is_source: bool = False, dtype: Optional[str] = None
 ) -> ArtifactType:
-    """Register an artifact type. ``dtype`` defaults to the modality's entry in
-    :data:`MODALITY_DTYPES`; pass it explicitly where that coarse default is too generic
-    (e.g. ``corpus`` → ``List[CorpusDocument]`` vs. the DOC_SET default). Re-registering
-    the same ``(modality, is_source, dtype)`` is a no-op; a conflicting redefinition is
-    an error (typo / collision protection)."""
+    """Register an artifact type; ``dtype`` defaults to :data:`MODALITY_DTYPES` unless given
+    explicitly. Re-registering the same ``(modality, is_source, dtype)`` is a no-op; a
+    conflicting redefinition raises (typo/collision protection)."""
     existing = _REGISTRY.get(name)
     resolved_dtype = dtype or MODALITY_DTYPES.get(modality)
     new = ArtifactType(name=name, modality=modality, is_source=is_source, dtype=resolved_dtype)
@@ -131,18 +117,14 @@ def list_artifacts() -> List[ArtifactType]:
 
 
 def validate_field_mapping(mapping: Mapping[str, str]) -> Dict[str, ArtifactType]:
-    """Validate a datasource ``field → artifact-name`` mapping; return ``field → ArtifactType``.
-
-    Every target artifact must be registered (else ``KeyError``). This is the O10 primitive
-    that lets a datasource advertise typed fields against the open artifact vocabulary.
-    """
+    """Validate a datasource ``field -> artifact-name`` mapping; return ``field -> ArtifactType``,
+    letting a datasource advertise typed fields against the open artifact vocabulary."""
     resolved: Dict[str, ArtifactType] = {}
     for field, artifact_name in mapping.items():
         resolved[field] = get_artifact_type(artifact_name)
     return resolved
 
 
-# ── Register the built-in artifacts (the former fixed enum) ───────────
 # Source artifacts (provided by dataset_source; may be required without a producer).
 register_artifact(ARTIFACT_QUERY_TEXT, Modality.TEXT, is_source=True)
 register_artifact(ARTIFACT_QUERY_AUDIO, Modality.AUDIO, is_source=True)
@@ -155,7 +137,7 @@ register_artifact(ARTIFACT_AUDIO_QUERY_VECTORS, Modality.VECTOR)
 register_artifact(ARTIFACT_TEXT_QUERY_VECTORS, Modality.VECTOR)
 register_artifact(ARTIFACT_FUSED_QUERY_VECTORS, Modality.VECTOR)
 register_artifact(ARTIFACT_CORPUS_VECTORS, Modality.VECTOR)
-# Spoken-transcription GT (vs reference_text = question_text) — M1a/M1c-3.
+# Spoken-transcription GT (vs reference_text = question_text).
 register_artifact(ARTIFACT_REFERENCE_TRANSCRIPTION, Modality.TEXT)
 register_artifact(ARTIFACT_EMBEDDING_ALIGNMENT, Modality.SCORES)
 register_artifact(ARTIFACT_VECTOR_INDEX, Modality.INDEX)
@@ -163,27 +145,22 @@ register_artifact(ARTIFACT_VECTOR_INDEX, Modality.INDEX)
 register_artifact(ARTIFACT_RETRIEVED, Modality.RESULTS, dtype="List[List[Tuple[str, float]]]")
 register_artifact(ARTIFACT_GENERATED_ANSWERS, Modality.ANSWERS)
 register_artifact(ARTIFACT_METRICS, Modality.SCORES)
-# Ground-truth reference transcription/question, published as a keyed artifact (A3/W1) so
-# metric nodes can pair a scored artifact against its reference.
+# Published as a keyed artifact so metric nodes can pair a scored artifact against it.
 register_artifact("reference_text", Modality.TEXT, is_source=True)
-# The query-text chain (distinct names — no in-place mutation): correction → corrected,
-# augmenter → augmented, optimization → optimized. query_text stays the immutable ASR/dataset
-# base. Consumers read the most-processed variant via QUERY_TEXT_CHAIN.
+# Distinct chain names (no in-place mutation); consumers read the most-processed variant
+# via QUERY_TEXT_CHAIN, query_text stays the immutable ASR/dataset base.
 register_artifact("corrected_query_text", Modality.TEXT)
 register_artifact("augmented_query_text", Modality.TEXT)
 register_artifact("optimized_query_text", Modality.TEXT)
 register_artifact("refined_query_text", Modality.TEXT)
-# Per-comparison score artifacts from the typed metric nodes (Phase 5).
+# Per-comparison score artifacts from the typed metric nodes.
 register_artifact("transcription_scores", Modality.SCORES)
 register_artifact("retrieval_scores", Modality.SCORES)
-# Per-item score ItemSets ("one bus"): the typed metric nodes publish these keyed,
-# and the trace/judge/diagnostics consumers join by query id — replacing the positional
+# Per-item score ItemSets: published keyed, joined by query id — replacing positional
 # RunState side-channel attrs.
 register_artifact("per_query_wer", Modality.SCORES)
 register_artifact("per_query_cer", Modality.SCORES)
 register_artifact("per_query_recall5", Modality.SCORES)
-# The answer-generation node's per-query payload: an ItemSet of the per-query detail
-# dicts the trace builder consumes.
 register_artifact("generated_answers", Modality.ANSWERS)
 register_artifact("judge_scores", Modality.SCORES)  # overall per-query judge score
 register_artifact("judge_pass", Modality.SCORES)  # per-query 1.0/0.0 → judge_pass_rate

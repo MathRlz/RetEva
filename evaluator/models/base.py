@@ -29,12 +29,10 @@ class ASRModel(ABC):
 
     @abstractmethod
     def name(self) -> str:
-        """Return model name."""
         pass
 
     @abstractmethod
     def to(self, device: torch.device):
-        """Move model to device."""
         pass
 
 
@@ -56,24 +54,17 @@ class TextEmbeddingModel(ABC):
 
     @abstractmethod
     def name(self) -> str:
-        """Return model name."""
         pass
 
     def to(self, device: torch.device):
-        """Move model to device.
-
-        Default implementation moves ``self.model``; subclasses with a different
-        layout (or that manage device internally) override this.
-        """
+        """Default implementation moves ``self.model``; subclasses with a different
+        layout (or that manage device internally) override this."""
         self.model.to(device)
         return self
 
 
 class AudioEmbeddingModel(ABC):
-    """
-    Base class for models that directly embed audio into vectors without ASR.
-    This is for end-to-end audio->embedding models that don't produce text transcriptions.
-    """
+    """Base class for audio-to-embedding models that skip ASR (no text transcription)."""
 
     @abstractmethod
     def encode_audio(self, audio_list: List[torch.Tensor],
@@ -85,21 +76,17 @@ class AudioEmbeddingModel(ABC):
     @abstractmethod
     def preprocess_audio(self, audio_list: List[torch.Tensor],
                         sampling_rates: List[int]):
-        """Preprocess audio into features ready for encoding."""
         pass
 
     @abstractmethod
     def encode_from_features(self, features: torch.Tensor,
                            attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
-        """Encode preprocessed features into an array of embeddings."""
         pass
 
     @abstractmethod
     def name(self) -> str:
-        """Return model name."""
         pass
 
     @abstractmethod
     def to(self, device: torch.device):
-        """Move model to device."""
         pass

@@ -1,4 +1,4 @@
-"""Structured logging setup for the evaluation framework (audit Batch F).
+"""Structured logging setup for the evaluation framework.
 
 Console verbosity is a **named profile** (`default` / `verbose` / `debug`) rather than a raw
 level. Messages are tagged with a **category** by emitting them through a child logger
@@ -8,7 +8,7 @@ quiet console never loses post-hoc detail.
 
 Categories (everything not under one of these child loggers is *lifecycle* — always shown):
     node     ``▶ node …``, offload, resume-from-level
-    timing   ``… completed in Xs`` (TimingContext / log_timing), ``STAGE … DONE``
+    timing   ``… completed in Xs`` (TimingContext), ``STAGE … DONE``
     runtime  the ``RUNTIME …`` line, the full ``Configuration`` dump
     cache    the ``Cache Statistics`` breakdown
     diag     retrieval-debug + per-query internals (debug only)
@@ -22,7 +22,6 @@ import logging
 import sys
 import time
 from datetime import datetime
-from functools import wraps
 from pathlib import Path
 from typing import Optional
 
@@ -188,31 +187,7 @@ def add_run_file_handler(output_dir: str, experiment_name: str, file_level: int 
 
 
 def get_logger(name: str = "evaluator") -> logging.Logger:
-    """Get a logger instance."""
     return logging.getLogger(name)
-
-
-def log_timing(logger: Optional[logging.Logger] = None):
-    """Decorator: log a function's execution time under the ``timing`` category."""
-
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-            timing_logger.info("Starting %s", func.__name__)
-            try:
-                result = func(*args, **kwargs)
-                elapsed = time.time() - start_time
-                timing_logger.info("%s completed in %.2fs", func.__name__, elapsed)
-                return result
-            except Exception:
-                elapsed = time.time() - start_time
-                timing_logger.error("%s failed after %.2fs", func.__name__, elapsed)
-                raise
-
-        return wrapper
-
-    return decorator
 
 
 class TimingContext:

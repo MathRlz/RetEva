@@ -1,10 +1,8 @@
 """Registry of executable pipeline stages (DAG node handlers).
 
 Mirrors the model-family registries: a stage handler registers itself with the
-``@register_stage_handler`` decorator and the executor discovers it by name, so
-adding a stage no longer means editing a central dispatch dict. Each spec also
-carries the executor's timing policy (whether the handler times itself, and which
-``stage_times`` bucket the executor accumulates its runtime into).
+``@register_stage_handler`` decorator and the executor discovers it by name; there is no
+central dispatch dict.
 """
 
 from __future__ import annotations
@@ -36,9 +34,8 @@ def register_stage_handler(
     def decorator(fn: StageFn) -> StageFn:
         existing = _STAGE_REGISTRY.get(stage)
         if existing is not None:
-            # Idempotent for the SAME handler re-registered (a module imported under a
-            # second name re-executes its decorators); a genuinely different function
-            # under an existing stage name is still a hard error.
+            # Idempotent for the SAME handler re-registered (a module imported under a second
+            # name re-executes its decorators); a different function under the name is a hard error.
             same = (
                 getattr(existing.fn, "__module__", None) == getattr(fn, "__module__", None)
                 and getattr(existing.fn, "__qualname__", None) == getattr(fn, "__qualname__", None)
@@ -63,10 +60,9 @@ def get_stage_spec(stage: str) -> StageSpec:
 
 
 def validate_graph_handlers(graph: Any) -> None:
-    """Pre-flight (audit M3): every node in ``graph`` must have a registered handler.
-
-    Called before dispatch so a typo'd / unregistered stage fails immediately with a
-    clear message, instead of crashing mid-run after heavy setup (model loads, TTS)."""
+    """Pre-flight: every node in ``graph`` must have a registered handler, so a typo'd /
+    unregistered stage fails immediately with a clear message instead of crashing mid-run
+    after heavy setup (model loads, TTS)."""
     missing = sorted(
         {node.stage for node in graph.nodes if node.stage not in _STAGE_REGISTRY}
     )

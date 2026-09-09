@@ -4,8 +4,11 @@ from typing import Any, Callable, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from evaluator.services import ModelServiceProvider
+from evaluator.pipeline import ModelServiceProvider
 from evaluator.webapi.utils import with_provider
+from evaluator.models.registry import FAMILY_REGISTRIES
+from evaluator.webapi.field_help import FIELD_HELP
+from evaluator.models.llm.catalog import list_llm_models as _list
 
 
 def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) -> APIRouter:
@@ -18,12 +21,8 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
 
     @router.get("/api/models/{family}/{model_type}/params")
     def model_params(family: str, model_type: str) -> Dict[str, Any]:
-        """Return parameter schema for a specific model type within a family.
-
-        Response includes available sizes, default values, and extra params
-        so the frontend can render a dynamic form.
-        """
-        from evaluator.models.registry import FAMILY_REGISTRIES
+        """Return parameter schema (sizes, defaults, extra params) for a model type, for the
+        frontend's dynamic form."""
 
         registry = FAMILY_REGISTRIES.get(family)
         if registry is None:
@@ -34,7 +33,6 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
         # Layer the shared glossary over the registry's per-field help: a model-author
         # DESCRIPTIONS entry wins (set in get_params_schema), else FIELD_HELP by field name,
         # so the builder shows a tooltip on model params just like the node-param switches.
-        from evaluator.webapi.field_help import FIELD_HELP
 
         params_schema = registry.get_params_schema(model_type)
         for name, entry in params_schema.items():
@@ -52,10 +50,9 @@ def build_models_router(provider_factory: Callable[[], ModelServiceProvider]) ->
 
     @router.get("/api/llm/models", summary="List LLM models for the builder picker")
     def list_llm_models(endpoint: str = "local", ollama_url: str | None = None) -> Dict[str, Any]:
-        """Models for the global-LLM picker. ``endpoint=local`` → curated catalog + a live
-        Ollama ``/api/tags`` probe (pulled models flagged + first); ``endpoint=api`` → a
-        static OpenAI-compatible list. ``ollama_url`` overrides the probed server."""
-        from evaluator.models.llm.catalog import list_llm_models as _list
+        """Models for the global-LLM picker: ``endpoint=local`` probes Ollama live,
+        ``endpoint=api`` returns a static OpenAI-compatible list; ``ollama_url`` overrides
+        the probed server."""
 
         return _list(endpoint, ollama_url)
 

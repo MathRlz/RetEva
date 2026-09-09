@@ -114,7 +114,6 @@ def export_to_csv(
     results: List[BenchmarkResult],
     path: Union[str, Path],
 ) -> None:
-    """Export benchmark results to CSV file."""
     if not results:
         return
 
@@ -170,66 +169,3 @@ def export_to_csv(
                 row["timing_max_sec"] = ""
 
             writer.writerow(row)
-
-
-def load_benchmark_results(path: Union[str, Path]) -> List[Dict[str, Any]]:
-    """Load benchmark result dicts from a JSON export."""
-    path = Path(path)
-
-    with open(path) as f:
-        data = json.load(f)
-
-    return data.get("results", [])
-
-
-def compare_benchmark_results(
-    baseline: List[BenchmarkResult],
-    current: List[BenchmarkResult],
-) -> str:
-    """Compare baseline vs current benchmark results; returns a report string."""
-    lines = [
-        "=" * 70,
-        "BENCHMARK COMPARISON".center(70),
-        "=" * 70,
-        "",
-    ]
-
-    baseline_by_name = {r.name: r for r in baseline}
-    current_by_name = {r.name: r for r in current}
-
-    all_names = set(baseline_by_name.keys()) | set(current_by_name.keys())
-
-    lines.append(f"{'Benchmark':<30} {'Baseline':>12} {'Current':>12} {'Change':>12}")
-    lines.append("-" * 70)
-
-    for name in sorted(all_names):
-        base = baseline_by_name.get(name)
-        curr = current_by_name.get(name)
-
-        if base and curr and base.timing_stats and curr.timing_stats:
-            base_mean = base.timing_stats.mean * 1000
-            curr_mean = curr.timing_stats.mean * 1000
-
-            if base_mean > 0:
-                change_pct = ((curr_mean - base_mean) / base_mean) * 100
-                change_str = f"{change_pct:+.1f}%"
-                if change_pct < -5:
-                    change_str += " ✓"  # Improvement
-                elif change_pct > 5:
-                    change_str += " ✗"  # Regression
-            else:
-                change_str = "N/A"
-
-            lines.append(
-                f"{name:<30} {base_mean:>10.2f}ms {curr_mean:>10.2f}ms {change_str:>12}"
-            )
-        elif base and base.timing_stats:
-            base_mean = base.timing_stats.mean * 1000
-            lines.append(f"{name:<30} {base_mean:>10.2f}ms {'N/A':>12} {'removed':>12}")
-        elif curr and curr.timing_stats:
-            curr_mean = curr.timing_stats.mean * 1000
-            lines.append(f"{name:<30} {'N/A':>12} {curr_mean:>10.2f}ms {'new':>12}")
-
-    lines.append("=" * 70)
-
-    return "\n".join(lines)

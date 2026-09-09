@@ -1,4 +1,4 @@
-"""CLAP checkpoint load is safe-by-default (audit A1/F1)."""
+"""CLAP checkpoint load is safe-by-default."""
 
 import torch
 

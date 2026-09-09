@@ -1,18 +1,7 @@
-"""Consistent, threshold-gated tqdm progress bars for long data loops (audit C5/F27).
+"""Consistent, threshold-gated tqdm progress bars for long data loops.
 
-One helper so every data-heavy node shows the same bar style, and short runs / tests /
-non-interactive output stay quiet automatically.
-
-Visibility precedence (``progress_disabled``), highest first:
-
-1. ``EVALUATOR_NO_PROGRESS`` set            → off (kill switch).
-2. ``EVALUATOR_FORCE_PROGRESS`` set         → on, even when stderr is not a TTY. The webapi
-   sets this for the eval subprocess (its stderr is a pipe the supervisor streams to the
-   job console), so the bar still shows there.
-3. otherwise                                → on for an interactive TTY, off when piped.
-
-Every tqdm bar in the codebase routes its ``disable`` through :func:`progress_disabled` so
-all three paths (terminal CLI, piped CLI, webapi job) behave consistently.
+One helper so every data-heavy node shares the same bar style and short/test/non-interactive
+runs stay quiet automatically.
 """
 import os
 import sys
@@ -27,11 +16,8 @@ PROGRESS_MIN_ITEMS = 50
 
 
 def _interactive() -> bool:
-    """True when stderr is an interactive terminal — a live bar only makes sense there.
-
-    Bars draw to stderr (tqdm's default stream), so the TTY check tracks stderr. When the
-    output is piped/redirected (logs, CI, a captured test stream), this is False.
-    """
+    """True when stderr is an interactive terminal (bars draw to stderr, so a live bar only
+    makes sense when that's a TTY, not piped/redirected)."""
     stream = sys.stderr
     try:
         return bool(stream is not None and stream.isatty())
@@ -42,9 +28,9 @@ def _interactive() -> bool:
 def progress_disabled() -> bool:
     """Whether tqdm bars should be suppressed (the shared ``disable=`` decision).
 
-    See the module docstring for the precedence: ``EVALUATOR_NO_PROGRESS`` forces off,
-    ``EVALUATOR_FORCE_PROGRESS`` forces on (used by the webapi subprocess whose stderr is a
-    pipe), otherwise show only in an interactive TTY.
+    Precedence: ``EVALUATOR_NO_PROGRESS`` forces off; ``EVALUATOR_FORCE_PROGRESS`` forces on
+    (the webapi subprocess sets this since its stderr is a pipe, not a TTY); otherwise on
+    only for an interactive TTY.
     """
     if os.environ.get("EVALUATOR_NO_PROGRESS"):
         return True
@@ -56,18 +42,11 @@ def progress_disabled() -> bool:
 def progress_iter(iterable, desc, *, total=None, unit="it", min_items=PROGRESS_MIN_ITEMS):
     """Wrap a long data loop in a uniform tqdm bar.
 
-    The bar shows by default in an interactive terminal (and when forced via
-    ``EVALUATOR_FORCE_PROGRESS`` — e.g. the webapi job subprocess). It is suppressed (the
-    iterable returned unchanged) when the work is short (``total < min_items``), when
-    ``EVALUATOR_NO_PROGRESS`` is set, or when tqdm is unavailable; when stderr is a
-    non-forced pipe the bar is constructed disabled (a no-op passthrough).
-
-    Args:
-        iterable: the thing to iterate.
-        desc: bar label.
-        total: item count (inferred from ``len(iterable)`` when possible).
-        unit: per-item unit label (e.g. "doc", "query", "clip").
-        min_items: skip the bar below this many items.
+    Suppressed (returns ``iterable`` unchanged) when the work is short (``total <
+    min_items``), ``EVALUATOR_NO_PROGRESS`` is set, or tqdm is unavailable. Otherwise shows
+    for an interactive TTY or when ``EVALUATOR_FORCE_PROGRESS`` is set (e.g. the webapi job
+    subprocess); a non-forced piped run still builds the bar, just disabled (a no-op
+    passthrough).
     """
     if total is None:
         try:

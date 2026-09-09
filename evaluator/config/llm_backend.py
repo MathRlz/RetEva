@@ -21,31 +21,26 @@ class LLMConfig:
     timeout_s: int = 60
     use_local_server: bool = False
     local_server_url: Optional[str] = None
-    # Sampling seed sent with each request (Ollama / vLLM honor it; OpenAI treats it as a
-    # best-effort determinism hint). None = omit the field entirely, so a server that
-    # rejects unknown keys is unaffected. temperature 0 alone does NOT pin an LLM's
-    # sampling, so a seeded run is the closest thing to a reproducible LLM arm.
+    # Sampling seed sent with each request (Ollama/vLLM honor it; OpenAI treats it as a
+    # best-effort hint). None = omit the field, so a server rejecting unknown keys is
+    # unaffected. temperature 0 alone does NOT pin sampling.
     seed: Optional[int] = None
     # Optional run-level cap on cumulative LLM tokens (0 = no cap). Exceeding it aborts the
-    # run with BudgetExceededError so an expensive judge/answer-gen sweep can't run away (T8).
+    # run with BudgetExceededError so an expensive judge/answer-gen sweep can't run away.
     max_tokens_budget: int = 0
     # How many requests to keep in flight for the per-item LLM loops (answer generation,
-    # judging). 1 = strictly serial, today's behaviour and the safe default for a rate-limited
-    # remote API; a local server (Ollama/vLLM) batches concurrent requests into shared forward
-    # passes, so 4 is typically 2.5-3.5x on one GPU. The SERVER must allow it too
-    # (`OLLAMA_NUM_PARALLEL=4 ollama serve`), and each slot holds its own KV cache.
+    # judging). 1 = strictly serial, the safe default for a rate-limited remote API; a
+    # local server (Ollama/vLLM) batches concurrent requests, so 4 is typically 2.5-3.5x
+    # on one GPU (the SERVER must allow it too, e.g. OLLAMA_NUM_PARALLEL=4, and each slot
+    # holds its own KV cache).
     #
-    # REPRODUCIBILITY COST, measured (12 questions, mistral:7b-instruct, seed 42, temp 0):
-    # two SERIAL runs produce byte-identical answers (12/12), but serial vs concurrency=4
-    # matches only 5/12 — batching changes the batch composition, hence the numerics, hence
-    # near-tie token choices. Decisions were unchanged (accuracy 0.4167 in both), wording was
-    # not (ROUGE-L 0.1833 -> 0.1760). Keep 1 for a run you intend to quote exactly; raise it
-    # for sweeps and exploration. (The LLM judge already varies run-to-run even serially:
-    # 0.8278 vs 0.8028 on identical answers.)
+    # Measured cost: concurrency changes batch composition and hence the numerics — two
+    # serial runs matched byte-identically, serial vs concurrency=4 matched only 5/12
+    # answers (decisions unchanged, wording not). Keep 1 to quote a run exactly; raise it
+    # for sweeps.
     concurrency: int = 1
-    # Per-call retries for TRANSIENT failures only (timeouts, connection errors, HTTP
-    # 429/5xx — never auth/schema 4xx), with short backoff, so one hiccup doesn't drop the
-    # item and shrink the eval set (A4). 0 disables.
+    # Per-call retries for TRANSIENT failures only (timeouts, connection errors, HTTP 429/5xx,
+    # never auth/schema 4xx); short backoff so one hiccup doesn't drop an item. 0 disables.
     max_retries: int = 2
 
     def get_api_base(self) -> str:

@@ -1,10 +1,6 @@
-"""Registry/config-driven UI helpers for the WebAPI (form builder).
-
-Builds UI options/forms from the registries and config (``node_catalogue``, ``graph_preview``,
-``config_to_canvas_spec``, ``resolve_node_form``).
-The form → validated-config half lives in ``form_config.py`` (import its public names
-from there directly); ``prepare_run_config`` is re-exported here for one remaining caller.
-"""
+"""Registry/config-driven UI helpers for the WebAPI (form builder): builds UI options/forms from
+the registries and config. The form → validated-config half lives in ``form_config.py``;
+``prepare_run_config`` is re-exported here for one remaining caller."""
 
 from __future__ import annotations
 
@@ -21,10 +17,9 @@ from evaluator.pipeline.introspection import (
     display_artifact_names,
     display_label,
     get_stage_node_def,
-    node_model_field,
     resolve_field as _resolve,
-    effective_inputs as _effective_inputs,
-    effective_outputs as _effective_outputs,
+    effective_inputs,
+    effective_outputs,
 )
 from evaluator.webapi.field_help import FIELD_HELP
 
@@ -33,49 +28,57 @@ from evaluator.webapi.field_help import FIELD_HELP
 from evaluator.webapi.form_config import (  # noqa: F401  (re-export surface)
     prepare_run_config,
 )
-
-
-def nested_config(config: EvaluationConfig) -> Dict[str, Any]:
-    """Return nested config shape for WebUI config creator."""
-    return {
-        "experiment_name": config.experiment_name,
-        "output_dir": config.output_dir,
-        "runtime": config.to_runtime_dict(),
-        "experiment": config.to_experiment_dict(),
-    }
+from evaluator.config.dataset_descriptors import get_descriptor
+from evaluator.config.graph_config import (
+    DATASET_FIELDS,
+    FEATURE_NODE_CONFIG,
+    MODEL_NODE_FIELDS,
+    resolved_model_config,
+)
+from evaluator.config.model import ModelConfig
+from evaluator.config.vector_db import VectorDBConfig
+from evaluator.datasets.profiles import profile_snapshot
+from evaluator.evaluation.metric_registry import applicable_metrics, list_metrics
+from evaluator.evaluation.validation import check_embedding_spaces
+from evaluator.pipeline import build_graph_from_spec
+from evaluator.pipeline.factory import effective_vector_db_config
+from evaluator.pipeline.graph import NODE_REGISTRY
+from evaluator.pipeline.graph.operators import (
+    ALIASES,
+    expand_alias,
+    node_kind,
+    operator_discriminators,
+)
+from evaluator.pipeline.graph.registry import (
+    ARTIFACT_CORPUS,
+    DOCS_AXIS_CAPABLE,
+    OneOf,
+    is_structural,
+    node_model_field,
+)
+from evaluator.pipeline.graph.wiring import has_port_edges, port_modality
 
 
 def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     """What the preview's click-to-inspect panel shows for a node: the configured model
     (resolved from ``config.model`` via the node→config mapping in
-    ``graph_config._MODEL_NODE_FIELDS`` — single source, not duplicated), retrieval
+    ``graph_config.MODEL_NODE_FIELDS`` — single source, not duplicated), retrieval
     settings, plus any explicit per-node ``params`` (branch/graph overrides) on top.
     Empty values are dropped."""
     from dataclasses import fields as _dc_fields
     from types import SimpleNamespace
 
-    from evaluator.config.graph_config import (
-        _FEATURE_NODE_CONFIG,
-        _MODEL_NODE_FIELDS,
-        resolved_model_config,
-    )
-    from evaluator.pipeline.factory import effective_vector_db_config
-    from evaluator.pipeline.graph.operators import (
-        node_kind,
-        operator_discriminators,
-    )
-
     # The config-block map is keyed by legacy node name; resolve the operator+fields back.
     kind = node_kind(node.stage, node.params)
     info: Dict[str, Any] = {}
-    # corpus_embedding has no `_MODEL_NODE_FIELDS` entry of its own — the text-corpus runtime
+    # corpus_embedding has no `MODEL_NODE_FIELDS` entry of its own — the text-corpus runtime
     # path (`evaluation/handlers/embedding.py:_stage_corpus_embedding`) resolves it AS
     # text_embedding (its own params overlaid on the flat text_emb_* default; the audio-corpus
     # path doesn't support per-node overrides at all). Mirror that here, or a config using the
     # legacy flat `nodes: {text_embedding: {...}}` map (not per-node graph.nodes params) shows
     # (and round-trips) an empty corpus_embedding card — losing e.g. its embedding_space.
     fields_kind = "text_embedding" if kind == "corpus_embedding" else kind
-    if fields_kind in _MODEL_NODE_FIELDS:
+    if fields_kind in MODEL_NODE_FIELDS:
         # config.model overlaid with this node's own params — the resolver factory.py/
         # node_pipeline.py use, so the panel shows what actually resolves, not just the flat
         # default (the generic node.params loop below would overlay the same values anyway,
@@ -84,7 +87,7 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
             stage="text_embedding", params=node.params
         )
         mcfg = resolved_model_config(config, resolve_as)
-        for yaml_key, cfg_field in _MODEL_NODE_FIELDS[fields_kind].items():
+        for yaml_key, cfg_field in MODEL_NODE_FIELDS[fields_kind].items():
             val = getattr(mcfg, cfg_field, None)
             if val not in (None, "", {}):
                 info[yaml_key] = val
@@ -96,12 +99,12 @@ def _node_inspect(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
             # loader-compatible nested form (a bare string round-trips as an unknown key)
             info["reranker"] = {"enabled": True,
                                 "mode": vdb.reranker_mode or "token_overlap"}
-    elif kind in _FEATURE_NODE_CONFIG:
-        # Rehydrate the capability config the loader folded OFF this node (audit 2026-07 #2):
+    elif kind in FEATURE_NODE_CONFIG:
+        # Rehydrate the capability config the loader folded OFF this node:
         # the canvas must show the CONFIGURED values, not the form defaults, or a
         # config→builder→config round-trip silently resets the feature to defaults. Only
         # fields differing from the sub-config's defaults ride back onto the node.
-        sub = getattr(config, _FEATURE_NODE_CONFIG[kind], None)
+        sub = getattr(config, FEATURE_NODE_CONFIG[kind], None)
         if sub is not None:
             _default = type(sub)()
             for f in _dc_fields(sub):
@@ -138,11 +141,9 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     field-aware form contract ``render_node`` and ``/api/graph/node-form`` use
     (``resolve_node_form`` — one serializer, so the three surfaces cannot drift; a hand-rolled
     copy here once dropped ``input_ports`` and broke the preview's ports)."""
-    from ..pipeline.introspection import is_structural
-    from ..pipeline.graph.operators import node_kind, expand_alias
 
-    # Merge inspect values under node.params so the form sees the real model/params
-    # (not the empty node.params for branched nodes whose config lives in branches[*]).
+    # Merge inspect values under node.params so the form sees the resolved model/retrieval
+    # settings, not just each node's own (often empty) params.
     merged = {**_node_inspect(config, node), **dict(node.params or {})}
     kind = node_kind(node.stage, merged)
     _, alias_disc = expand_alias(kind, {})
@@ -151,7 +152,7 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
     visible_params = {k: v for k, v in merged.items() if k not in (alias_disc or {})}
 
     form = resolve_node_form(node.stage, merged)
-    # A B2 *routed* artifact (a type-open port fed something the node def never lists, e.g.
+    # A *routed* artifact (a type-open port fed something the node def never lists, e.g.
     # dataset_source.reference_text -> an embedder's query_text port) lives on the graph
     # instance's input_aliases, not in the static per-type form -- without this overlay (the
     # same one render_node applies) this preview's input_ports never names that alternative,
@@ -166,7 +167,7 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
         "structural": is_structural(node.stage, dict(node.params or {})),
         "depends_on": list(node.depends_on),
         # resolved data bindings (artifact → producer) — the preview draws
-        # these as edges, same shape as /api/graph/template (B2)
+        # these as edges, same shape as the canvas seed
         "bindings": [list(b) for b in node.bindings],
         # declared column schema [{name, artifact, type}] — what the diagram
         # shows on dataset nodes so an experiment reads from its DAG
@@ -188,8 +189,6 @@ def _preview_node(config: EvaluationConfig, node: Any) -> Dict[str, Any]:
 
 
 def graph_preview(config: EvaluationConfig) -> Dict[str, Any]:
-    from ..datasets.profiles import profile_snapshot
-
     graph = build_graph_for_config(config)
     payload = graph_render_payload(graph, lambda node: _preview_node(config, node))
     payload["dataset_profile"] = profile_snapshot(config)
@@ -212,7 +211,6 @@ def _dataset_source_params(config: EvaluationConfig) -> Dict[str, Any]:
     """The dataset_source node params for a single-source config: ``{dataset, <location>, <run
     knobs that differ from default>}`` read off ``config.data``. Empty for a multi-source
     ``data.datasets`` map (those nodes already reference a map entry by role)."""
-    from evaluator.config.graph_config import _DATASET_FIELDS
 
     data = config.data
     name = getattr(data, "dataset_name", None)
@@ -221,7 +219,7 @@ def _dataset_source_params(config: EvaluationConfig) -> Dict[str, Any]:
     defaults = type(data)()
     params: Dict[str, Any] = {"dataset": name}
     for node_key in _DATASET_NODE_KEYS:
-        cfg_field = _DATASET_FIELDS[node_key]
+        cfg_field = DATASET_FIELDS[node_key]
         value = getattr(data, cfg_field, None)
         if value in (None, "", [], {}):
             continue
@@ -237,7 +235,6 @@ def _source_inspect_params(config: EvaluationConfig, params: Dict[str, Any]) -> 
     (single-source) or ``config.data.datasets[role]`` (a multi-source map keyed by this node) —
     NOT as the node's literal ``dataset`` param, which is only the map key. Without resolving it an
     opened config seeds the blank '(from run config)' instead of the configured dataset."""
-    from evaluator.config.graph_config import _DATASET_FIELDS
 
     dmap = getattr(config.data, "datasets", None)
     entry = dmap.get(params.get("dataset")) if isinstance(dmap, dict) else None
@@ -248,7 +245,7 @@ def _source_inspect_params(config: EvaluationConfig, params: Dict[str, Any]) -> 
     if get("dataset_name"):
         out["dataset"] = get("dataset_name")
     for node_key in _DATASET_NODE_KEYS:  # questions/corpus/split/… (run knobs only present if set)
-        value = get(_DATASET_FIELDS[node_key])
+        value = get(DATASET_FIELDS[node_key])
         if value not in (None, "", [], {}):
             out[node_key] = value
     return out
@@ -260,7 +257,6 @@ def lift_single_source_dataset(nodes: list) -> Dict[str, Any]:
     it structural). Returns the block (``{}`` when not applicable). Mutates ``nodes`` in place — so
     a single-source canvas exports clean and round-trips idempotently (a bare dataset_source wires
     its columns from the top-level block). Multi-source graphs keep their per-node ``dataset``."""
-    from evaluator.pipeline.graph.operators import node_kind
 
     sources = [
         n for n in nodes
@@ -285,8 +281,8 @@ def lift_single_source_dataset(nodes: list) -> Dict[str, Any]:
 
 
 def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
-    """Serialize a config's DAG into the builder canvas seed (the ``/api/graph/template``
-    shape: ``{mode, levels, nodes:[{id, type, params, bindings, …form}]}``) — but with each
+    """Serialize a config's DAG into the builder canvas seed (shape:
+    ``{mode, levels, nodes:[{id, type, params, bindings, …form}]}``) — but with each
     node's *configured* model/dataset/settings folded into its params.
 
     This is the inverse of the builder's ``exportSpec`` →
@@ -295,51 +291,16 @@ def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
     stay on the node either way): we push the resolved per-node config back onto the node so
     opening a YAML config shows the real experiment, editable, and re-running it from the
     canvas reproduces the same config.
-
-    A branched config renders its **base** graph (not the CSE-expanded ``@branch`` DAG) and passes
-    the branch definitions through, so the Branches panel re-hydrates — the same shape as a saved
-    graph — instead of dropping onto the canvas as a tangle of expanded nodes.
     """
-    import copy
 
-    from evaluator.pipeline.graph.operators import node_kind
-
-    override = getattr(config, "graph_override", None)
-    branches = override.get("branches") if isinstance(override, dict) else None
-    # Build the base (un-expanded) DAG for the canvas; keep `config` for the per-node model/
-    # dataset fold (its model/data blocks are unchanged by branch expansion).
-    base_config = config
-    inspect_config = config
-    if branches:
-        base_config = copy.deepcopy(config)
-        base_config.graph_override = {
-            k: v for k, v in override.items() if k != "branches"
-        }
-        # Seed first branch's model-node overrides into inspect_config so _node_inspect
-        # can show real values for nodes whose params live only in branches (not in
-        # nodes.*). Only fills fields that are currently empty — explicit nodes.* values
-        # still win. Result: clicking a node shows first-branch values, not "default".
-        from evaluator.config.graph_config import _MODEL_NODE_FIELDS
-        inspect_config = copy.deepcopy(config)
-        first_branch = branches[0] if branches else {}
-        for _node_name, _node_overrides in first_branch.items():
-            if _node_name == "id" or not isinstance(_node_overrides, dict):
-                continue
-            if _node_name not in _MODEL_NODE_FIELDS:
-                continue
-            for _yaml_key, _cfg_field in _MODEL_NODE_FIELDS[_node_name].items():
-                if getattr(inspect_config.model, _cfg_field, None) in (None, "", {}):
-                    _val = _node_overrides.get(_yaml_key)
-                    if _val not in (None, "", {}):
-                        setattr(inspect_config.model, _cfg_field, _val)
-    graph = build_graph_for_config(base_config)
+    graph = build_graph_for_config(config)
     dataset_params = _dataset_source_params(config)
 
     def _render(node):
         params = dict(node.params or {})
         # Fold the resolved model/retrieval settings (config.model / vector_db) onto the node;
         # setdefault so an explicit per-node graph-override param still wins.
-        for key, value in _node_inspect(inspect_config, node).items():
+        for key, value in _node_inspect(config, node).items():
             params.setdefault(key, value)
         # A single-source dataset lives in config.data, not on the node — push it onto the
         # dataset_source so the canvas carries a runnable source.
@@ -348,34 +309,15 @@ def config_to_canvas_spec(config: EvaluationConfig) -> Dict[str, Any]:
                 params.setdefault(key, value)
         return render_node(node, params)
 
-    payload = graph_render_payload(graph, _render)
-    if branches:
-        from evaluator.pipeline.graph.operators import node_kind as _node_kind, operator_discriminators
-        disc_by_kind: Dict[str, Dict] = {}
-        for _n in graph.nodes:
-            _kind = _node_kind(_n.stage, _n.params)
-            _disc_keys = operator_discriminators(_n.stage)
-            _disc_vals = {k: v for k, v in (_n.params or {}).items() if k in _disc_keys}
-            if _disc_vals:
-                disc_by_kind[_kind] = _disc_vals
-        enriched_branches = []
-        for _branch in branches:
-            _eb: Dict[str, Any] = {}
-            for _key, _val in _branch.items():
-                if isinstance(_val, dict) and _key in disc_by_kind:
-                    _eb[_key] = {**disc_by_kind[_key], **_val}
-                else:
-                    _eb[_key] = _val
-            enriched_branches.append(_eb)
-        payload["branches"] = enriched_branches
-    return payload
+    return graph_render_payload(graph, _render)
 
 
 def graph_render_payload(graph: Any, node_fn) -> Dict[str, Any]:
     """The common ``{mode, levels, nodes}`` envelope every graph render/preview payload shares:
     the graph mode + topological levels (layout) + one ``node_fn(node)`` per node. Callers supply
     the node shape they need (rich preview / canvas render / minimal build view) and tack any
-    extras (dataset_profile, branches, llm, warnings) onto the result."""
+    extras (dataset_profile, llm, warnings, and the opaque saved-canvas ``branches``) onto the
+    result."""
     return {
         "mode": graph.mode,
         "levels": [[n.id for n in level] for level in graph.topological_levels()],
@@ -384,29 +326,21 @@ def graph_render_payload(graph: Any, node_fn) -> Dict[str, Any]:
 
 
 def build_canvas_graph(payload: Dict[str, Any]) -> Any:
-    """Build the DAG from a builder canvas spec (``{mode, nodes, edges, branches?}``) — the
+    """Build the DAG from a builder canvas spec (``{mode, nodes, edges}``) — the
     topology-only build (no run config / dataset needed), so a graph-in-progress validates while
-    authoring. Branched specs expand + CSE-collapse to the real run shape. Raises on a build error.
+    authoring. Raises on a build error.
     Shared by ``graph_advice`` callers and ``/ui/validate-builder`` (rendered fragment)."""
-    from evaluator.pipeline import build_graph_from_spec
-
-    from evaluator.pipeline.graph.wiring import _has_port_edges
 
     nodes = payload.get("nodes") or []
     mode = payload.get("mode") or "asr_text_retrieval"
     raw = payload.get("edges") or []
-    if _has_port_edges(raw):
-        edges = [e for e in raw if e.get("from") and e.get("to")]  # explicit port wiring (E5)
+    if has_port_edges(raw):
+        edges = [e for e in raw if e.get("from") and e.get("to")]  # explicit port wiring
     else:
         edges = {}
         for e in raw:
             if e.get("from") and e.get("to"):
                 edges.setdefault(e["to"], []).append(e["from"])
-    branches = payload.get("branches") or []
-    if branches:
-        from evaluator.pipeline.graph.branches import build_branched_graph
-
-        return build_branched_graph(nodes, branches, mode=mode, edges=edges or None)
     return build_graph_from_spec(nodes, mode=mode, edges=edges)
 
 
@@ -416,20 +350,18 @@ def graph_advice(graph: Any, config: Any) -> "tuple[list, list]":
     artifacts, plus the ground-truth-missing notice (a measurable output is produced but its GT
     field is absent from the chosen dataset). Returns ``(warnings, metrics)``. Shared by the build
     endpoint + the validation fragment so the two can't drift."""
-    from evaluator.evaluation.metric_registry import applicable_metrics, list_metrics
-    from evaluator.evaluation.validation import check_embedding_spaces
 
     warnings = list(check_embedding_spaces(graph, config))
     produced: set = set()
     for n in graph.nodes:
-        produced.update(_effective_outputs(n.stage, n.params))
+        produced.update(effective_outputs(n.stage, n.params))
     corrected_on = bool(
         getattr(getattr(config, "query_correction", None), "corrected_metrics", False)
     )
     metrics = [m.name for m in applicable_metrics(produced, include_opt_in=corrected_on)]
     # GT-missing: gated to GT the source CAN declare (relevant_docs); the transcription GT is loaded
     # at run-time, not a declared node output, so its absence here is not reliable. Grouped by GT.
-    source_gt = _effective_outputs("source", {})
+    source_gt = effective_outputs("source", {})
     blocked: dict = {}
     for m in list_metrics():
         if m.gt in source_gt and m.scored in produced and m.gt not in produced:
@@ -445,9 +377,7 @@ def graph_advice(graph: Any, config: Any) -> "tuple[list, list]":
 def render_node(node: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """One node in a canvas render payload: id + type + params + resolved bindings + the
     field-aware form contract (ports/label/family/switches) — the shape ``DagView.drawGraph``
-    consumes, identical to ``/api/graph/template``."""
-    from ..pipeline.introspection import is_structural
-    from ..pipeline.graph.operators import node_kind, expand_alias
+    consumes."""
 
     kind = node_kind(node.stage, params)
     # Strip alias discriminators from visible params (implied by kind, redundant to pass through).
@@ -494,13 +424,10 @@ def spec_to_render_payload(spec: Dict[str, Any]) -> Dict[str, Any]:
     (``{mode, nodes:[{id,type,params}], edges}``) — so a stored graph re-renders onto the
     canvas. The DAG is rebuilt (``build_graph_from_spec``) to resolve bindings + levels, but
     each node keeps the *saved* params (models/dataset the user set)."""
-    from evaluator.pipeline import build_graph_from_spec
-
-    from evaluator.pipeline.graph.wiring import _has_port_edges
 
     spec_nodes = [n for n in (spec.get("nodes") or []) if isinstance(n, dict)]
     raw = spec.get("edges") or []
-    if _has_port_edges(raw):
+    if has_port_edges(raw):
         edges = [e for e in raw if isinstance(e, dict) and e.get("from") and e.get("to")]
     else:
         edges = {}
@@ -516,7 +443,8 @@ def spec_to_render_payload(spec: Dict[str, Any]) -> Dict[str, Any]:
         lambda node: render_node(node, params_by_id.get(node.id, dict(node.params or {}))),
     )
     # Pass the variant set + global LLM through verbatim so a saved graph re-hydrates its
-    # Branches / LLM panels on load (the DAG above is the *base*; branches expand at run time).
+    # Branches / LLM panels on load. ``branches`` is opaque saved-canvas metadata: the loader
+    # has no ``graph.branches`` key, so nothing downstream of the builder reads it.
     if spec.get("branches"):
         payload["branches"] = spec["branches"]
     if spec.get("llm"):
@@ -537,7 +465,6 @@ def _node_family(model_field, node_type, params=None):
     """The model registry the node's picker reads: from its model_field, else a per-instance
     family (rerank/corpus_embedding carry no model_field). Resolved field-aware so an operator
     points at the right registry (e.g. ``embed{modality:audio}`` → audio_embedding)."""
-    from evaluator.pipeline.graph.operators import node_kind
 
     # Key on the resolved *kind* (node_kind), never the operator name: a multi-kind operator like
     # `refine` covers rerank (reranker model) AND mmr/threshold (model-free), so an operator-level
@@ -557,19 +484,13 @@ def _input_ports(stage: str, params=None) -> List[Dict[str, Any]]:
 
     Required ports first, then optional (``optional: true``). Each port carries ``names`` (the
     artifacts it accepts — used for edge matching), a ``label`` (the chain's base name), and —
-    for a OneOf port — its ``modality`` (B2: a multi-name port also accepts any registered
+    for a OneOf port — its ``modality`` (a multi-name port also accepts any registered
     same-modality artifact via an explicit edge, so the canvas may draw such a connection)."""
-    from evaluator.pipeline.graph.registry import (
-        ARTIFACT_CORPUS,
-        OneOf,
-        _DOCS_AXIS_CAPABLE,
-    )
-    from evaluator.pipeline.graph.wiring import _port_modality
 
     d = get_stage_node_def(stage)
     p = params or {}
-    # docs-axis transforms consume the corpus, not the query chain (mirror _effective_inputs).
-    if stage in _DOCS_AXIS_CAPABLE and p.get("axis") == "docs":
+    # docs-axis transforms consume the corpus, not the query chain (mirror effective_inputs).
+    if stage in DOCS_AXIS_CAPABLE and p.get("axis") == "docs":
         required: Any = (ARTIFACT_CORPUS,)
     else:
         required = _resolve(d.inputs, params)
@@ -579,8 +500,8 @@ def _input_ports(stage: str, params=None) -> List[Dict[str, Any]]:
     def add(art, optional):
         names = list(art) if isinstance(art, OneOf) else [art]
         port: Dict[str, Any] = {"label": names[-1], "names": names, "optional": optional}
-        if len(names) > 1:  # type-open OneOf port (B2) — plain ports stay closed
-            mod = _port_modality(tuple(names))
+        if len(names) > 1:  # type-open OneOf port — plain ports stay closed
+            mod = port_modality(tuple(names))
             if mod is not None:
                 port["modality"] = mod.value
         ports.append(port)
@@ -593,8 +514,8 @@ def _input_ports(stage: str, params=None) -> List[Dict[str, Any]]:
 
 
 def _node_param_specs(node_def, params=None) -> list:
-    """The builder's per-node form specs, two sources (§9 / §12.1 of the
-    architecture doc): a minimal model section for registry-backed nodes (`model` +
+    """The builder's per-node form specs, two sources: a minimal model section for
+    registry-backed nodes (`model` +
     `device` — everything model-specific appears *after* a model is chosen, declared by
     the model author via the registry `Params` schema), plus the node's registered
     `param_spec` (genuinely node-scoped switches). `param_defaults` leftovers render as
@@ -604,13 +525,11 @@ def _node_param_specs(node_def, params=None) -> list:
     discriminator fields, so the model section resolves to the right registry family (e.g.
     ``embed{modality:audio}`` → audio_embedding) and a callable ``param_spec`` resolves to
     the chosen op's switches (so ``transform``'s ``method`` carries the right choices)."""
-    from evaluator.config.graph_config import _MODEL_NODE_FIELDS
-    from evaluator.pipeline.introspection import operator_discriminators
 
     # A model node shows model (+ device): either a legacy name in the config-block map, or
     # an operator whose model_field (resolved for these fields) selects a registry model.
     model_field = _resolve(node_def.model_field, params)
-    is_model_node = node_def.stage in _MODEL_NODE_FIELDS or model_field is not None
+    is_model_node = node_def.stage in MODEL_NODE_FIELDS or model_field is not None
     # Discriminator fields re-resolve the field-aware form: when one changes the builder
     # re-fetches /api/graph/node-form (ports / model family / param switches all shift).
     discriminators = operator_discriminators(node_def.stage)
@@ -673,13 +592,12 @@ PALETTE_SECTIONS = ["Data", "Models", "Vector DB", "RAG optimization", "Augmenta
 
 def palette_section(stage: str, params: Dict[str, Any] | None = None) -> "str | None":
     """The user-facing palette section for a node (by its resolved kind); None = ungrouped."""
-    from evaluator.pipeline.graph.operators import node_kind
 
     return _PALETTE_SECTION.get(node_kind(stage, params or {}))
 
 
 def node_catalogue() -> Dict[str, Any]:
-    """The registered stage-node types + their I/O contract (E2): what the visual builder's
+    """The registered stage-node types + their I/O contract: what the visual builder's
     palette offers and how ports connect. Each entry = ``{type, category, domain, model_field,
     family, inputs, outputs, optional_inputs, param_defaults, node_params}`` — ``category``
     (source/model/transform/metric/sink) + ``domain`` are the node's declared class (the
@@ -687,12 +605,9 @@ def node_catalogue() -> Dict[str, Any]:
     artifact name matches a consumer's input name (the same rule the auto-wiring uses);
     ``family`` names the model registry the node's model picker reads (null = model-free);
     ``node_params`` are the node-centric YAML keys its param form offers."""
-    from ..pipeline.graph import _NODE_REGISTRY
-    from ..pipeline.graph.operators import node_kind
-    from ..pipeline.introspection import is_structural
 
     nodes = []
-    for stage, d in sorted(_NODE_REGISTRY.items()):
+    for stage, d in sorted(NODE_REGISTRY.items()):
         # An operator's ports / category / model_field can be callable(params); the palette
         # shows the default-resolved contract (empty params → the registered defaults).
         model_field = _resolve(d.model_field, {})
@@ -701,7 +616,7 @@ def node_catalogue() -> Dict[str, Any]:
                 "type": stage,
                 # The default-resolved KIND (e.g. "source" → "dataset_source") — seeded/preview
                 # graphs stamp this on node.type (not the raw operator) so a node form can show
-                # per-instance context (audit 2026-08: builder's CATALOGUE lookup, keyed only by
+                # per-instance context (builder's CATALOGUE lookup, keyed only by
                 # `stage`, missed those nodes and fell back to an empty spec → a false "no
                 # declared params". Emitting `kind` lets the client index the catalogue under
                 # BOTH names — the single contract preview/Config&Run/builder all now share).
@@ -743,8 +658,6 @@ def _alias_presets() -> List[Dict[str, Any]]:
     e.g. Dataset union, TTS, the per-family metrics, MMR/Threshold, multi-query retrieval.
     Each carries the field-aware contract + the discriminator ``params`` to seed on drop, so
     the user drops a ready-to-wire node instead of hand-setting fields on a generic operator."""
-    from evaluator.pipeline.graph.operators import ALIASES, node_kind
-    from evaluator.pipeline.graph.registry import is_structural
 
     presets: List[Dict[str, Any]] = []
     for alias, (operator, fixed) in ALIASES.items():
@@ -763,14 +676,12 @@ def _inject_dataset_fields(node_type: str, params: Dict[str, Any]) -> None:
     """A `dataset_source` advertises the CHOSEN dataset's *real* fields, not the union of what all
     datasets can output — so its output ports reflect what that dataset actually publishes (and the
     GT fields the user can wire). Resolve `params.fields` (column → artifact) from the descriptor
-    when a dataset is set but none supplied; `_effective_outputs` then narrows the ports."""
-    from evaluator.pipeline.graph.operators import node_kind
+    when a dataset is set but none supplied; `effective_outputs` then narrows the ports."""
 
     if node_kind(node_type, params) != "dataset_source":
         return
     if params.get("fields") or not params.get("dataset"):
         return
-    from evaluator.datasets.descriptor import get_descriptor
 
     desc = get_descriptor(str(params["dataset"]))
     if desc and getattr(desc, "fields", None):
@@ -790,24 +701,18 @@ def default_model_for(model_field: Any, config: Any = None) -> Any:
         if holder is not None:
             return getattr(holder, attr, None)
     if section == "model":
-        from evaluator.config.model import ModelConfig
-
         return getattr(ModelConfig(), attr, None)
     if section == "vector_db":
-        from evaluator.config.vector_db import VectorDBConfig
-
         return getattr(VectorDBConfig(), attr, None)
     return None
 
 
 def resolve_node_form(node_type: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    """Field-aware builder form for one operator instance (E2 follow-up): given the node's
+    """Field-aware builder form for one operator instance: given the node's
     currently-set discriminator fields, resolve its ports + model family + the op-specific
     param switches. So picking ``transform.op = correct`` re-renders with the corrector
     methods (not optimize's rewrite/HyDE), and ``embed{modality:audio}`` shows the audio
     embedding registry. Powers the builder's ``/api/graph/node-form`` re-render."""
-    from evaluator.pipeline.graph.operators import expand_alias
-    from evaluator.pipeline.graph.registry import node_model_field
 
     # Accept an operator OR a legacy alias name (expand it to the operator + fields).
     node_type, params = expand_alias(node_type, dict(params or {}))
@@ -825,8 +730,8 @@ def resolve_node_form(node_type: str, params: Dict[str, Any] | None = None) -> D
         # The model this node runs when none is picked (the flat config default the executor
         # reads) — the form's empty option names it instead of a bare "(default)".
         "default_model": default_model_for(model_field),
-        "inputs": list(_effective_inputs(node_type, params)),
-        "outputs": list(_effective_outputs(node_type, params)),
+        "inputs": list(effective_inputs(node_type, params)),
+        "outputs": list(effective_outputs(node_type, params)),
         "optional_inputs": list(
             display_artifact_names(_resolve(d.optional_inputs, params))
         ),
@@ -835,21 +740,3 @@ def resolve_node_form(node_type: str, params: Dict[str, Any] | None = None) -> D
         "node_params": _node_param_specs(d, params),
     }
 
-
-def required_model_fields_for(template: str) -> List[str]:
-    """The model config-field paths a graph *template* needs — derived from the template's nodes
-    (each node's ``model_field``), so this is registry/graph-driven, not a per-mode spec lookup.
-    Identical fields to the former ``resolve_graph_template(mode).required_model_fields`` for
-    the four built-in templates, but works for any template name."""
-    from evaluator.pipeline.graph.templates import graph_template
-
-    try:
-        graph = graph_template(template)
-    except (ValueError, KeyError):
-        return []
-    fields: List[str] = []
-    for node in graph.nodes:
-        field = node_model_field(node.stage, node.params)
-        if field and field not in fields:
-            fields.append(field)
-    return fields

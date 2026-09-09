@@ -1,4 +1,4 @@
-"""V2 pins: the light/dark theme contract.
+"""The light/dark theme contract.
 
 Charts read their colors from CSS custom properties at plot time, so the tokens and the
 no-flash stamp are load-bearing: if the stamp moves after the stylesheet the first paint
@@ -24,7 +24,7 @@ def test_theme_stamp_runs_before_the_stylesheet(client):
 def test_both_token_sets_ship_and_differ():
     css = (_STATIC / "app.css").read_text()
     # dark is the base, light overrides it under BOTH scopes (OS + explicit toggle)
-    assert "--chart-cat-1: #3987e5" in css          # dark, validated on #111827
+    assert "--chart-cat-1: #89b4fa" in css          # dark, validated on #1e1e2e
     assert "--chart-cat-1: #2a78d6" in css          # light, validated on #fcfcfb
     assert '[data-theme="light"]' in css
     assert "prefers-color-scheme: light" in css

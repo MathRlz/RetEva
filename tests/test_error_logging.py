@@ -1,4 +1,4 @@
-"""C1/F20: previously-silent except-and-skip paths now narrow the catch AND log, so a
+"""Except-and-skip paths narrow the catch AND log, so a
 shrinking dataset / skipped check is visible instead of disappearing.
 """
 
@@ -9,6 +9,7 @@ import numpy as np
 from evaluator.config.evaluation import EvaluationConfig
 from evaluator.config.validation import _validate_dataset_compat
 from evaluator.datasets.loaders.local import LocalAudioDatasetLoader
+from tests.graph_test_helpers import mode_graph
 
 
 def test_local_loader_skips_and_logs_unreadable_audio(caplog, tmp_path):
@@ -50,7 +51,7 @@ def test_dataset_compat_check_no_longer_flags_pipeline_mode():
     cfg = EvaluationConfig()
     cfg.data.dataset_name = "pubmed_qa"
     cfg.data.dataset_type = "pubmed_qa"
-    cfg.graph_override = {"template": "audio_emb_retrieval"}
+    cfg.graph_override = mode_graph("audio_emb_retrieval")
     warnings: list = []
     _validate_dataset_compat(cfg, warnings)
     assert not warnings

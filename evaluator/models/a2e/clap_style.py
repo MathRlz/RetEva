@@ -18,7 +18,6 @@ from ..registry import register_audio_embedding_model, register_text_embedding_m
 
 
 def set_requires_grad(module: nn.Module, requires_grad: bool) -> None:
-    """Set ``requires_grad`` on every parameter of ``module``."""
     for param in module.parameters():
         param.requires_grad = requires_grad
 
@@ -26,7 +25,7 @@ def set_requires_grad(module: nn.Module, requires_grad: bool) -> None:
 def load_checkpoint_with_remap(path, map_location=None):
     """Load a CLAP checkpoint, remapping its pickled ``clap_model.*`` classes to local ones.
 
-    Security (A1/F1): CLAP checkpoints pickle custom classes, so a *safe* ``weights_only=True``
+    Security: CLAP checkpoints pickle custom classes, so a *safe* ``weights_only=True``
     load can't restore them; ``weights_only=False`` executes arbitrary code embedded in the file
     — remote code execution on a malicious/corrupt checkpoint. We therefore try the safe load
     first and only fall back to the unsafe path when ``EVALUATOR_ALLOW_UNSAFE_CHECKPOINTS=1`` is
@@ -81,14 +80,12 @@ def load_checkpoint_with_remap(path, map_location=None):
 
 @dataclass
 class TextEncoderConfig:
-    """Configuration for text encoder."""
     model_name: str = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"
     max_length: int = 512
 
 
 @dataclass
 class AudioEncoderConfig:
-    """Configuration for audio encoder."""
     model_name: str = "openai/whisper-base"
     sample_rate: int = 16000
     max_duration: float = 30.0
@@ -96,7 +93,6 @@ class AudioEncoderConfig:
 
 @dataclass
 class ProjectionConfig:
-    """Configuration for projection heads."""
     input_dim_text: int = 768
     input_dim_audio: int = 512
     projection_dim: int = 512
@@ -106,7 +102,6 @@ class ProjectionConfig:
 
 @dataclass
 class CLAPConfig:
-    """Full CLAP model configuration."""
     text_encoder: TextEncoderConfig = field(default_factory=TextEncoderConfig)
     audio_encoder: AudioEncoderConfig = field(default_factory=AudioEncoderConfig)
     projection: ProjectionConfig = field(default_factory=ProjectionConfig)
@@ -141,7 +136,6 @@ class AudioEncoder(nn.Module):
 
     @property
     def output_dim(self) -> int:
-        """Output embedding dimension."""
         return self.model.config.d_model
 
     def forward(
@@ -149,24 +143,14 @@ class AudioEncoder(nn.Module):
         input_features: torch.Tensor,
         attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Encode audio features to sequence representations.
-
-        Args:
-            input_features: Mel spectrogram features (batch, n_mels, time)
-
-        Returns:
-            Audio sequence features (batch, time, hidden_dim)
-        """
+        """Encode audio features to sequence representations."""
         outputs = self.model(input_features, attention_mask=attn_mask)
         return outputs.last_hidden_state
 
     def freeze(self):
-        """Freeze encoder parameters."""
         set_requires_grad(self.model, False)
 
     def unfreeze(self):
-        """Unfreeze encoder parameters."""
         set_requires_grad(self.model, True)
 
 
@@ -182,7 +166,6 @@ class TextEncoder(nn.Module):
 
     @property
     def output_dim(self) -> int:
-        """Output embedding dimension."""
         return self.model.config.hidden_size
 
     def forward(
@@ -190,16 +173,7 @@ class TextEncoder(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> tuple:
-        """
-        Encode tokenized text to sequence features.
-
-        Args:
-            input_ids: Token IDs (batch, seq_len)
-            attention_mask: Attention mask (batch, seq_len)
-
-        Returns:
-            Tuple of (features, attention_mask)
-        """
+        """Encode tokenized text to sequence features; returns (features, attention_mask)."""
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -208,11 +182,9 @@ class TextEncoder(nn.Module):
         return outputs.last_hidden_state, attention_mask
 
     def freeze(self):
-        """Freeze encoder parameters."""
         set_requires_grad(self.model, False)
 
     def unfreeze(self):
-        """Unfreeze encoder parameters."""
         set_requires_grad(self.model, True)
 
 
@@ -287,45 +259,28 @@ class CrossModalAttention(nn.Module):
         value: torch.Tensor,
         key_mask: Optional[torch.Tensor] = None,
     ) -> tuple:
-        """
-        Args:
-            query: (batch, seq_q, dim)
-            key: (batch, seq_k, dim)
-            value: (batch, seq_k, dim)
-            key_mask: (batch, seq_k) - True for valid positions
-
-        Returns:
-            output: (batch, seq_q, dim)
-            attention_weights: (batch, seq_q, seq_k)
-        """
+        """query (batch, seq_q, dim), key/value (batch, seq_k, dim); key_mask (batch, seq_k) is True for VALID positions."""
         batch_size, seq_q, dim = query.shape
         seq_k = key.shape[1]
 
-        # Project and reshape for multi-head attention
         q = self.q_proj(query).view(batch_size, seq_q, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(key).view(batch_size, seq_k, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(value).view(batch_size, seq_k, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # Compute attention scores
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
 
-        # Apply mask if provided
         if key_mask is not None:
             mask = key_mask.unsqueeze(1).unsqueeze(2)
             attn_scores = attn_scores.masked_fill(~mask, float('-inf'))
 
-        # Softmax and dropout
         attn_weights = F.softmax(attn_scores, dim=-1)
         attn_weights = self.dropout(attn_weights)
 
-        # Apply attention to values
         output = torch.matmul(attn_weights, v)
 
-        # Reshape and project output
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_q, dim)
         output = self.out_proj(output)
 
-        # Average attention weights across heads
         attn_weights_avg = attn_weights.mean(dim=1)
 
         return output, attn_weights_avg
@@ -441,7 +396,6 @@ class CLAP(nn.Module):
         hidden_states, mask = self.text_encoder(input_ids, attention_mask)
         text_features = self.text_contrastive_head(hidden_states)
 
-        # Mean pooling over valid tokens
         mask_expanded = mask.unsqueeze(-1).float()
         sum_embeddings = (text_features * mask_expanded).sum(dim=1)
         sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
@@ -459,7 +413,6 @@ class CLAP(nn.Module):
         hidden_states = self.audio_encoder(input_features, attention_mask)
         audio_features = self.audio_contrastive_head(hidden_states)
 
-        # Mean pooling over frames
         audio_embed = audio_features.mean(dim=1)
 
         audio_embed = F.normalize(audio_embed, p=2, dim=-1)
@@ -480,16 +433,6 @@ class CLAP(nn.Module):
     ) -> torch.Tensor:
         """Encode audio to single embedding (for inference/retrieval)."""
         return self.encode_audio_contrastive(input_features, attention_mask)
-
-    def freeze_encoders(self):
-        """Freeze both encoder backbones."""
-        self.text_encoder.freeze()
-        self.audio_encoder.freeze()
-
-    def unfreeze_encoders(self):
-        """Unfreeze both encoder backbones."""
-        self.text_encoder.unfreeze()
-        self.audio_encoder.unfreeze()
 
 
 # The wrapper implements BOTH families, so it registers in both registries under one shared
@@ -517,29 +460,19 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
     def __init__(self,
                  model_path: str,
                  device: str = "cuda:0"):
-        """
-        Initialize CLAP-style audio model.
-
-        Args:
-            model_path: Path to trained CLAP model checkpoint (.pt file)
-            device: Device to load model on
-        """
         self.model_path = model_path
         self.device = torch.device(device)
 
         # Load checkpoint with custom unpickler to remap clap_model references
         checkpoint = load_checkpoint_with_remap(model_path, map_location=self.device)
 
-        # Extract config if saved with checkpoint, otherwise use default
         if 'config' in checkpoint:
             config = checkpoint['config']
         else:
             config = CLAPConfig()
 
-        # Initialize model
         self.model = CLAP(config)
 
-        # Load state dict
         if 'model_state_dict' in checkpoint:
             self.model.load_state_dict(checkpoint['model_state_dict'])
         else:
@@ -548,12 +481,10 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
         self.model = self.model.to(self.device)
         self.model.eval()
 
-        # Initialize audio preprocessor
         audio_encoder_name = config.audio_encoder.model_name
         self.feature_extractor = WhisperFeatureExtractor.from_pretrained(audio_encoder_name)
         self.sample_rate = config.audio_encoder.sample_rate
 
-        # Initialize text tokenizer
         text_encoder_name = config.text_encoder.model_name
         self.tokenizer = AutoTokenizer.from_pretrained(text_encoder_name)
         self.max_length = config.text_encoder.max_length
@@ -572,7 +503,8 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
             sr = sampling_rates[idx]
             audio_sample = audio_list[idx]
 
-            # Resample to 16kHz if needed
+            # Not routed through to_mono_16k: this targets self.sample_rate (the configured
+            # Whisper feature-extractor rate), not the helper's fixed 16 kHz.
             if sr != self.sample_rate:
                 audio_list[idx] = torchaudio.functional.resample(
                     audio_sample, sr, self.sample_rate
@@ -590,16 +522,7 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
 
     def encode_from_features(self, features: torch.Tensor,
                            attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
-        """
-        Encode preprocessed audio features into embeddings using contrastive head.
-
-        Args:
-            features: Preprocessed audio features
-            attention_mask: Optional attention mask (unused for CLAP)
-
-        Returns:
-            embeddings: (batch, emb_dim) numpy array
-        """
+        """Encode preprocessed audio features into embeddings using contrastive head."""
         features = features.to(self.device)
 
         with torch.no_grad():
@@ -610,49 +533,21 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
     def encode_audio(self, audio_list: List[torch.Tensor],
                     sampling_rates: List[int],
                     show_progress: bool = False) -> np.ndarray:
-        """
-        Encode audio directly into embeddings using contrastive head.
-
-        Args:
-            audio_list: List of audio tensors
-            sampling_rates: List of sampling rates
-            show_progress: Whether to show progress (unused)
-
-        Returns:
-            embeddings: (batch, emb_dim) numpy array
-        """
+        """Encode audio directly into embeddings using contrastive head."""
         input_features = self.preprocess_audio(audio_list, sampling_rates)
         input_features = input_features.to(self.device)
 
         with torch.no_grad():
-            # Use contrastive head for independent encoding (for retrieval)
             embeddings = self.model.encode_audio(input_features)
 
         return embeddings.cpu().numpy()
 
     def encode(self, texts: List[str], show_progress: bool = False) -> np.ndarray:
-        """
-        Encode texts (TextEmbeddingModel interface - delegates to encode_text).
-
-        Args:
-            texts: List of text strings
-            show_progress: Whether to show progress (unused)
-
-        Returns:
-            embeddings: (batch, emb_dim) numpy array
-        """
+        """Encode texts (TextEmbeddingModel interface - delegates to encode_text)."""
         return self.encode_text(texts)
 
     def encode_text(self, texts: List[str]) -> np.ndarray:
-        """
-        Encode texts using CLAP's internal text encoder (for proper evaluation).
-
-        Args:
-            texts: List of text strings
-
-        Returns:
-            embeddings: (batch, emb_dim) numpy array
-        """
+        """Encode texts using CLAP's internal text encoder (for proper evaluation)."""
         encoded = self.tokenizer(
             texts,
             padding=True,
@@ -671,11 +566,9 @@ class MultimodalClapStyleModel(AudioEmbeddingModel, TextEmbeddingModel):
         return embeddings.cpu().numpy()
 
     def to(self, device: torch.device):
-        """Move model to device."""
         self.device = device
         self.model = self.model.to(device)
         return self
 
     def name(self) -> str:
-        """Return model name."""
         return f"ClapStyleAudioModel - path:{self.model_path} - emb_dim:{self.emb_dim}"

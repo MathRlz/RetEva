@@ -1,19 +1,6 @@
-"""Thesis-grade outputs from a branched run report (REPO_REVIEW batch 3).
-
-A branched run's ``results["report"]`` block (built by ``evaluation.aggregate``)
-carries per-branch means/CIs and paired cross-branch deltas with bootstrap CIs,
-Wilcoxon p-values and BH-FDR q-values. This module turns that block into the
-three publication artifacts:
-
-- :func:`latex_branch_table` — branches as columns, metrics as rows, plus a delta
-  block with CI + significance stars (the thesis "Table X" generator).
-- :func:`plot_branch_deltas` — matplotlib bar chart of Δmetric per branch pair
-  with CI whiskers and significance annotation.
-- :func:`export_per_query_failures` — per-query CSV (WER / Recall@5 / retrieved
-  docs / failure category) from ``query_traces`` for the failure narrative.
-
-CLI: ``python -m evaluator.analysis.branch_report results_*.json --out-dir out/``
-writes all applicable artifacts next to each other.
+"""Thesis-grade outputs from a branched run report: LaTeX branch tables, delta plots, and
+per-query failure CSVs, built from a branched run's ``results["report"]`` block (per-branch
+means/CIs and paired cross-branch deltas with bootstrap CIs, Wilcoxon p-values, BH-FDR q-values).
 """
 
 from __future__ import annotations
@@ -273,8 +260,8 @@ def _categorize(trace: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _query_traces(results: Mapping[str, Any]) -> Any:
-    """Per-query traces, G5-canonical under ``report['traces']`` (top-level fallback for
-    result files written before the cutover)."""
+    """Per-query traces, canonical under ``report['traces']`` (falls back to the top-level
+    key for older result files without the nested location)."""
     report = results.get("report") or {}
     return report.get("traces", {}).get("query_traces") or results.get("query_traces") or []
 

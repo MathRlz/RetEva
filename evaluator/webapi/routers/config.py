@@ -4,17 +4,24 @@ from typing import Any, Callable, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from evaluator.pipeline.graph.templates import graph_template
-from evaluator.services import ModelServiceProvider
+from evaluator.pipeline import ModelServiceProvider
 from evaluator.webapi.form_builder import (
     config_to_canvas_spec,
-    graph_render_payload,
     prepare_run_config,
-    render_node,
 )
 from evaluator.webapi.schemas import (
     ErrorResponse,
     EvaluationJobRequest,
+)
+from ..form_builder import node_catalogue, resolve_node_form
+from evaluator.config import EvaluationConfig
+from evaluator.config.graph_config import build_evaluation_config_kwargs
+from evaluator.pipeline import build_graph_for_config
+from evaluator.webapi.form_builder import lift_single_source_dataset
+from evaluator.webapi.form_config import _GRAPH_SPEC_KEYS, _strip_display_params
+from evaluator.analysis.report_export import (
+    report_query_traces,
+    report_to_metrics_table,
 )
 
 
@@ -29,9 +36,8 @@ def build_config_router(
         responses={400: {"model": ErrorResponse}},
     )
     def validate_config(payload: EvaluationJobRequest) -> Dict[str, Any]:
-        """Validate and normalize an EvaluationConfig dict. Returns 400 on invalid config
-        (ConfigurationError → 400 via the app-level handler; a missing optional backend
-        lib surfaces as ImportError)."""
+        """Validate and normalize an EvaluationConfig dict; a ConfigurationError or missing
+        backend lib is a 400."""
         try:
             config = prepare_run_config(
                 payload.config, auto_devices=payload.auto_devices
@@ -42,8 +48,7 @@ def build_config_router(
 
     @router.get("/api/graph/nodes", summary="Stage-node catalogue for the builder")
     def graph_nodes_endpoint() -> Dict[str, Any]:
-        """The registered node types + I/O contract that the visual builder palette offers (E2)."""
-        from ..form_builder import node_catalogue
+        """The registered node types + I/O contract that the visual builder palette offers."""
 
         return node_catalogue()
 
@@ -52,7 +57,6 @@ def build_config_router(
         """Re-resolve a node's builder form for its currently-set discriminator fields
         ``{type, params}``: ports + model family + op-specific param switches (so picking
         ``transform.op`` or ``embed.modality`` re-renders the right fields/choices)."""
-        from ..form_builder import resolve_node_form
 
         node_type = payload.get("type") or payload.get("op")
         if not node_type:
@@ -62,36 +66,15 @@ def build_config_router(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @router.get(
-        "/api/graph/template/{mode}", summary="Starter graph for a template"
-    )
-    def graph_template_endpoint(mode: str) -> Dict[str, Any]:
-        """A template's default DAG as a canvas seed: nodes (id/type/params), the resolved
-        data bindings (artifact + producer — what the auto-wiring derived, so the canvas
-        draws *real* edges), and topological levels for layout. The user starts from a
-        working graph and only swaps models/params per node."""
-        try:
-            graph = graph_template(mode)
-        except (ValueError, KeyError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        # field-aware contract (ports/label/family/switches) per node so the canvas renders an
-        # operator by its discriminator fields — the shared render_node shape.
-        return graph_render_payload(graph, lambda n: render_node(n, dict(n.params or {})))
-
     @router.post(
         "/api/graph/from-config",
         summary="Load a YAML config onto the builder canvas (round-trip)",
     )
     def graph_from_config_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse a node-centric (or legacy) YAML config and return the builder canvas seed for
-        its DAG — nodes with their configured models/params + the resolved edges — so an
-        existing experiment can be opened in the builder, edited, and re-run. A parse / build
-        error is a 400. ``validate=False`` so a partial config still loads for editing.
-        """
+        """Parse a node-centric (or legacy) YAML config into the builder canvas seed for its DAG
+        (nodes+edges) so an existing experiment can be reopened in the builder; a parse/build
+        error is a 400, and validation is skipped so a partial config still loads for editing."""
         import yaml as _yaml
-
-        from evaluator.config import EvaluationConfig
-        from evaluator.config.graph_config import build_evaluation_config_kwargs
 
         text = payload.get("yaml") or ""
         if not str(text).strip():
@@ -112,33 +95,23 @@ def build_config_router(
         summary="Serialize the canvas graph as a runnable config YAML (round-trip out)",
     )
     def graph_to_config_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """The inverse of /api/graph/from-config: wrap the builder canvas spec as a node-centric
-        config (``experiment`` + ``graph`` + optional ``llm``) and return it as YAML — a
-        shareable, CLI-runnable artifact, re-loadable via "Load a YAML config". Validated by
-        building the DAG (pure topology, no models); an unbuildable graph is a 400.
-        """
+        """The inverse of /api/graph/from-config: serialize the canvas spec as a runnable
+        node-centric config (``experiment`` + ``graph`` + optional ``llm``) YAML; validated by
+        building the DAG (no models), so an unbuildable graph is a 400."""
         import copy
 
         import yaml as _yaml
-
-        from evaluator.config import EvaluationConfig
-        from evaluator.config.graph_config import build_evaluation_config_kwargs
-        from evaluator.pipeline import build_graph_for_config
-
-        from evaluator.webapi.form_builder import lift_single_source_dataset
-        from evaluator.webapi.form_config import _GRAPH_SPEC_KEYS
 
         spec = payload.get("spec") or {}
         name = str(payload.get("experiment_name") or "builder_export").strip() or "builder_export"
         # deep-copy: lift_single_source_dataset strips the dataset_source node in place
         graph = copy.deepcopy({k: spec[k] for k in _GRAPH_SPEC_KEYS if k in spec})
         graph.pop("mode", None)  # the canvas label is derived from nodes, not exported as a key
-        from evaluator.webapi.form_config import _strip_display_params
 
         _strip_display_params(graph.get("nodes") or [])
         if not graph.get("nodes"):
             raise HTTPException(status_code=400, detail="The graph has no nodes to export.")
-        # Explicit wiring (E5): the canvas connections ARE the edges — export keeps every one.
+        # Explicit wiring: the canvas connections ARE the edges — export keeps every one.
         if not graph.get("edges"):
             graph.pop("edges", None)
         # A single registered-dataset source lifts to a clean top-level `dataset:` block (the node
@@ -161,12 +134,8 @@ def build_config_router(
 
     @router.post("/api/report/metrics-table", summary="Tidy branch×metric table for a report")
     def report_metrics_table_endpoint(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """CLI/web parity (§6): return the flat metrics table + per-query trace count for a
-        posted report dict, the shapes a dashboard/dataframe wants from the nested report."""
-        from evaluator.analysis.report_export import (
-            report_query_traces,
-            report_to_metrics_table,
-        )
+        """CLI/web parity: return the flat metrics table + per-query trace count for a posted
+        report dict — the shapes a dashboard/dataframe wants from the nested report."""
 
         report = payload.get("report", payload)
         return {

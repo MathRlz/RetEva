@@ -1,12 +1,7 @@
-"""Corpus embedding + retrieval-index build (extracted from evaluation_service).
+"""Corpus embedding + retrieval-index build.
 
-Two surfaces:
-- ``build_corpus_index`` — the combined ``corpus_index`` node path (embed + index in one
-  step, vector-DB cache keyed by store + strategy). Behavior-frozen (M1c parity gate).
-- ``embed_corpus`` / ``build_index_from_vectors`` — the §4 split: ``corpus_embedding``
-  produces a :class:`CorpusVectors` artifact (cached independently of the store backend),
-  ``vector_db`` builds the per-node store from it.
-"""
+Two surfaces: ``build_corpus_index`` (combined embed+index) and
+``embed_corpus``/``build_index_from_vectors`` (split ``CorpusVectors``, cached independently)."""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,7 +12,7 @@ import numpy as np
 from ..config import EvaluationConfig
 from ..config.types import enum_to_str
 from ..errors import ConfigurationError
-from ..evaluation.load_info import LoadInfo
+from ..core.load_info import LoadInfo
 from ..logging_config import get_logger
 from ..storage.cache import CacheManager
 from ..storage.cache_keys import (
@@ -29,6 +24,9 @@ from ..storage.cache_keys import (
     retrieval_fingerprint,
     vector_db_manifest_key,
 )
+from ..datasets.core import load_audio_file
+from .audio import synthesis
+from ..utils.progress import progress_iter
 
 
 @dataclass
@@ -94,11 +92,11 @@ def _retrieval_strategy_dict(vector_db) -> Dict[str, Any]:
     }
 
 
-def _vector_db_cache_key(
-    config: EvaluationConfig, retrieval_pipeline: Any, corpus: List[Any]
-) -> str:
+def _corpus_dataset_fp(config: EvaluationConfig, corpus: List[Any]) -> str:
+    """Dataset fingerprint for a corpus-derived cache key: dataset identity plus what the
+    corpus itself contributes (its signature and size)."""
     dataset_identity, source = _resolve_dataset_identity(config)
-    dataset_fp = dataset_fingerprint(
+    return dataset_fingerprint(
         dataset_identity=dataset_identity,
         trace_limit=config.data.trace_limit,
         source={
@@ -107,20 +105,38 @@ def _vector_db_cache_key(
             "corpus_size": len(corpus),
         },
     )
-    model_fp = model_fingerprint(
-        model_name=config.model.text_emb_model_name
+
+
+def _text_embedder_fp(
+    config: EvaluationConfig,
+    *,
+    model_name: Optional[str] = None,
+    model_type: Optional[str] = None,
+    device: Optional[str] = None,
+) -> str:
+    """Model fingerprint of the text embedder, each field overridable by the caller."""
+    return model_fingerprint(
+        model_name=model_name
+        or config.model.text_emb_model_name
         or config.model.text_emb_model_type
         or "unknown",
-        model_type=config.model.text_emb_model_type,
-        inference={"device": config.model.text_emb_device},
+        model_type=model_type or config.model.text_emb_model_type,
+        inference={"device": device or config.model.text_emb_device},
     )
+
+
+def _vector_db_cache_key(
+    config: EvaluationConfig, retrieval_pipeline: Any, corpus: List[Any]
+) -> str:
+    dataset_fp = _corpus_dataset_fp(config, corpus)
+    model_fp = _text_embedder_fp(config)
     retrieval_fp = retrieval_fingerprint(
         vector_store_type=enum_to_str(config.vector_db.type),
         retrieval_strategy=_retrieval_strategy_dict(config.vector_db),
     )
     preprocess_fp = preprocessing_fingerprint(
         {
-            "pipeline_mode": config.graph_template,
+            "pipeline_mode": config.graph_label,
             "query_optimization_enabled": config.query_optimization.enabled,
         }
     )
@@ -140,29 +156,12 @@ def _corpus_embeddings_cache_key(
     model_type: Optional[str] = None,
     device: Optional[str] = None,
 ) -> str:
-    """Store-agnostic cache key for the embedded corpus (split path).
-
-    Same dataset/model fingerprint inputs as ``_vector_db_cache_key`` but without the
-    retrieval/store and preprocessing fingerprints — two runs differing only in
-    ``vector_db`` settings share the embeddings.
-    """
-    dataset_identity, source = _resolve_dataset_identity(config)
-    dataset_fp = dataset_fingerprint(
-        dataset_identity=dataset_identity,
-        trace_limit=config.data.trace_limit,
-        source={
-            **source,
-            "corpus_signature": _corpus_signature(corpus),
-            "corpus_size": len(corpus),
-        },
-    )
-    model_fp = model_fingerprint(
-        model_name=model_name
-        or config.model.text_emb_model_name
-        or config.model.text_emb_model_type
-        or "unknown",
-        model_type=model_type or config.model.text_emb_model_type,
-        inference={"device": device or config.model.text_emb_device},
+    """Store-agnostic cache key for the embedded corpus (split path): same fingerprint inputs
+    as ``_vector_db_cache_key`` minus retrieval/store/preprocessing, so runs differing only in
+    ``vector_db`` settings share the embeddings."""
+    dataset_fp = _corpus_dataset_fp(config, corpus)
+    model_fp = _text_embedder_fp(
+        config, model_name=model_name, model_type=model_type, device=device
     )
     return corpus_embeddings_manifest_key(dataset_fp=dataset_fp, model_fp=model_fp)
 
@@ -177,17 +176,13 @@ def embed_corpus(
     load_info: Optional[LoadInfo] = None,
     corpus: Optional[List[Any]] = None,
 ) -> CorpusVectors:
-    """Embed the text corpus → :class:`CorpusVectors` (the ``corpus_embedding`` node).
-
-    Caches ``(vectors, payloads)`` in the vector-DB cache category under a
-    store-agnostic key, so backends can vary per ``vector_db`` node without
-    re-embedding. ``model_identity`` (``{model_name, model_type, device}``) names the
-    per-node embedder when the node overrides the global one.
-    """
+    """Embed the text corpus -> :class:`CorpusVectors` (the ``corpus_embedding`` node); cached
+    under a store-agnostic key so backends can vary per ``vector_db`` node without re-embedding.
+    ``model_identity`` names the per-node embedder when it overrides the global one."""
     logger = get_logger(__name__)
     if corpus is None:
         # Bus-first callers pass the corpus artifact (possibly transformed by a
-        # corpus-axis node, §4.1 T2); this is the dataset fallback.
+        # corpus-axis node); this is the dataset fallback.
         if not hasattr(dataset, "get_corpus"):
             raise ConfigurationError("corpus_embedding requires a dataset with a corpus")
         corpus = dataset.get_corpus()
@@ -251,12 +246,9 @@ def embed_corpus(
 
 
 def merge_corpus_vectors(cvs: List[CorpusVectors]) -> CorpusVectors:
-    """Merge multiple embedded corpora into one (multi-input ``vector_db``).
-
-    Hard-fails on an embedding-space mismatch (§4 ``V[s]``: dotting vectors from
-    different spaces is meaningless) or a dimension mismatch. Payload order is
-    producer order (oldest→newest), so doc identity stays stable across runs.
-    """
+    """Merge multiple embedded corpora into one (multi-input ``vector_db``); hard-fails on an
+    embedding-space or dimension mismatch. Payload order is producer order (oldest->newest),
+    so doc identity stays stable across runs."""
     if not cvs:
         raise ValueError("merge_corpus_vectors needs at least one CorpusVectors")
     if len(cvs) == 1:
@@ -286,7 +278,7 @@ def merge_corpus_vectors(cvs: List[CorpusVectors]) -> CorpusVectors:
 def build_index_from_vectors(retrieval_pipeline, cv: CorpusVectors) -> None:
     """Build the retrieval index from pre-embedded corpus vectors (``vector_db`` node)."""
     retrieval_pipeline.build_index(embeddings=cv.vectors, metadata=cv.payloads)
-    # Tag the index with the space it holds (2b) so the retrieval node can assert the query is
+    # Tag the index with the space it holds so the retrieval node can assert the query is
     # comparable before dotting. None (unresolved corpus space) leaves the guard a no-op.
     retrieval_pipeline.index_space_id = cv.space
 
@@ -300,20 +292,13 @@ def build_corpus_index(
     cache_manager: CacheManager | None = None,
     load_info: Optional[LoadInfo] = None,
 ):
-    """Embed the corpus and build the retrieval index when the mode retrieves.
+    """Embed the corpus and build the retrieval index when the mode retrieves; runs after the
+    model pipelines are built (TTS already offloaded).
 
-    Runs after the model pipelines are built (TTS already offloaded).
-
-    KNOWN LIMITATION: ``audio_emb_pipeline``/``text_emb_pipeline`` here are always the single
-    SHARED pipeline factory.py built from the flat ``config.model`` default — never a per-branch
-    resolved one. A ``corpus_embedding`` node carries no ``params.model`` of its own, so it
-    never triggers the executor's per-node override (``_node_pipeline``); the branch expansion's
-    CSE always collapses it to one shared instance regardless of how many distinct branch-side
-    embedding models exist upstream. A branched config that genuinely needs distinct corpus
-    embeddings per branch is unsupported today — the branches must share a corpus embedding
-    space (a top-level ``nodes.<role>`` default is required precisely so this shared pipeline is
-    buildable; see ``configs/apm_admed_all_models.yaml``'s base ``nodes.audio_embedding`` block).
-    """
+    KNOWN LIMITATION: ``audio_emb_pipeline``/``text_emb_pipeline`` are always the single shared
+    pipeline built from the flat ``config.model`` default, never a per-branch resolved one — a
+    branched config needing distinct corpus embeddings per branch is unsupported; branches must
+    share one corpus embedding space (set via a top-level ``nodes.<role>`` default)."""
     logger = get_logger(__name__)
 
     if retrieval_pipeline is not None and hasattr(dataset, "get_corpus"):
@@ -386,15 +371,9 @@ def build_corpus_index(
 def embed_corpus_audio(
     config: EvaluationConfig, dataset, audio_emb_pipeline
 ) -> Optional[CorpusVectors]:
-    """Audio-corpus path: TTS-synthesize missing corpus audio, then audio-embed.
-
-    Extracted verbatim from the former combined ``corpus_index`` audio branch
-    (uncached, like before). Returns ``None`` (after a warning) when no corpus
-    audio could be synthesized/loaded — the caller publishes nothing and
-    retrieval degrades exactly as the combined node did.
-    """
-    from ..datasets.core import load_audio_file
-    from ..pipeline.audio.synthesis import AudioSynthesizer
+    """Audio-corpus path: TTS-synthesize missing corpus audio, then audio-embed (uncached).
+    Returns ``None`` when no corpus audio could be synthesized/loaded — retrieval degrades
+    accordingly."""
 
     logger = get_logger(__name__)
     corpus = dataset.get_corpus() if hasattr(dataset, "get_corpus") else []
@@ -403,7 +382,7 @@ def embed_corpus_audio(
             "Retrieval mode requires non-empty corpus. Set data.corpus_path "
             "to JSON/JSONL corpus file with doc_id/text fields."
         )
-    synthesizer = AudioSynthesizer(config.audio_synthesis)
+    synthesizer = synthesis.AudioSynthesizer(config.audio_synthesis)
     corpus_audio_dir = (
         config.audio_synthesis.output_dir + "/corpus"
         if config.audio_synthesis.output_dir
@@ -413,8 +392,6 @@ def embed_corpus_audio(
         import os
 
         os.makedirs(corpus_audio_dir, exist_ok=True)
-
-    from ..utils.progress import progress_iter
 
     audio_arrays, sampling_rates = [], []
     # TTS synthesis is slow per doc → always show the bar (min_items=1).

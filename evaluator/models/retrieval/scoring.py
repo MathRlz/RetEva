@@ -1,9 +1,5 @@
-"""Shared payload/score primitives for retrieval strategies.
-
-Single home for the helpers that were hand-copied between the retrieval
-pipeline and the fusion registry: payload text/key extraction, whitespace
-tokenization, and min-max score normalization.
-"""
+"""Shared payload/score primitives for retrieval strategies: payload text/key extraction,
+whitespace tokenization, and min-max score normalization."""
 
 from __future__ import annotations
 

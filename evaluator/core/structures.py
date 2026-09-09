@@ -5,17 +5,7 @@ import numpy as np
 
 @dataclass
 class QuerySample:
-    """
-    Single query sample with audio and ground truth transcription.
-
-    Attributes:
-        audio_array: Float32 waveform numpy array
-        sampling_rate: Audio sampling rate (e.g., 16000)
-        transcription: Ground truth text transcription
-        query_id: Unique identifier for this query
-        medical_terms: Optional list of annotated medical terms in the query
-        metadata: Optional additional metadata
-    """
+    """Single query sample with audio and ground truth transcription."""
     audio_array: np.ndarray  # float32 waveform
     sampling_rate: int
     transcription: str
@@ -25,7 +15,6 @@ class QuerySample:
     language: str = field(default="en")
 
     def __post_init__(self):
-        """Validate and convert audio array to float32."""
         if not isinstance(self.audio_array, np.ndarray):
             self.audio_array = np.array(self.audio_array, dtype=np.float32)
         elif self.audio_array.dtype != np.float32:
@@ -34,15 +23,7 @@ class QuerySample:
 
 @dataclass
 class Document:
-    """
-    Single document in the retrieval corpus.
-
-    Attributes:
-        doc_id: Unique identifier for this document
-        text: Document text content
-        title: Optional document title
-        metadata: Optional additional metadata
-    """
+    """Single document in the retrieval corpus."""
     doc_id: str
     text: str
     title: str = ""
@@ -51,16 +32,7 @@ class Document:
 
 @dataclass
 class TranscriptionResult:
-    """
-    Output from a Speech-to-Text model.
-
-    Attributes:
-        text: Transcribed text
-        confidence: Optional overall confidence score
-        word_timestamps: Optional list of word-level timestamps
-        processing_time: Time taken for transcription in seconds
-        raw_output: Optional model-specific raw output
-    """
+    """Output from a Speech-to-Text model."""
     text: str
     confidence: Optional[float] = None
     word_timestamps: Optional[List[Dict[str, Any]]] = None
@@ -70,14 +42,7 @@ class TranscriptionResult:
 
 @dataclass
 class RetrievalResult:
-    """
-    Single retrieval result for a query.
-
-    Attributes:
-        doc_id: Document identifier
-        score: Retrieval score (higher = more relevant)
-        rank: Rank position (1-indexed)
-    """
+    """Single retrieval result for a query; score is higher-is-more-relevant."""
     doc_id: str
     score: float
     rank: int

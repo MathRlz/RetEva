@@ -5,67 +5,23 @@ from typing import Optional
 
 @dataclass
 class EmbeddingFusionConfig:
-    """
-    Configuration for audio-text embedding fusion.
-
-    When both audio and text embedding pipelines are available, this config
-    controls how to fuse the embeddings for improved retrieval performance.
-
-    Attributes:
-        enabled: Whether embedding fusion is enabled. Default: False.
-        audio_weight: Weight for audio embeddings (0.0-1.0). Default: 0.5.
-        text_weight: Weight for text embeddings (0.0-1.0). Default: 0.5.
-        fusion_method: Method for combining embeddings. Default: "weighted".
-            Options:
-            - "weighted": Weighted average of normalized embeddings
-            - "concatenate": Concatenate embeddings (may require dimension reduction)
-            - "max_pool": Element-wise maximum across embeddings
-            - "average": Simple average (ignores weights)
-        normalize_before_fusion: Whether to L2-normalize embeddings before fusion. Default: True.
-        dimension_reduction: Method for reducing concatenated dimensions. Default: None.
-            Options: None, "pca", "random_projection", "learned" (future).
-        target_dim: Target dimension after reduction (only for concatenate). Default: None.
-        require_same_dimensions: If True, require audio and text embeddings to have same
-            dim. Default: False.
-
-    Examples:
-        >>> # Balanced audio-text fusion
-        >>> config = EmbeddingFusionConfig(
-        ...     enabled=True,
-        ...     audio_weight=0.5,
-        ...     text_weight=0.5,
-        ...     fusion_method="weighted"
-        ... )
-        >>>
-        >>> # Audio-dominant fusion
-        >>> config = EmbeddingFusionConfig(
-        ...     enabled=True,
-        ...     audio_weight=0.7,
-        ...     text_weight=0.3
-        ... )
-        >>>
-        >>> # Concatenation with dimension reduction
-        >>> config = EmbeddingFusionConfig(
-        ...     enabled=True,
-        ...     fusion_method="concatenate",
-        ...     dimension_reduction="pca",
-        ...     target_dim=1024
-        ... )
-    """
+    """Configuration for audio-text embedding fusion: how to combine audio and text
+    embedding pipelines for retrieval."""
     enabled: bool = False
     # embedding = fuse the audio + text VECTORS into one retrieval (the fusion node);
     # result = retrieve each stream separately, then fuse the RANKED results (result_fusion).
     level: str = "embedding"  # embedding | result
-    audio_weight: float = 0.5
-    text_weight: float = 0.5
-    fusion_method: str = "weighted"  # weighted | concatenate | max_pool | average
-    normalize_before_fusion: bool = True
+    audio_weight: float = 0.5  # 0.0-1.0
+    text_weight: float = 0.5  # 0.0-1.0
+    # weighted (avg) | concatenate (may need dimension_reduction) | max_pool (elementwise
+    # max) | average (ignores weights)
+    fusion_method: str = "weighted"
+    normalize_before_fusion: bool = True  # L2-normalize
     dimension_reduction: Optional[str] = None  # None | pca | random_projection
-    target_dim: Optional[int] = None
+    target_dim: Optional[int] = None  # required when dimension_reduction is set
     require_same_dimensions: bool = False
 
     def __post_init__(self):
-        """Validate configuration."""
         if not 0.0 <= self.audio_weight <= 1.0:
             raise ValueError(f"audio_weight must be in [0, 1], got {self.audio_weight}")
         if not 0.0 <= self.text_weight <= 1.0:

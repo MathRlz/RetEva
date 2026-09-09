@@ -1,4 +1,4 @@
-"""M6: similarity threshold is applied to the ORIGINAL retrieval scores, before MMR rewrites
+"""Similarity threshold is applied to the ORIGINAL retrieval scores, before MMR rewrites
 them to λ·rel−(1−λ)·div (which isn't comparable to a similarity cutoff)."""
 
 import numpy as np
@@ -28,8 +28,8 @@ def test_threshold_filters_retrieval_score_not_mmr_score():
         np.array([1.0, 0.0], dtype="float32"), [("d0", 1.0), ("d1", 0.99)], k=5
     )
     ids = [p for p, _ in out]
-    # under the fix, d1 survives (its retrieval score 0.99 > 0.5); the old order dropped it
-    # because its MMR-adjusted score fell below the threshold
+    # d1 survives because its retrieval score (0.99) is compared against the threshold, not
+    # the MMR-adjusted score, which would otherwise fall below it
     assert ids == ["d0", "d1"]
 
 

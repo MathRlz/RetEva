@@ -2,13 +2,9 @@ from typing import Any, List, Dict
 import numpy as np
 import logging
 
-logger = logging.getLogger(__name__)
+from ..constants import RETRIEVAL_DEPTH
 
-# The rank cutoffs the report always publishes (recall/precision/ndcg @ each). The retriever
-# must return at least the deepest one, else `retrieved[:10]` is a `[:k]` slice in disguise and
-# `@10` silently equals `@k` — the report would print a cutoff it never measured.
-IR_CUTOFFS = (1, 5, 10)
-RETRIEVAL_DEPTH = max(IR_CUTOFFS)
+logger = logging.getLogger(__name__)
 
 
 def report_depth(k: Any) -> int:
@@ -17,15 +13,8 @@ def report_depth(k: Any) -> int:
 
 
 def reciprocal_rank(retrieved: List[str], relevant: Dict[str, int]) -> float:
-    """Compute reciprocal rank of first relevant document.
-
-    Args:
-        retrieved: List of retrieved document IDs in rank order
-        relevant: Dict mapping doc IDs to relevance scores (>0 = relevant)
-
-    Returns:
-        Reciprocal rank (1/position of first relevant doc, or 0 if none)
-    """
+    """Reciprocal rank of the first relevant doc (1/position); 0.0 if none (score > 0 counts
+    as relevant)."""
     if not retrieved:
         return 0.0
     if not relevant:
@@ -39,16 +28,7 @@ def reciprocal_rank(retrieved: List[str], relevant: Dict[str, int]) -> float:
 
 
 def precision_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
-    """Compute precision at rank k.
-
-    Args:
-        retrieved: List of retrieved document IDs
-        relevant: Dict mapping doc IDs to relevance scores
-        k: Cutoff rank
-
-    Returns:
-        Fraction of top-k results that are relevant
-    """
+    """Precision at k: fraction of the top-k retrieved docs that are relevant."""
     if k <= 0:
         logger.warning(f"Invalid k={k}, returning 0")
         return 0.0
@@ -56,16 +36,7 @@ def precision_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> fl
 
 
 def recall_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
-    """Compute recall at rank k.
-
-    Args:
-        retrieved: List of retrieved document IDs
-        relevant: Dict mapping doc IDs to relevance scores
-        k: Cutoff rank
-
-    Returns:
-        Fraction of relevant docs found in top-k results
-    """
+    """Recall at k: fraction of relevant docs found in the top-k results."""
     if k <= 0:
         logger.warning(f"Invalid k={k}, returning 0")
         return 0.0
@@ -78,21 +49,9 @@ def recall_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float
 
 
 def dcg_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
-    """Compute Discounted Cumulative Gain at rank k.
-
-    Linear gain (``rel / log2(rank+1)``, Järvelin) — the trec_eval ``ndcg_cut`` definition,
-    so graded results are comparable with BEIR/pytrec_eval-reported numbers; identical to the
-    former exponential gain (``2^rel − 1``) on binary grades. Cross-checked per query against
-    pytrec_eval in ``tests/test_ir_reference_impl.py``.
-
-    Args:
-        retrieved: List of retrieved document IDs
-        relevant: Dict mapping doc IDs to relevance scores
-        k: Cutoff rank
-
-    Returns:
-        DCG@k score
-    """
+    """Discounted Cumulative Gain at rank k: linear gain ``rel / log2(rank+1)`` (Järvelin;
+    trec_eval's ``ndcg_cut`` definition, for comparability with BEIR/pytrec_eval numbers)."""
+    # cross-checked per query against pytrec_eval in tests/test_ir_reference_impl.py
     if k <= 0 or not retrieved:
         return 0.0
 
@@ -101,16 +60,7 @@ def dcg_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
 
 
 def ndcg_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
-    """Compute Normalized Discounted Cumulative Gain at rank k.
-
-    Args:
-        retrieved: List of retrieved document IDs
-        relevant: Dict mapping doc IDs to relevance scores
-        k: Cutoff rank
-
-    Returns:
-        NDCG@k score (0-1, higher is better)
-    """
+    """Normalized Discounted Cumulative Gain at rank k, in [0, 1] (higher is better)."""
     if k <= 0:
         logger.warning(f"Invalid k={k}, returning 0")
         return 0.0
@@ -127,15 +77,6 @@ def ndcg_at_k(retrieved: List[str], relevant: Dict[str, int], k: int) -> float:
 
 
 def average_precision(retrieved: List[str], relevant: Dict[str, int]) -> float:
-    """Compute Average Precision.
-
-    Args:
-        retrieved: List of retrieved document IDs
-        relevant: Dict mapping doc IDs to relevance scores
-
-    Returns:
-        Average precision score
-    """
     if not retrieved:
         return 0.0
 

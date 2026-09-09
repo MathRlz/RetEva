@@ -1,15 +1,15 @@
-"""R5: a config/canvas author authors only *meaningful* nodes (retrieval/embedding/...) and
-`complete_structural_plumbing` (`pipeline/graph/modes.py`, shared by the CLI YAML path and the
+"""A config/canvas author writes only *meaningful* nodes (retrieval/embedding/...) and
+`complete_structural_plumbing` (`pipeline/graph/build.py`, shared by the CLI YAML path and the
 webapi builder) derives the *structural* plumbing (metrics/traces/finalize) around them. For a
 graph comparing several paths (e.g. multiple ASR models or audio encoders — several meaningful
-`retrieval` nodes in one flat graph), appending only ONE shared structural chain silently merged
-every variant's `retrieved` into it. Each retrieval node must get its own private chain instead.
+`retrieval` nodes in one flat graph), one shared structural chain would merge every variant's
+`retrieved` into it; each retrieval node gets its own private chain instead.
 """
 
 import pytest
 
 from evaluator.pipeline import build_graph_for_config
-from evaluator.pipeline.graph.modes import (
+from evaluator.pipeline.graph.build import (
     _terminal_variant_ids,
     _topo_sort_nodes,
     complete_structural_plumbing,
@@ -132,10 +132,9 @@ def _shared_subset_ancestor_spec():
 
 
 def test_transcription_metrics_binds_only_to_its_own_variants_asr():
-    """The bug this pins: asr_a is shared by retrieval_a1 AND retrieval_a2 (not all 4
-    variants, not exclusively 1) — the old ownership model never excluded it from
-    retrieval_b1/b2's scope either, so their transcription_metrics auto-bound to BOTH
-    asr_a and asr_b instead of just their own asr_b."""
+    """asr_a is shared by retrieval_a1 AND retrieval_a2 (not all 4 variants, not exclusively
+    1); retrieval_b1/b2's scope excludes it, so their transcription_metrics auto-binds only
+    to their own asr_b, never to asr_a."""
     graph = _build(_shared_subset_ancestor_spec())
 
     def transcription_metrics_for(retrieval_id):
@@ -156,19 +155,19 @@ def test_transcription_metrics_binds_only_to_its_own_variants_asr():
 
     asr_producers_a1 = {p for art, p in tm_a1.bindings if art == "query_text"}
     asr_producers_b1 = {p for art, p in tm_b1.bindings if art == "query_text"}
-    # dataset_source's own native query_text is a legitimate shared-global candidate (B2)
-    # and expected in every variant's set; the bug was picking up the SIBLING asr too.
+    # dataset_source's own native query_text is a legitimate shared-global candidate and
+    # expected in every variant's set; picking up the SIBLING asr as well would be wrong.
     assert "asr_a" in asr_producers_a1 and "asr_b" not in asr_producers_a1
     assert "asr_b" in asr_producers_b1 and "asr_a" not in asr_producers_b1
-    # a1 and a2 legitimately share asr_a (same real ancestor) — sharing itself is fine,
-    # the bug was b1/b2 ALSO picking up asr_a despite having no relationship to it.
+    # a1 and a2 legitimately share asr_a (same real ancestor) — sharing itself is fine, but
+    # b1/b2 must not ALSO pick up asr_a despite having no relationship to it.
     asr_producers_a2 = {p for art, p in tm_a2.bindings if art == "query_text"}
     assert "asr_a" in asr_producers_a2 and "asr_b" not in asr_producers_a2
 
 
 def test_single_retrieval_node_graph_keeps_unsuffixed_ids():
-    """Byte-parity: the common single-variant case must be untouched by the R5 fix — plain
-    "metrics"/"finalize" ids, not "metrics_retrieval"/"finalize_retrieval"."""
+    """The common single-variant case keeps plain "metrics"/"finalize" ids, not
+    "metrics_retrieval"/"finalize_retrieval"."""
     spec = _two_variant_meaningful_spec()
     spec["nodes"] = [n for n in spec["nodes"] if n != "audio_embedding_m4t"
                       and (not isinstance(n, dict) or n["id"] not in
@@ -267,10 +266,10 @@ def test_complete_with_plumbing_orders_build_query_traces_before_answer_judge():
     build_evaluation_config_kwargs({"graph": graph})
 
 
-def test_complete_with_plumbing_falls_back_to_generic_template_for_text_only_retrieval():
-    """label_from_graph returns None for a graph with neither asr nor audio_embedding (a pure
-    text-retrieval graph, e.g. configs/pubmed_qa_rag_fulltext.yaml) — plumbing completion must
-    not silently no-op just because there's no NAMED template for that exact shape."""
+def test_complete_with_plumbing_falls_back_to_the_retrieval_chain_for_text_only_retrieval():
+    """A graph with neither asr nor audio_embedding (pure text retrieval, e.g.
+    configs/pubmed_qa_rag_fulltext.yaml) has no run label — plumbing completion must not
+    silently no-op just because that shape is unlabelled."""
     graph = {
         "nodes": [
             "dataset_source",
@@ -288,9 +287,9 @@ def test_complete_with_plumbing_falls_back_to_generic_template_for_text_only_ret
             {"from": "vector_db", "to": "retrieval", "input": "vector_index"},
         ],
     }
-    from evaluator.pipeline.graph.modes import label_from_graph
+    from evaluator.pipeline.graph.build import graph_label
 
-    assert label_from_graph(graph) is None  # confirms the gap this fallback closes
+    assert graph_label(graph) is None  # confirms the gap this fallback closes
     complete_structural_plumbing(graph)
     ids = [n if isinstance(n, str) else n["id"] for n in graph["nodes"]]
     assert "metrics" in ids and "finalize" in ids
@@ -353,10 +352,10 @@ def test_complete_with_plumbing_per_variant_reuses_an_existing_dangling_referenc
     assert "build_query_traces_retrieval_dense" not in ids
 
 
-# ── Moving derivation into core (pipeline/graph/modes.py): the CLI YAML path gets it too ──
+# ── Derivation lives in core (pipeline/graph/build.py), so the CLI YAML path gets it too ──
 
 def test_cli_yaml_config_can_omit_structural_nodes_entirely():
-    """The actual deliverable: `complete_structural_plumbing` is now wired into
+    """`complete_structural_plumbing` is wired into
     `config/graph_config.py:build_evaluation_config_kwargs` itself — the single chokepoint BOTH
     `config/loading.py:build_from_yaml` (CLI, `EvaluationConfig.from_yaml`) and the webapi
     builder already call — so a hand-authored CLI YAML config can omit the metrics/finalize
@@ -400,12 +399,10 @@ def test_cli_yaml_config_can_omit_structural_nodes_entirely():
 #    against configs whose full hand-authored structural set already exists) ──
 
 def test_transcription_metrics_excluded_when_no_asr_node_present():
-    """The generic "asr_text_retrieval" stand-in template (used when label_from_graph returns
-    None for a pure-text-retrieval graph) unconditionally includes `transcription_metrics` (an
-    ASR-specific measure with no declared input port, so it can't be filtered by input
-    satisfiability) -- wrong when there's no `asr` node at all. Caught by
-    `test_graph_golden.py`'s byte-exact comparison against `configs/pubmed_qa_rag_fulltext.yaml`
-    (a real config with its own correct, ASR-free structural set already written by hand)."""
+    """`transcription_metrics` is an ASR-specific measure with no declared input port, so it
+    can't be filtered by input satisfiability — the derivation must gate it on an `asr` node
+    being present. Caught by `test_graph_golden.py`'s byte-exact comparison against
+    `configs/pubmed_qa_rag_fulltext.yaml` (a real ASR-free config)."""
     graph = {
         "nodes": [
             "dataset_source",
@@ -496,16 +493,13 @@ def test_converging_variant_roots_get_one_shared_chain_not_per_variant_ones():
     assert not any(isinstance(i, str) and i.startswith("finalize_") for i in ids)
 
 
-# ── Bug found while live-testing the builder's new rename feature: renaming a meaningful node
-#    to a name a structural node also needs must error clearly, not silently corrupt ──
-
 def test_renaming_a_node_to_a_reserved_structural_id_errors_clearly():
     """A user can freely rename a canvas node (structural ids aren't on the canvas, so the
     client-side uniqueness check can't see the future collision) -- if they pick e.g. "metrics"
     for a `retrieval` node, `complete_structural_plumbing` must refuse loudly instead of
-    silently colliding. Before the fix: `_topo_sort_nodes`'s own id-keyed dict comprehensions
-    silently collapsed the duplicate, dropping the renamed node's edges onto the WRONG
-    (structural) node -- surfaced downstream as a confusing "node 'metrics' has no input port
+    silently colliding. `_topo_sort_nodes`'s own id-keyed dict comprehensions would otherwise
+    silently collapse the duplicate, dropping the renamed node's edges onto the WRONG
+    (structural) node -- surfacing downstream as a confusing "node 'metrics' has no input port
     'vector_index'" error instead of naming the real cause."""
     graph = {
         "nodes": [
@@ -513,7 +507,7 @@ def test_renaming_a_node_to_a_reserved_structural_id_errors_clearly():
             {"id": "corpus_embedding", "type": "corpus_embedding"},
             {"id": "vector_db", "type": "vector_db"},
             {"id": "text_embedding", "type": "text_embedding"},
-            # renamed from "retrieval" to "metrics" -- still type=retrieval, just a colliding id
+            # id "metrics" collides with the auto-derived structural node id, though type=retrieval
             {"id": "metrics", "type": "retrieval"},
         ],
         "edges": [
@@ -531,10 +525,10 @@ def test_renaming_a_node_to_a_reserved_structural_id_errors_clearly():
 
 
 def test_renaming_a_node_to_a_reserved_per_variant_structural_id_errors_clearly():
-    """Same bug, per-variant shape: a node renamed to collide with the id a variant's OWN
-    structural chain would need (e.g. "metrics_dense") must error, not be silently treated as
-    "already present" (the old `if new_id in all_ids: continue` trusted ANY existing node at
-    that id, regardless of kind)."""
+    """Per-variant shape: a node renamed to collide with the id a variant's OWN structural
+    chain would need (e.g. "metrics_dense") must error, not be silently treated as "already
+    present" (blindly trusting any existing node at that id, regardless of kind, would be
+    wrong)."""
     graph = {
         "nodes": [
             "dataset_source",

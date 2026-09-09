@@ -39,9 +39,8 @@ class _FakeSynthesizer:
 @pytest.fixture(autouse=True)
 def _patch_synthesizer(monkeypatch):
     _FakeSynthesizer.calls = []
-    # prepare.py does `from evaluator.pipeline.audio.synthesis import AudioSynthesizer`
-    # INSIDE the function body, re-fetching the name fresh on every call — patch the
-    # source module's attribute so that lazy import picks up the fake.
+    # prepare.py reaches the class through the module (``synthesis.AudioSynthesizer``),
+    # re-reading the attribute on every call — patch it on the source module.
     monkeypatch.setattr(
         "evaluator.pipeline.audio.synthesis.AudioSynthesizer", _FakeSynthesizer,
     )
@@ -69,7 +68,7 @@ def test_sibling_tts_variants_each_synthesize_their_own_audio(tmp_path):
 
     assert n_a == 2 and n_b == 2
     providers_called = {p for p, _ in _FakeSynthesizer.calls}
-    assert providers_called == {"xtts_v2", "piper"}  # THE bug: piper used to never run
+    assert providers_called == {"xtts_v2", "piper"}  # both providers must run — piper must not be skipped
     assert len(_FakeSynthesizer.calls) == 4  # 2 questions x 2 providers, no false cache hits
 
 

@@ -1,4 +1,4 @@
-"""M4: cache-key hashing is collision-safe for non-JSON-native args, and unchanged for the
+"""Cache-key hashing is collision-safe for non-JSON-native args, and unchanged for the
 JSON-native args every current caller passes (no cache invalidation)."""
 
 import hashlib

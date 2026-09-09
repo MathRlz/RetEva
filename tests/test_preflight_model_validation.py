@@ -7,6 +7,7 @@ from evaluator.config import EvaluationConfig
 from evaluator.errors import ConfigurationError
 from evaluator.evaluation.validation import validate_models
 from evaluator.pipeline import build_graph_for_config
+from tests.graph_test_helpers import mode_graph
 
 
 def _graph(cfg):
@@ -16,7 +17,7 @@ def _graph(cfg):
 def _minimal():
     # whisper + labse via the legacy template reference (the back-compat path under test)
     cfg = EvaluationConfig.from_dict({}, validate=False)
-    cfg.graph_override = {"template": "asr_text_retrieval"}
+    cfg.graph_override = mode_graph("asr_text_retrieval")
     cfg.model.asr_model_type = "whisper"
     cfg.model.text_emb_model_type = "labse"
     return cfg
@@ -24,7 +25,7 @@ def _minimal():
 
 def _audio_only():
     cfg = EvaluationConfig.from_dict({}, validate=False)
-    cfg.graph_override = {"template": "audio_emb_retrieval"}
+    cfg.graph_override = mode_graph("audio_emb_retrieval")
     cfg.model.audio_emb_model_type = "attention_pool"
     cfg.model.text_emb_model_type = "labse"
     cfg.model.audio_emb_dim = 768

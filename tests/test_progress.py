@@ -1,4 +1,4 @@
-"""Threshold-gated progress bar helper (audit C5/F27)."""
+"""Threshold-gated progress bar helper."""
 
 import io
 

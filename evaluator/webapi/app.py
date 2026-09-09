@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from evaluator import ConfigurationError, EvaluationConfig, run_evaluation
-from evaluator.services import ModelServiceProvider
+from evaluator.pipeline import ModelServiceProvider
 from evaluator.webapi.graph_store import GraphStore
 from evaluator.webapi.jobs import JobManager
 from evaluator.webapi.ui import build_ui_router

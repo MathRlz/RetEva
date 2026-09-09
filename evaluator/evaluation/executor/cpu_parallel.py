@@ -1,21 +1,6 @@
-"""Order-preserving parallel map for CPU-bound per-item stage work (Roadmap 4b).
-
-Today's intra-level concurrency (``executor/parallel.py``) is thread-based and exchanges
-artifacts through a shared in-process ``ctx`` — great for GPU/IO-bound *nodes*, but GIL-bound
-for CPU stages (correction / augmentation / metrics), and a process pool can't share that ctx.
-This is the orthogonal primitive: a parallel map over the per-item work *inside* one stage,
-which a ProcessPool can speed up because each item is independent.
-
-Two invariants make it safe to drop in for a stage's per-item loop:
-
-- **order-preserving** — results come back in input order regardless of backend (``map`` keeps
-  submission order), so downstream id↔value alignment is unchanged;
-- **determinism-neutral** — the per-item function must depend only on its own item (the engine's
-  per-item seeding, ``item_seed(seed, query_id, …)``, already guarantees this), so "sync",
-  "thread", and "process" produce identical results.
-
-Default backend is ``sync`` (today's in-line map), so this is inert until a stage opts in.
-"""
+"""Order-preserving parallel map for CPU-bound per-item stage work: a per-item unit is safe to
+run this way only if order-preserving and determinism-neutral (depends only on its own item,
+via per-item seeding). Default backend is ``sync``, so this is inert until a stage opts in."""
 
 from __future__ import annotations
 
@@ -39,11 +24,9 @@ def parallel_map(
     backend: str = "sync",
     workers: int = 0,
 ) -> List[Any]:
-    """Map ``fn`` over ``items``, returning results **in input order**.
-
-    ``backend``: ``"sync"`` (in-line list), ``"thread"`` (:class:`ThreadPoolExecutor`), or
-    ``"process"`` (:class:`ProcessPoolExecutor` — ``fn`` + items must be picklable). The first
-    worker exception propagates. An empty input returns ``[]``."""
+    """Map ``fn`` over ``items``, returning results in input order. ``backend="process"``
+    requires ``fn`` + items to be picklable. The first worker exception propagates; an empty
+    input returns ``[]``."""
     if backend not in BACKENDS:
         raise ValueError(f"cpu_stage_executor must be one of {BACKENDS}, got {backend!r}")
     items = list(items)
@@ -65,9 +48,8 @@ def resolve_cpu_backend(config: Any) -> Tuple[str, int]:
 
 def run_per_item(s: Any, fn: Callable, items: Sequence[Any], **bound: Any) -> List[Any]:
     """Map a picklable per-item ``fn`` over ``items`` via :func:`parallel_map`, resolving the
-    backend from the run config (``s.config``). ``**bound`` are bound onto ``fn`` with
-    ``functools.partial``. The single shape behind the 4b per-item stages (WER/CER, augment,
-    correct, optimize, augment_audio)."""
+    backend from the run config (``s.config``); ``**bound`` are bound onto ``fn`` via
+    ``functools.partial``."""
     import functools
 
     backend, workers = resolve_cpu_backend(s.config)

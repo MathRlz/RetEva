@@ -1,10 +1,8 @@
-"""B4's drift class, closed structurally by R3-P3 resolution.
-
-B4 added a drift-pin because each feature had a hand-maintained ``*_OVERLAY_KEYS`` list:
-a key that was not a real field crashed ``dataclasses.replace`` on the first branch that
-overrode it, and a field missing from the list silently ignored overrides forever. R3-P3
-deleted the lists — the overlay keys ARE the dataclass's fields now — so the drift cannot
-happen. These tests pin that property instead of the (gone) allowlists.
+"""A hand-maintained ``*_OVERLAY_KEYS`` allowlist per feature invited drift: a key that was
+not a real field crashed ``dataclasses.replace`` on the first branch that overrode it, and a
+field missing from the list silently ignored overrides forever. Overlay keys ARE the
+dataclass's fields — there is no separate list to drift out of sync — so that class of bug
+is impossible. These tests pin that property.
 """
 
 from dataclasses import fields, replace
@@ -16,7 +14,7 @@ from evaluator.config.audio_synthesis import AudioSynthesisConfig
 from evaluator.config.embedding_fusion import EmbeddingFusionConfig
 from evaluator.config.judge import JudgeConfig
 from evaluator.config.query_correction import QueryCorrectionConfig
-from evaluator.evaluation.node_config import DISCRIMINATOR_FIELDS, resolve_node_config
+from evaluator.config.node_config import DISCRIMINATOR_FIELDS, resolve_node_config
 
 CONFIGS = [
     ("correction", QueryCorrectionConfig),
@@ -77,8 +75,8 @@ def test_discriminators_never_overlay(name, config_cls):
 
 
 def test_resolution_never_crashes_on_a_bogus_param():
-    """The B4 defect (an allowlisted non-field) is impossible: unknown keys are skipped,
-    and a value that cannot be cast keeps the inherited one."""
+    """An allowlisted non-field cannot occur: unknown keys are skipped, and a value that
+    cannot be cast keeps the inherited one."""
     base = QueryCorrectionConfig(kb_max_distance=2)
     assert resolve_node_config(base, {"api_key": "x", "nope": 1}) is base
     assert resolve_node_config(base, {"kb_max_distance": "not-an-int"}) == replace(base)

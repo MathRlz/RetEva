@@ -1,10 +1,5 @@
-"""Advanced retrieval strategies for diversity and quality filtering.
-
-This module provides:
-- MaxMarginalRelevance (MMR) for result diversity
-- Similarity threshold filtering for quality control
-- Custom distance metrics for flexible similarity computation
-"""
+"""Advanced retrieval strategies: MMR for result diversity, similarity-threshold filtering,
+and pluggable distance metrics."""
 
 from enum import Enum
 from typing import Any, List, Tuple, Optional
@@ -32,16 +27,7 @@ def compute_similarity(
     b: np.ndarray,
     metric: DistanceMetric = DistanceMetric.COSINE
 ) -> float:
-    """Compute similarity between two vectors using specified metric.
-
-    Args:
-        a: First vector
-        b: Second vector
-        metric: Distance metric to use
-
-    Returns:
-        Similarity score (higher = more similar)
-    """
+    """Similarity between two vectors under ``metric`` (higher = more similar)."""
     a = np.asarray(a, dtype=np.float32).flatten()
     b = np.asarray(b, dtype=np.float32).flatten()
 
@@ -67,16 +53,8 @@ def compute_similarity_batch(
     candidates: np.ndarray,
     metric: DistanceMetric = DistanceMetric.COSINE
 ) -> np.ndarray:
-    """Compute similarity between query and multiple candidates.
-
-    Args:
-        query: Query vector of shape (dim,)
-        candidates: Candidate vectors of shape (n, dim)
-        metric: Distance metric to use
-
-    Returns:
-        Array of similarity scores of shape (n,)
-    """
+    """Similarity between ``query`` and each row of ``candidates`` under ``metric``
+    (higher = more similar); returns shape (n,)."""
     query = np.asarray(query, dtype=np.float32).flatten()
     candidates = np.asarray(candidates, dtype=np.float32)
 
@@ -107,27 +85,12 @@ def mmr_search(
     k: int,
     lambda_param: float = 0.5,
     metric: DistanceMetric = DistanceMetric.COSINE,
-    doc_payloads: Optional[List[Any]] = None,
     initial_scores: Optional[np.ndarray] = None,
 ) -> List[Tuple[int, float]]:
-    """Maximal Marginal Relevance search for diverse results.
-
-    MMR balances relevance to the query with diversity among selected documents.
-    Score = lambda * Sim(d, query) - (1-lambda) * max(Sim(d, selected))
-
-    Args:
-        query_emb: Query embedding vector
-        doc_embs: Document embedding matrix of shape (n_docs, dim)
-        k: Number of results to return
-        lambda_param: Balance between relevance (1.0) and diversity (0.0).
-            Higher values prioritize relevance, lower values prioritize diversity.
-        metric: Distance metric for similarity computation
-        doc_payloads: Optional payloads to return with indices
-        initial_scores: Optional pre-computed relevance scores to query
-
-    Returns:
-        List of (doc_index, mmr_score) tuples in selection order
-    """
+    """Maximal Marginal Relevance search: balances relevance to the query against diversity
+    among already-selected documents via
+    ``score = lambda * Sim(d, query) - (1-lambda) * max(Sim(d, selected))``.
+    ``lambda_param`` near 1.0 prioritizes relevance, near 0.0 prioritizes diversity."""
     query_emb = np.asarray(query_emb, dtype=np.float32).flatten()
     doc_embs = np.asarray(doc_embs, dtype=np.float32)
 
@@ -140,13 +103,11 @@ def mmr_search(
 
     k = min(k, n_docs)
 
-    # Compute relevance scores to query
     if initial_scores is not None:
         relevance_scores = np.asarray(initial_scores, dtype=np.float32)
     else:
         relevance_scores = compute_similarity_batch(query_emb, doc_embs, metric)
 
-    # Track selected and unselected indices
     selected_indices: List[int] = []
     selected_embs: List[np.ndarray] = []
     unselected = set(range(n_docs))
@@ -163,7 +124,6 @@ def mmr_search(
         for idx in unselected:
             relevance = relevance_scores[idx]
 
-            # Compute max similarity to already selected docs
             if selected_embs:
                 max_sim_to_selected = max(
                     compute_similarity(doc_embs[idx], sel_emb, metric)
@@ -172,7 +132,6 @@ def mmr_search(
             else:
                 max_sim_to_selected = 0.0
 
-            # MMR score
             mmr_score = lambda_param * relevance - (1 - lambda_param) * max_sim_to_selected
 
             if mmr_score > best_mmr_score:
@@ -196,26 +155,13 @@ def mmr_rerank(
     lambda_param: float = 0.5,
     metric: DistanceMetric = DistanceMetric.COSINE,
 ) -> List[Tuple[Any, float]]:
-    """Apply MMR reranking to existing retrieval results.
-
-    Args:
-        query_emb: Query embedding vector
-        results: List of (payload, score) tuples from initial retrieval
-        doc_embs: Embeddings corresponding to results (same order)
-        k: Number of results to return
-        lambda_param: Balance between relevance and diversity
-        metric: Distance metric for similarity computation
-
-    Returns:
-        Reranked list of (payload, mmr_score) tuples
-    """
+    """Apply MMR reranking to existing (payload, score) results, using ``doc_embs``
+    (same order as ``results``) for diversity scoring."""
     if not results:
         return []
 
-    # Extract initial scores
     initial_scores = np.array([score for _, score in results], dtype=np.float32)
 
-    # Run MMR
     mmr_results = mmr_search(
         query_emb=query_emb,
         doc_embs=doc_embs,
@@ -225,7 +171,6 @@ def mmr_rerank(
         initial_scores=initial_scores,
     )
 
-    # Map back to payloads
     return [(results[idx][0], score) for idx, score in mmr_results]
 
 
@@ -233,13 +178,5 @@ def threshold_filter(
     results: List[Tuple[Any, float]],
     min_score: float = 0.5,
 ) -> List[Tuple[Any, float]]:
-    """Filter results below a minimum similarity score.
-
-    Args:
-        results: List of (payload, score) tuples
-        min_score: Minimum score threshold (inclusive)
-
-    Returns:
-        Filtered list of (payload, score) tuples
-    """
+    """Filter out results scoring below ``min_score`` (inclusive)."""
     return [(payload, score) for payload, score in results if score >= min_score]

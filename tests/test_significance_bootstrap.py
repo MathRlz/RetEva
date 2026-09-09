@@ -1,4 +1,4 @@
-"""C2/F21: bootstrap CI uses a local RNG (no global-state perturbation) and the A/B CIs in
+"""Bootstrap CI uses a local RNG (no global-state perturbation) and the A/B CIs in
 compare_experiments draw from independent seeds (42 vs 43), not the same one.
 """
 
@@ -46,7 +46,7 @@ def test_compare_experiments_ci_a_and_b_independent():
 
 
 def test_compare_experiments_applies_fdr_across_metric_panel():
-    # M2: comparing many metrics must report BH-FDR q-values + an FDR-corrected flag, not just
+    # comparing many metrics must report BH-FDR q-values + an FDR-corrected flag, not just
     # raw per-metric p < 0.05 (which inflates the family-wise false-positive rate).
     import numpy as np
 
@@ -78,7 +78,7 @@ def test_compare_experiments_applies_fdr_across_metric_panel():
 
 
 def test_underpowered_flag_and_report_rendering():
-    # R3: small paired sample → underpowered flagged; the text report surfaces p, q (FDR),
+    # small paired sample → underpowered flagged; the text report surfaces p, q (FDR),
     # FDR-significance, and the under-powered warning.
     from evaluator.analysis.significance import format_comparison_report
 

@@ -1,4 +1,4 @@
-"""Roadmap §8 — batch-size estimation (replaces OOM-and-halve with an estimate)."""
+"""Batch-size estimation (replaces OOM-and-halve with an estimate)."""
 
 from types import SimpleNamespace
 

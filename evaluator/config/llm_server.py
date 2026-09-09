@@ -4,50 +4,18 @@ from dataclasses import dataclass
 
 @dataclass
 class LLMServerConfig:
-    """
-    Configuration for local LLM server.
-
-    Enables running local LLM models (Ollama, vLLM, llama.cpp) instead of
-    relying on paid API services for query optimization and judging.
-
-    Attributes:
-        enabled: Whether to use local LLM server. Default: False.
-        backend: Server backend to use. Default: "ollama".
-            Options: "ollama", "vllm", "llamacpp".
-        host: Server host address. Default: "localhost".
-        port: Server port. Default: 11434 (Ollama default).
-        model: Model name or path. Default: "mistral:7b-instruct".
-        auto_start: Auto-start server if not running. Default: True.
-        gpu_layers: Number of GPU layers (-1 for all, 0 for CPU only). Default: -1.
-        timeout_s: Server startup timeout in seconds. Default: 60.
-
-    Examples:
-        >>> # Use Ollama with Mistral
-        >>> config = LLMServerConfig(
-        ...     enabled=True,
-        ...     backend="ollama",
-        ...     model="mistral:7b-instruct"
-        ... )
-        >>>
-        >>> # Use medical domain model
-        >>> config = LLMServerConfig(
-        ...     enabled=True,
-        ...     backend="ollama",
-        ...     model="biomistral:7b",
-        ...     port=11434
-        ... )
-    """
+    """Configuration for a local LLM server (Ollama, vLLM, llama.cpp) instead of a paid
+    API, for query optimization and judging."""
     enabled: bool = False
     backend: str = "ollama"  # ollama | vllm | llamacpp
     host: str = "localhost"
     port: int = 11434
     model: str = "mistral:7b-instruct"
     auto_start: bool = True
-    gpu_layers: int = -1
+    gpu_layers: int = -1  # -1 = all layers on GPU, 0 = CPU only
     timeout_s: int = 60
 
     def __post_init__(self):
-        """Validate configuration."""
         valid_backends = {"ollama", "vllm", "llamacpp"}
         if self.backend not in valid_backends:
             raise ValueError(

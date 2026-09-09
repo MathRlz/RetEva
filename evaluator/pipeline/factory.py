@@ -13,13 +13,18 @@ from .text_embedding_pipeline import TextEmbeddingPipeline
 from .audio_embedding_pipeline import AudioEmbeddingPipeline
 from .retrieval_pipeline import RetrievalPipeline
 from .types import PipelineBundle
-from .graph import resolve_graph_template
 
 from ..logging_config import get_logger
+from .graph.operators import node_kind
+from ..storage.registry import check_store_dependency, create_vector_store
+from ..devices.pool import pool_from_config
+from .graph.registry import node_model_field
+from ..config.evaluation import get_text_embedding_dim
+from ..config import estimate_model_memory_gb
 
 if TYPE_CHECKING:
     from ..devices import GPUPool
-    from ..services import ModelServiceProvider
+    from .model_provider import ModelServiceProvider
 
 logger = get_logger(__name__)
 
@@ -30,16 +35,10 @@ _WARNED_DEVICE_CLAMPS: set = set()
 
 
 def _clamp_to_available_device(device: str) -> str:
-    """Remap a config-requested ``cuda:N`` to an ordinal that actually exists, instead of
-    crashing with ``CUDA error: invalid device ordinal``.
-
-    A config is often written assuming more GPUs than a given launch actually exposes (a
-    scheduler/launcher narrowing ``CUDA_VISIBLE_DEVICES``, or just running on a smaller
-    box) — that shouldn't be fatal. Remap cyclically (``N % count``) so with exactly one
-    visible GPU everything lands on it (models share the device, loaded/unloaded as
-    needed via the existing service-provider/device-pool lifecycle); with more than one
-    but fewer than the config assumes, load spreads across what's actually there. No CUDA
-    at all falls back to CPU. Logged once per distinct requested device."""
+    """Remap a config-requested ``cuda:N`` to an ordinal that exists, instead of crashing —
+    a config often assumes more GPUs than a launch actually exposes. Remaps cyclically
+    (``N % count``) so load spreads across what's available; no CUDA falls back to CPU.
+    Logged once per distinct requested device."""
     if not device.startswith("cuda"):
         return device
     import torch
@@ -71,14 +70,6 @@ def _clamp_to_available_device(device: str) -> str:
 
 def create_reranker_from_config(vector_db_config,
                                 service_provider: Optional["ModelServiceProvider"] = None):
-    """Create a reranker model from configuration.
-
-    Args:
-        vector_db_config: VectorDBConfig with reranker settings
-
-    Returns:
-        Reranker instance or None if reranking is disabled
-    """
     if not vector_db_config.reranker_enabled:
         return None
 
@@ -108,11 +99,8 @@ _VECTOR_DB_PARAM_FIELDS = {
 
 
 def effective_vector_db_config(vector_db_config, params):
-    """Global ``vector_db`` config overlaid with a ``vector_db`` node's params.
-
-    Transient — the global config is never mutated (precedent: ``_node_reranking``).
-    Empty/absent params fall back to the global field.
-    """
+    """Global ``vector_db`` config overlaid with a ``vector_db`` node's params; transient (the
+    global config is never mutated). Empty/absent params fall back to the global field."""
     from dataclasses import replace
 
     overrides = {}
@@ -128,16 +116,13 @@ def effective_vector_db_config(vector_db_config, params):
 
 
 def check_graph_backend_dependencies(config) -> None:
-    """Pre-flight: validate optional store backends for every ``vector_db`` node.
-
-    A per-node ``store`` override can name chromadb/qdrant even when the global
-    ``vector_db.type`` doesn't — fail before any model loads, not mid-run.
-    """
+    """Pre-flight: validate optional store backends for every ``vector_db`` node — a per-node
+    ``store`` override can name chromadb/qdrant even when the global type doesn't; fail before
+    any model loads, not mid-run."""
     try:
         graph = config.graph
     except Exception:
         return  # graph problems surface in their own validation path
-    from .graph.operators import node_kind
 
     for node in graph.nodes:
         if node_kind(node.stage, node.params) != "vector_db":
@@ -148,30 +133,15 @@ def check_graph_backend_dependencies(config) -> None:
 
 
 def check_backend_dependencies(vector_db_config) -> None:
-    """Validate that required optional backends are installed.
-
-    Raises ``ImportError`` with an install hint when a configured backend
-    package is missing.  Call this at config-validation time so the user
-    gets immediate feedback instead of a mid-run crash.
-    """
-    from ..storage.registry import check_store_dependency
+    """Raises ``ImportError`` with an install hint when a configured backend is missing; call
+    at config-validation time for immediate feedback instead of a mid-run crash."""
 
     check_store_dependency(vector_db_config)
 
 
 def create_gpu_pool_from_config(config) -> Optional["GPUPool"]:
-    """Create a GPUPool from configuration if device_pool is configured.
-
-    Args:
-        config: EvaluationConfig with optional device_pool settings.
-
-    Returns:
-        GPUPool instance or None if device_pool is not configured.
-    """
     if config.device_pool is None:
         return None
-
-    from ..devices.pool import pool_from_config
 
     return pool_from_config(config.device_pool)
 
@@ -179,7 +149,7 @@ def create_gpu_pool_from_config(config) -> Optional["GPUPool"]:
 @dataclass(frozen=True)
 class _GraphBuildPlan:
     """Which family pipelines a run builds + the FAISS index dim — all derived from the
-    execution graph's nodes, not the ``pipeline_mode`` string (graph-first Phase 2)."""
+    execution graph's nodes, not the ``pipeline_mode`` string."""
 
     build_asr: bool
     build_text: bool
@@ -189,22 +159,13 @@ class _GraphBuildPlan:
 
 
 def _graph_build_plan(graph, mcfg) -> "_GraphBuildPlan":
-    """Decide what to build from ``graph``'s nodes (single source of truth).
-
-    A family's SHARED pipeline is built when a node references its model field
-    (``node_model_field``) AND the flat ``model.<family>_model_type`` default is actually set.
-    The flat default is what that shared pipeline gets built from — a graph may reference the
-    field via a branch-only node that carries its own model entirely in its params (no
-    top-level ``nodes.<role>`` block ever set the default), in which case there's nothing to
-    eagerly build here; the executor resolves that node's own model per-node at run time
-    (``resolved_model_config`` / ``_node_pipeline``) instead. Retrieval is built when a
-    ``search`` node exists. The corpus embedder is *not* a distinct model field — it shares the
-    query embedder, or text-embeds the corpus cross-modally — so a text embedder is *also*
-    built when a corpus-embed node is present and a text embedder is configured (the
-    ``audio_emb_retrieval`` cross-modal corpus case). The index dim follows the query embedder
-    the graph actually has: an audio query node → ``audio_emb_dim``, a text query node → the
-    text model's registered dim."""
-    from .graph.registry import node_model_field
+    """Decide what to build from ``graph``'s nodes (single source of truth): a family's shared
+    pipeline is built when a node references its model field AND the flat
+    ``model.<family>_model_type`` default is set — a branch-only node carrying its own model in
+    params has nothing to eagerly build here, the executor resolves it per-node at run time
+    instead. The corpus embedder is not a distinct model field (it shares the query embedder,
+    or text-embeds cross-modally), so a text embedder is also built for the
+    ``audio_emb_retrieval`` corpus case. Index dim follows the query embedder's modality."""
 
     fields = set()
     has_corpus_embed = False
@@ -227,7 +188,6 @@ def _graph_build_plan(graph, mcfg) -> "_GraphBuildPlan":
         embedding_dim = mcfg.audio_emb_dim or None
     elif "model.text_emb_model_type" in fields:
         try:
-            from ..config.evaluation import get_text_embedding_dim
             embedding_dim = get_text_embedding_dim(mcfg.text_emb_model_type)
         except Exception:
             embedding_dim = None
@@ -244,13 +204,7 @@ def _graph_build_plan(graph, mcfg) -> "_GraphBuildPlan":
 
 
 def _create_retrieval_pipeline(config, cache_manager, reranker, embedding_dim=None):
-    """
-    Helper function to create RetrievalPipeline with common configuration.
-
-    Extracts duplicate RetrievalPipeline creation logic to reduce repetition. ``embedding_dim``
-    is graph-derived by the caller (the query embedder's dim).
-    """
-    from ..storage.registry import create_vector_store
+    """``embedding_dim`` is graph-derived by the caller (the query embedder's dim)."""
 
     strategy_config = RetrievalStrategyConfig.from_vector_db_config(config.vector_db)
     return RetrievalPipeline(
@@ -261,13 +215,10 @@ def _create_retrieval_pipeline(config, cache_manager, reranker, embedding_dim=No
     )
 
 
-class _ModelBuilders:
-    """Builds each model family for a run, hoisted out of ``create_pipeline_from_config``
-    (F10/D4) so that function is a flat per-mode dispatch rather than a nest of closures.
-
-    One place holds the device resolution (GPU pool vs config device) and the
-    provider-vs-standalone-factory fallback; the per-model argument lists stay explicit.
-    """
+class ModelBuilders:
+    """Builds each model family for a run, hoisted out of ``create_pipeline_from_config`` so
+    that function stays a flat per-mode dispatch. Holds device resolution (GPU pool vs config
+    device) and the provider-vs-standalone-factory fallback in one place."""
 
     def __init__(self, config, service_provider, device_pool):
         self.mcfg = config.model
@@ -278,15 +229,11 @@ class _ModelBuilders:
     _MCFG_PREFIX = {"asr": "asr", "text_embedding": "text_emb", "audio_embedding": "audio_emb"}
 
     def _pool_key(self, model_category: str, model_type: Optional[str]) -> str:
-        """Unique pool identity for the model this build resolves to. The category alone
-        collides as soon as a graph builds two models of one family (jina_v4 + eam are both
-        'text_embedding'): the second allocate overwrote the first's reservation entry,
-        eviction callback, and LRU slot, so the pool could neither account for nor evict
-        them. Keyed ``category:type[:name][:path][:size...]`` instead — colon-segmented so
-        ManualStrategy overrides can still match on the ``category`` or ``category:type``
-        prefix. Two nodes resolving to the same model produce the same key and share one
-        reservation (allocate is idempotent per key), mirroring the service provider's
-        instance sharing."""
+        """Unique pool identity for the model this build resolves to: the category alone
+        collides as soon as a graph builds two models of one family, overwriting the first's
+        reservation/eviction/LRU entry. Keyed ``category:type[:name][:path][:size...]``
+        (colon-segmented so ManualStrategy can still match a ``category``/``category:type``
+        prefix); two nodes resolving to the same model share one reservation."""
         parts = [model_category, str(model_type)]
         prefix = self._MCFG_PREFIX.get(model_category)
         if prefix is not None:
@@ -302,8 +249,6 @@ class _ModelBuilders:
         pool_key: Optional[str] = None,
     ) -> str:
         if self.device_pool is not None and model_type is not None:
-            from ..config import estimate_model_memory_gb
-
             memory_gb = estimate_model_memory_gb(model_category, model_type)
             return self.device_pool.allocate(pool_key or model_category, memory_gb)
         return _clamp_to_available_device(config_device)
@@ -325,9 +270,8 @@ class _ModelBuilders:
         if self.device_pool is not None and model_type is not None:
             import torch as _torch
             if dev.startswith("cuda"):
-                # A provider-cached instance may sit on CPU from an earlier eviction —
-                # its allocation was released then, so this build's allocate re-reserved
-                # the device and the move re-promotes it. Same-device moves are no-ops.
+                # A provider-cached instance may sit on CPU from an earlier eviction; this
+                # build's allocate re-reserved the device, so the move re-promotes it.
                 to_method = getattr(model, "to", None)
                 if callable(to_method):
                     origin = str(getattr(model, "device", "")) or "?"
@@ -345,8 +289,7 @@ class _ModelBuilders:
             self.device_pool.register_eviction_callback(pool_key, _evict_to_cpu)
             self.device_pool.touch(pool_key)
             try:
-                # The offload paths (aggressive node release, level-boundary release)
-                # return the reservation through this reverse mapping.
+                # Offload paths return the reservation through this reverse mapping.
                 model._gpu_pool_key = pool_key
             except Exception:  # noqa: BLE001 - slotted/frozen models just skip it
                 pass
@@ -427,54 +370,22 @@ def create_pipeline_from_config(
     cache_manager: CacheManager,
     service_provider: Optional["ModelServiceProvider"] = None,
 ) -> PipelineBundle:
-    """Create pipelines based on configuration.
-
-    Args:
-        config: Evaluation configuration
-        cache_manager: Cache manager for pipeline caching
-
-    Returns:
-        PipelineBundle containing the created pipelines
-    """
     asr_pipeline = None
     text_emb_pipeline = None
     audio_emb_pipeline = None
     retrieval_pipeline = None
 
-    from .graph.modes import _config_template
-
-    mode = _config_template(config)
-    # A template declares its required model fields up front; an explicit-graph config (no template)
-    # has no such list — the nodes carry their own models, validated structurally by the graph. So
-    # the field check is template-only.
-    if mode is not None:
-        mode_spec = resolve_graph_template(str(mode))
-        missing_required = [
-            field_path
-            for field_path in mode_spec.required_model_fields
-            if getattr(getattr(config, field_path.split(".", 1)[0]), field_path.split(".", 1)[1])
-            in (None, "")
-        ]
-        if missing_required:
-            raise ValueError(
-                f"Pipeline mode '{mode}' missing required config fields: "
-                f"{', '.join(missing_required)}"
-            )
-
-    # Which family pipelines to build is derived from the execution GRAPH's nodes, not the
-    # mode string (graph-first Phase 2). The mode still selects the default graph + labels the
-    # bundle; the build *decision* is graph-authoritative, so an explicit graph (or one with no
-    # ASR node) never builds a model it doesn't use.
+    # Which family pipelines to build is derived from the execution GRAPH's nodes: the nodes
+    # carry their own models, so an explicit graph (or one with no ASR node) never builds a
+    # model it doesn't use.
     plan = _graph_build_plan(config.graph, config.model)
 
-    # Create GPU pool if configured
     device_pool = create_gpu_pool_from_config(config)
 
-    # Create reranker if enabled
     reranker = create_reranker_from_config(config.vector_db, service_provider=service_provider)
 
     mcfg = config.model
-    builders = _ModelBuilders(config, service_provider, device_pool)
+    builders = ModelBuilders(config, service_provider, device_pool)
 
     audio_emb_model = None
     if plan.build_audio:
@@ -512,7 +423,7 @@ def create_pipeline_from_config(
         text_embedding_pipeline=text_emb_pipeline,
         audio_embedding_pipeline=audio_emb_pipeline,
         retrieval_pipeline=retrieval_pipeline,
-        mode=mode,
+        mode=config.graph_label or "",
         device_pool=device_pool,
         service_provider=service_provider,
     )

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from evaluator.analysis.leaderboard_views import leaderboard_rows, pareto_rows
 from evaluator.storage import ExperimentStore
+from evaluator.storage.cache import CacheManager
 
 
 def delete_run_and_cache(
@@ -29,7 +30,6 @@ def delete_run_and_cache(
         cache_key = load.get("vector_cache_key")
         cache_dir = ((run.get("config") or {}).get("cache") or {}).get("cache_dir")
         if cache_key and cache_dir:
-            from evaluator.storage.cache import CacheManager
             cache_deleted = CacheManager(cache_dir=cache_dir).delete_vector_db(cache_key)
 
     deleted = store.delete_run(run_id)

@@ -11,7 +11,7 @@ Subcommands (each delegates to the existing implementation; no logic lives here)
 - ``replay``        — re-run one query id through the full graph + per-node trace (cli/replay.py)
 - ``sweep``         — expand a base graph config + axes spec into a multi-variant graph
   config (cli/sweep_expand.py) — the authoring assistant for hand-duplicating nodes per
-  parameter combination (no ``graph.branches`` any more; see ``config/graph_config.py``)
+  parameter combination (see ``config/graph_config.py``)
 - ``compare``       — compare result JSON files, or 2+ variant/run dirs (cli/compare.py)
 - ``export``        — export results to CSV/Excel/LaTeX (cli/export.py)
 - ``branch-report`` — thesis artifacts from a branched run (analysis/branch_report.py)
@@ -25,6 +25,26 @@ from __future__ import annotations
 
 import sys
 from typing import List, Optional
+from evaluator.cli import parse_args, run_evaluation
+from evaluator.config.model_presets import get_preset, list_presets
+from evaluator.cli.commands import _print_graph
+from evaluator.config.evaluation import EvaluationConfig
+from evaluator.pipeline.graph.wiring import emit_edges
+from evaluator.evaluation.metric_registry import applicable_metrics
+from evaluator.pipeline.graph.build import build_graph_for_config
+from evaluator.pipeline.introspection import effective_outputs
+from evaluator.pipeline.graph.export import graph_to_dot
+from evaluator.config.dataset_descriptors import get_descriptor, list_registered_datasets
+from evaluator.storage.cache import CacheManager
+from evaluator.analysis.leaderboard_views import leaderboard_rows
+from evaluator.cli.replay import main as replay_main
+from evaluator.cli.sweep_expand import main as sweep_main
+from evaluator.cli.compare import main as compare_main
+from evaluator.cli.export import main as export_main
+from evaluator.analysis.branch_report import main as report_main
+from evaluator.cli.benchmark import main as benchmark_main
+from evaluator.cli.gpu_status import show_gpu_status
+from evaluator.logging_config import get_logger
 
 _USAGE = """\
 usage: evaluator <command> [args]
@@ -50,15 +70,11 @@ commands:
 
 
 def _cmd_run(rest: List[str]) -> int:
-    from evaluator.cli import parse_args, run_evaluation
-
     run_evaluation(parse_args(rest))
     return 0
 
 
 def _cmd_presets(rest: List[str]) -> int:
-    from evaluator.config.model_presets import get_preset, list_presets
-
     if rest and rest[0] == "show":
         if len(rest) < 2:
             print("usage: evaluator presets show <name>", file=sys.stderr)
@@ -79,7 +95,7 @@ def _edge_line(e: dict) -> str:
 
 
 def write_edges_block(path: str, edges: List[dict]) -> int:
-    """Rewrite the config's ``graph.edges:`` block in place (B5) — text-level so every
+    """Rewrite the config's ``graph.edges:`` block in place — text-level so every
     comment survives (no yaml.dump round-trip). Replaces an existing ``edges:`` child (its
     port-level entries; hand-added ordering-only ``{from, to}`` entries are kept and
     re-appended) or inserts one after the ``nodes:`` child. The rewritten file must still
@@ -185,18 +201,11 @@ def _cmd_graph(rest: List[str]) -> int:
     if args.write and not (args.emit_edges and args.config):
         parser.error("--write requires --emit-edges and --config")
 
-    from evaluator.cli.commands import _print_graph
-    from evaluator.config.evaluation import EvaluationConfig
-
     if args.config:
         config = EvaluationConfig.from_yaml(args.config, validate=not args.emit_edges)
     else:
-        from evaluator.config.model_presets import get_preset
-
         config = EvaluationConfig.from_dict(get_preset(args.preset, auto_devices=False))
     if args.emit_edges:
-        from evaluator.pipeline.graph.wiring import emit_edges
-
         nodes = (config.graph_override or {}).get("nodes") or []
         if not nodes:
             print("config has no graph.nodes — nothing to wire")
@@ -211,10 +220,6 @@ def _cmd_graph(rest: List[str]) -> int:
             print(f"  {_edge_line(e)}")
         return 0
     if args.emit_metrics:
-        from evaluator.evaluation.metric_registry import applicable_metrics
-        from evaluator.pipeline.graph.modes import build_graph_for_config
-        from evaluator.pipeline.introspection import effective_outputs
-
         graph = build_graph_for_config(config)
         produced: set = set()
         for n in graph.nodes:
@@ -228,9 +233,6 @@ def _cmd_graph(rest: List[str]) -> int:
                 print(f"- {spec.name}")
         return 0
     if args.format == "dot":
-        from evaluator.pipeline.graph.export import graph_to_dot
-        from evaluator.pipeline.graph.modes import build_graph_for_config
-
         dot = graph_to_dot(
             build_graph_for_config(config), title=config.experiment_name
         )
@@ -246,8 +248,6 @@ def _cmd_graph(rest: List[str]) -> int:
 
 
 def _cmd_datasets(rest: List[str]) -> int:
-    from evaluator.datasets.descriptor import get_descriptor, list_registered_datasets
-
     for dataset_id in list_registered_datasets():
         desc = get_descriptor(dataset_id)
         if desc is None:
@@ -269,8 +269,6 @@ def _cmd_cache(rest: List[str]) -> int:
                         help="prune: evict least-recently-used entries until under this size")
     args = parser.parse_args(rest)
 
-    from evaluator.storage.cache import CacheManager
-
     manager = CacheManager(cache_dir=args.cache_dir, enabled=True)
     if args.action == "status":
         stats = manager.get_cache_stats()
@@ -280,7 +278,7 @@ def _cmd_cache(rest: List[str]) -> int:
             print(f"  {category}: {info.get('size_human')} ({info.get('file_count')} files)")
         return 0
     if args.action == "prune":
-        # L4: bound unbounded cache growth — drop orphaned manifest rows, then (if a budget
+        # Bound unbounded cache growth — drop orphaned manifest rows, then (if a budget
         # is given) LRU-evict until under --max-size-gb. Uses the existing eviction logic.
         orphaned = manager.compact_manifest()
         print(f"removed {orphaned} orphaned manifest entries")
@@ -314,8 +312,6 @@ def _cmd_leaderboard(rest: List[str]) -> int:
     parser.add_argument("--pipeline-mode", default=None)
     parser.add_argument("--name", default=None, help="experiment name filter")
     args = parser.parse_args(rest)
-
-    from evaluator.analysis.leaderboard_views import leaderboard_rows
 
     rows = leaderboard_rows(
         metric=args.metric,
@@ -359,33 +355,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         if command == "leaderboard":
             return _cmd_leaderboard(rest)
         if command == "replay":
-            from evaluator.cli.replay import main as replay_main
-
             return replay_main(rest)
         if command == "sweep":
-            from evaluator.cli.sweep_expand import main as sweep_main
-
             return sweep_main(rest)
         if command == "compare":
-            from evaluator.cli.compare import main as compare_main
-
             return compare_main(rest)
         if command == "export":
-            from evaluator.cli.export import main as export_main
-
             return export_main(rest)
         if command == "branch-report":
-            from evaluator.analysis.branch_report import main as report_main
-
             return report_main(rest)
         if command == "benchmark":
-            from evaluator.cli.benchmark import main as benchmark_main
-
             benchmark_main(rest)
             return 0
         if command == "gpu":
-            from evaluator.cli.gpu_status import show_gpu_status
-
             show_gpu_status()
             return 0
         print(f"unknown command: {command}\n\n{_USAGE}", file=sys.stderr)
@@ -400,8 +382,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         # makes a one-line TypeError ("object of type 'NoneType' has no len()") unlocatable.
         # Also logged, so a run's log file keeps the frames when the console is piped away.
         import traceback
-
-        from evaluator.logging_config import get_logger
 
         print(f"Error: {type(e).__name__}: {e}", file=sys.stderr)
         get_logger("evaluator").error("command %r failed", command, exc_info=True)

@@ -1,4 +1,4 @@
-"""D3/F8: per-source loader builders + the create_dataset_loader dispatch shim.
+"""Per-source loader builders + the create_dataset_loader dispatch shim.
 
 The flat 15-param factory is now a thin dispatcher over create_local_loader /
 create_huggingface_loader / create_custom_loader. Pins the dispatch, the per-source

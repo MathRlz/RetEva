@@ -1,4 +1,4 @@
-"""B1/F14: the analysis exporters share ONE `_escape_latex` / `load_results` (no divergent
+"""The analysis exporters share ONE `_escape_latex` / `load_results` (no divergent
 copies). Guards against a future re-fork of these helpers.
 """
 

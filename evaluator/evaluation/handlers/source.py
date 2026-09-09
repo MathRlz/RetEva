@@ -1,7 +1,6 @@
 """Source stage handlers: dataset_source (graph root) + tts synthesis.
 
-Each handler
-registers itself via ``@register_stage_handler`` at import time.
+Each handler registers itself via ``@register_stage_handler`` at import time.
 """
 
 from __future__ import annotations
@@ -11,15 +10,21 @@ from typing import Any, List, Optional
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
 from ..executor.state import RunState
+from ._dispatch import dispatch_operator
+from ...datasets import runtime
+from ...core.load_info import LoadInfo
+from ...errors import ConfigurationError
+from ..audio_refs import publish_audio_refs
+from ..helpers import _build_relevant_from_item
+from ..item_set import ItemSet
+from ...pipeline.corpus_index import CorpusVectors
 
 logger = get_logger(__name__)
 
 
 @register_stage_handler("source", self_timed=True)
 def _stage_source(s: RunState) -> None:
-    """The ``source`` operator: dispatch to dataset_source or dataset_union (union:true).
-    Bodies unchanged."""
-    from ._dispatch import dispatch_operator
+    """The ``source`` operator: dispatches to dataset_source or dataset_union (union:true)."""
 
     return dispatch_operator("source", {
         "dataset_source": _stage_dataset_source,
@@ -28,36 +33,29 @@ def _stage_source(s: RunState) -> None:
 
 
 def _ensure_dataset_loaded(s: RunState) -> None:
-    """Load the run's dataset(s) — the load IS a graph action now, owned by the dataset_source
-    node (no pre-graph step). Idempotent: the first dataset_source node to run loads the single
-    + multi-source map + the join gate + the replay slice and sets the progress total; later
-    source nodes (and back-compat callers that pre-seeded ``s.dataset``) find it loaded and no-op.
+    """Load the run's dataset(s) — the load IS a graph action, owned by the dataset_source
+    node. Idempotent: the first dataset_source node to run loads the single/multi-source map
+    + the join gate + the replay slice and sets the progress total; later source nodes no-op.
 
     ``s.load_info`` is the run's :class:`LoadInfo` carrier (shared by reference with the
-    service wrapper): it passes ``replay_query_ids`` in and the loaded ``dataset`` out (so
-    the wrapper's num_samples needs no pre-graph load)."""
+    service wrapper): it passes ``replay_query_ids`` in and the loaded ``dataset`` out."""
     if s.dataset is not None:
         return
-    from ...datasets.runtime import load_runtime_dataset, load_dataset_sources
-    from ..load_info import LoadInfo
 
     info = s.load_info if s.load_info is not None else LoadInfo()
-    dataset = load_runtime_dataset(s.config)
+    dataset = runtime.load_runtime_dataset(s.config)
     qids = info.replay_query_ids
     if qids:
-        from ...datasets.runtime import slice_by_query_ids
-        from ...errors import ConfigurationError
-
-        dataset = slice_by_query_ids(dataset, qids)
+        dataset = runtime.slice_by_query_ids(dataset, qids)
         if len(dataset) == 0:
             raise ConfigurationError(
                 f"replay: no dataset rows match query id(s) "
                 f"{sorted(set(map(str, qids)))}"
             )
     s.dataset = dataset
-    # Multi-source: load each `data.datasets[...]` source + the disjoint-join gate (B5) that
-    # disables IR metrics. Moved here verbatim from the pre-graph executor setup.
-    sources, disable_ir, join_warning = load_dataset_sources(s.config)
+    # Multi-source: load each `data.datasets[...]` source + the disjoint-join gate that
+    # disables IR metrics.
+    sources, disable_ir, join_warning = runtime.load_dataset_sources(s.config)
     if sources:
         s.dataset_sources = sources
         s.disable_ir_metrics = disable_ir
@@ -68,12 +66,10 @@ def _ensure_dataset_loaded(s: RunState) -> None:
 
 
 def _stage_dataset_source(s: RunState) -> None:
-    """Graph root: load the dataset(s) (in-graph now) + surface their source artifacts into the
-    DAG. ``_ensure_dataset_loaded`` does the (idempotent) load; this then publishes the columns.
-
-    Multi-dataset (B1): when the graph has several dataset_source nodes, each selects its source
-    via ``params.dataset`` → ``s.dataset_sources[id]``; single-source falls back to ``s.dataset``.
-    """
+    """Graph root: load the dataset(s) (in-graph) + surface their source artifacts into the
+    DAG. Multi-dataset: when the graph has several dataset_source nodes, each selects its
+    source via ``params.dataset`` → ``s.dataset_sources[id]``; single-source falls back to
+    ``s.dataset``."""
     _ensure_dataset_loaded(s)
     dataset = _node_dataset(s)
     if dataset is None:
@@ -86,13 +82,12 @@ def _stage_dataset_source(s: RunState) -> None:
     _publish_source_itemsets(s, dataset)
     _publish_corpus_itemset(s, dataset)
     _publish_vector_columns(s, dataset)
-    from ..audio_refs import publish_audio_refs
 
     publish_audio_refs(s, dataset)
 
 
 def _node_dataset(s: RunState) -> Any:
-    """The dataset a node operates on (B1/B2): its ``params.dataset`` → ``s.dataset_sources[id]``,
+    """The dataset a node operates on: its ``params.dataset`` → ``s.dataset_sources[id]``,
     else the single ``s.dataset``. Lets ``corpus_index`` / ``dataset_source`` bind to a *specific*
     source in a multi-dataset graph; single-source graphs always get ``s.dataset``."""
     params = s.node_params
@@ -120,13 +115,10 @@ def _question_short_answer(question: Any) -> Optional[str]:
 
 def _source_rows(dataset: Any) -> Optional[List[dict]]:
     """Per-query GT rows ``{id, question_text, transcription, relevance, short_answer}``.
-
-    Sourced cheaply from ``dataset.questions`` (BenchmarkQuestion metadata — no audio
-    decode). Falls back to the positional sample dicts for legacy datasets with no
-    ``questions`` attr; every real audio dataset exposes ``questions``, so that branch
-    never force-decodes production audio. Returns None when neither path is available.
-    """
-    from ..helpers import _build_relevant_from_item
+    Sourced cheaply from ``dataset.questions`` (no audio decode); every real audio dataset
+    exposes it, so that branch never force-decodes production audio. Falls back to
+    positional sample dicts for legacy datasets with no ``questions`` attr; None when
+    neither path is available."""
 
     questions = getattr(dataset, "questions", None)
     rows: List[dict] = []
@@ -169,11 +161,11 @@ def _source_rows(dataset: Any) -> Optional[List[dict]]:
 
 
 def _publish_source_itemsets(s: RunState, dataset: Any) -> None:
-    """Publish per-item source artifacts as keyed ``ItemSet``s (architecture W1/A1/A3).
+    """Publish per-item source artifacts as keyed ``ItemSet``s.
 
-    dataset_source is the sole ground-truth producer (Phase 3): asr/audio_embedding
-    published reference_transcription/relevant_docs before becoming pure transforms, so
-    the values here are byte-identical (transcription == question_text today)."""
+    dataset_source is the sole ground-truth producer: asr/audio_embedding published
+    reference_transcription/relevant_docs before becoming pure transforms, so the values
+    here are byte-identical (transcription == question_text today)."""
     rows = _source_rows(dataset)
     if not rows:
         return
@@ -186,8 +178,6 @@ def _publish_source_itemsets(s: RunState, dataset: Any) -> None:
             dupes,
         )
         return
-
-    from ..item_set import ItemSet
 
     s.put_artifact(
         "reference_text", ItemSet(ids, [r["question_text"] for r in rows])
@@ -206,7 +196,7 @@ def _publish_source_itemsets(s: RunState, dataset: Any) -> None:
 
 
 def _publish_corpus_itemset(s: RunState, dataset: Any) -> None:
-    """Publish the corpus as a doc_id-keyed ``ItemSet`` (§4.1 T1).
+    """Publish the corpus as a doc_id-keyed ``ItemSet``.
 
     The corpus rides the bus like every per-item artifact — the prerequisite for
     corpus-axis transforms (an ``axis: docs`` augmenter republishes a perturbed
@@ -219,7 +209,6 @@ def _publish_corpus_itemset(s: RunState, dataset: Any) -> None:
     ) or []
     if not corpus:
         return
-    from ..item_set import ItemSet
 
     ids = [
         str(doc.get("doc_id") or i) if isinstance(doc, dict) else str(i)
@@ -233,7 +222,7 @@ def _publish_corpus_itemset(s: RunState, dataset: Any) -> None:
 
 
 def _publish_vector_columns(s: RunState, dataset: Any) -> None:
-    """Publish precomputed-vector columns (§4.1 T4) when the schema declares them.
+    """Publish precomputed-vector columns when the schema declares them.
 
     A dataset whose ``fields`` map a column to ``query_vectors``/``corpus_vectors``
     feeds retrieval directly — third-party embeddings without an embed brick.
@@ -246,8 +235,6 @@ def _publish_vector_columns(s: RunState, dataset: Any) -> None:
     if not declared & {"query_vectors", "corpus_vectors"}:
         return
     import numpy as np
-
-    from ..item_set import ItemSet
 
     space = params.get("embedding_space")
 
@@ -282,8 +269,6 @@ def _publish_vector_columns(s: RunState, dataset: Any) -> None:
             doc.get("embedding") for doc in corpus if isinstance(doc, dict)
         ]
         if corpus and all(v is not None for v in vecs) and len(vecs) == len(corpus):
-            from ...services.corpus_index import CorpusVectors
-
             cv = CorpusVectors(
                 vectors=np.asarray([np.asarray(v, dtype=np.float32) for v in vecs]),
                 payloads=list(corpus),
@@ -301,15 +286,11 @@ def _publish_vector_columns(s: RunState, dataset: Any) -> None:
 
 
 def _stage_dataset_union(s: RunState) -> None:
-    """Union the question-axis ItemSets of every bound producer (§4.1 T3).
-
-    For each question-axis artifact (query_audio refs, query_text, relevant_docs,
-    short_answers, reference_text): concatenate all published producers' ItemSets in
-    producer order; a duplicate query_id across sources is a hard
-    ``ConfigurationError`` (paired metrics would silently mis-join otherwise).
-    """
-    from ...errors import ConfigurationError
-    from ..item_set import ItemSet
+    """Union the question-axis ItemSets of every bound producer. For each question-axis
+    artifact (query_audio, query_text, relevant_docs, short_answers, reference_text):
+    concatenate all published producers' ItemSets in producer order; a duplicate query_id
+    across sources is a hard ``ConfigurationError`` (paired metrics would silently
+    mis-join otherwise)."""
 
     union_arts = (
         "query_audio",

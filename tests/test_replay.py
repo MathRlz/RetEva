@@ -1,4 +1,4 @@
-"""Roadmap 2d: item replay by query id — dataset slice + CLI trace."""
+"""Item replay by query id — dataset slice + CLI trace."""
 
 import json
 

@@ -20,6 +20,9 @@ from .helpers import (
 
 from .executor import run_graph, run_from_bundle
 from .results import EvaluationResults
+# Importing the module is what plugs the registry-backed name checks into config.validate()
+# (see validation.EXTRA_VALIDATORS) — config/ cannot reach the registries itself.
+from . import validation  # noqa: F401
 
 __all__ = [
     "EvaluationResults",
@@ -34,7 +37,6 @@ __all__ = [
     "average_precision",
     "word_error_rate",
     "character_error_rate",
-    # Helper functions
     "_payload_to_key",
     "_search_results_to_keys",
     "_build_relevant_from_item",

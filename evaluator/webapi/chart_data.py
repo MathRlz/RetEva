@@ -1,33 +1,11 @@
-"""Chart shaping: report/report-adjacent dicts → plain, renderable chart specs.
-
-Every function here is **pure** — dicts in, dicts out, no FastAPI, no Jinja, no Plotly —
-so the logic that decides what a chart says is unit-testable even though the rendering
-(a thin JS layer) is not. Templates receive a spec and hand it to `plotFromSpec`; they
-never compute.
-
-The spec envelope::
-
-    {id, title, note, empty, series[], layout{}, table{caption, columns, rows[]}}
-
-* ``empty`` — a human sentence explaining why there is nothing to draw. Present instead
-  of ``series`` whenever the inputs are missing; callers render the sentence rather than
-  an empty box, and nothing raises on a metrics-poor run.
-* ``series`` — near-verbatim Plotly traces, except colors are semantic ``colorkey``
-  strings ("cat1", "pos", "ord") resolved against the theme tokens in JS. A hex here
-  would freeze the chart in one theme.
-* ``table`` — the same numbers the chart plots, rendered server-side as the accessible
-  twin. It is built from the same arrays, so the table and the chart cannot disagree.
-
-**Non-finite floats are mapped to None** by :func:`_num` on the way out. This is not
-cosmetic: the spec ships inside ``<script type="application/json">`` and ``JSON.parse``
-*rejects* bare ``NaN``/``Infinity`` (which both ``json.dumps`` and Jinja's ``|tojson``
-emit), so a degenerate CI — n=1, zero variance — would otherwise kill the whole panel.
-"""
+"""Chart shaping: report dicts → plain, renderable chart specs. Kept pure (no FastAPI/Jinja/
+Plotly) so this logic is unit-testable; colors are semantic ``colorkey`` strings resolved in JS,
+and non-finite floats become ``None`` (bare NaN/Infinity breaks ``JSON.parse``)."""
 
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 __all__ = [
     "chart_spec",
@@ -59,10 +37,6 @@ def _num(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return out if math.isfinite(out) else None
-
-
-def _nums(values: Iterable[Any]) -> List[Optional[float]]:
-    return [_num(v) for v in values]
 
 
 def empty_spec(chart_id: str, title: str, reason: str) -> Dict[str, Any]:
@@ -102,12 +76,7 @@ def _q_of(delta: Dict[str, Any]) -> Optional[float]:
 
 def delta_forest(report: Dict[str, Any], chart_id: str = "delta-forest") -> Dict[str, Any]:
     """Per-branch metric deltas as a forest plot: point estimate + 95% CI, ordered by
-    effect size.
-
-    A forest, not a bar chart: what the reader must judge is *where the interval sits
-    relative to zero*, and a bar adds area-from-zero that isn't part of the claim and
-    visually buries a CI that crosses it.
-    """
+    effect size."""
     title = "Effect sizes with confidence intervals"
     rows = list(_iter_deltas(report))
     if not rows:
@@ -180,13 +149,7 @@ _ALPHA = 0.05
 
 
 def delta_volcano(report: Dict[str, Any], chart_id: str = "delta-volcano") -> Dict[str, Any]:
-    """Every delta at once: effect on x, evidence on y.
-
-    Two continuous axes is the whole point — a metric can move a lot on weak evidence
-    (right, low) or barely move with overwhelming evidence (centre, high), and neither
-    reads off a bar chart. Significance is carried by symbol *and* color, never color
-    alone, so it survives CVD and print.
-    """
+    """Every delta at once: effect on x, evidence on y."""
     title = "Effect vs evidence"
     rows = [(pair, metric, d) for pair, metric, d in _iter_deltas(report)
             if _q_of(d) is not None]
@@ -214,6 +177,7 @@ def delta_volcano(report: Dict[str, Any], chart_id: str = "delta-volcano") -> Di
 
     hover = "<b>%{text}</b><br>Δ %{x:.4f}<br>−log10 q %{y:.2f}<extra></extra>"
     series = []
+    # significance is encoded by symbol AND color, never color alone (colour-vision, print)
     if groups[False]["x"]:
         series.append({"type": "scatter", "mode": "markers", "name": "not significant",
                        "x": groups[False]["x"], "y": groups[False]["y"],
@@ -253,14 +217,7 @@ def delta_volcano(report: Dict[str, Any], chart_id: str = "delta-volcano") -> Di
 
 def denominator_bars(report: Dict[str, Any],
                      chart_id: str = "delta-denominators") -> Dict[str, Any]:
-    """How many items each paired comparison actually rests on.
-
-    Stacked parts-of-a-whole because that is the literal claim: of the items in play,
-    this many were compared pairwise and these were dropped from one side only. A
-    comparison flagged ``drop_biased`` (>5% one-sided exclusions) is marked in its label
-    — items rarely drop at random, so past that point the intersection measures the
-    survivors rather than the branch.
-    """
+    """How many items each paired comparison actually rests on."""
     title = "Paired sample sizes"
     rows = list(_iter_deltas(report))
     if not rows:
@@ -315,11 +272,7 @@ RANK_BUCKETS = ("1", "2", "3-5", "6+", "not_found")
 
 def rank_distribution(fail: Dict[str, Any],
                       chart_id: str = "rank-distribution") -> Dict[str, Any]:
-    """Where the first relevant document landed.
-
-    The single most diagnostic retrieval picture: a run with the same recall@5 can be
-    "usually rank 1" or "usually rank 4", and only the shape says which.
-    """
+    """Where the first relevant document landed."""
     title = "First relevant document — rank"
     ranks = (fail or {}).get("rank_distribution") or {}
     counts = [_num(ranks.get(b)) or 0 for b in RANK_BUCKETS]
@@ -352,11 +305,7 @@ def rank_distribution(fail: Dict[str, Any],
 
 def failure_categories(fail: Dict[str, Any],
                        chart_id: str = "failure-categories") -> Dict[str, Any]:
-    """Why retrieval missed, split by cause.
-
-    Horizontal bars: the category names are long, and the reader is comparing a handful
-    of magnitudes, not a composition — so one hue and a sorted axis beat a stack here.
-    """
+    """Why retrieval missed, split by cause."""
     title = "Failure causes"
     cats = (fail or {}).get("failure_categories") or {}
     pairs = [(str(k), _num(v) or 0) for k, v in cats.items() if (_num(v) or 0) > 0]
@@ -384,11 +333,7 @@ def failure_categories(fail: Dict[str, Any],
 
 def recall_loss_by_k(report: Dict[str, Any],
                      chart_id: str = "recall-loss") -> Dict[str, Any]:
-    """How much recall each branch loses against the baseline, as the cutoff k grows.
-
-    A line, because k is ordered and the question is where the loss saturates — that is
-    the "which k should I ship" decision.
-    """
+    """How much recall each branch loses against the baseline, as the cutoff k grows."""
     title = "Retrieval loss vs cutoff"
     impact = (report or {}).get("retrieval_wer_impact") or {}
     series, table_rows = [], []
@@ -430,7 +375,6 @@ def recall_loss_by_k(report: Dict[str, Any],
     )
 
 
-# ── Per-query distributions ──────────────────────────────────────────────────
 # These read `report.traces.query_traces`, which only exists when trace_limit > 0.
 # They bin SERVER-SIDE and emit bar traces: the payload stays small regardless of N,
 # the bin edges are deterministic (a browser-side histogram would re-bin per render),
@@ -457,13 +401,7 @@ def _histogram(values: List[float], bins: int) -> "tuple[List[float], List[int],
 def per_query_histogram(traces: Any, field: str = "per_query_wer", *, bins: int = 20,
                         chart_id: Optional[str] = None,
                         label: Optional[str] = None) -> Dict[str, Any]:
-    """Distribution of a per-query score.
-
-    The branch means hide their own shape: a 0.30 mean WER can be "every query is
-    mediocre" or "most are perfect and a handful are catastrophic", and only the
-    distribution distinguishes them — which is exactly the difference that matters when
-    deciding whether ASR quality is a systemic or a tail problem.
-    """
+    """Distribution of a per-query score."""
     label = label or field.replace("per_query_", "").upper()
     chart_id = chart_id or f"dist-{field.replace('_', '-')}"
     title = f"{label} distribution across queries"
@@ -501,12 +439,7 @@ _SCATTER_CAP = 2000
 
 def wer_vs_recall_scatter(traces: Any, report: Optional[Dict[str, Any]] = None,
                           chart_id: str = "wer-vs-recall") -> Dict[str, Any]:
-    """Does a worse transcript actually cost retrieval, query by query?
-
-    The run already computes the Pearson r and prints it as one number; the scatter is
-    the only honest display of a 2-D relationship — r alone cannot distinguish a real
-    trend from a couple of leverage points.
-    """
+    """Does a worse transcript actually cost retrieval, query by query?"""
     title = "Transcription error vs retrieval success"
     rows = [(_num(t.get("per_query_wer")), _num(t.get("recall_at_5")))
             for t in (traces or []) if isinstance(t, dict)]
@@ -567,13 +500,7 @@ def wer_vs_recall_scatter(traces: Any, report: Optional[Dict[str, Any]] = None,
 
 def score_margin_histogram(traces: Any, *, bins: int = 20,
                            chart_id: str = "score-margin") -> Dict[str, Any]:
-    """How decisively the retriever preferred a relevant document.
-
-    margin = score(best relevant) − score(best irrelevant). Positive means a relevant doc
-    won; negative means a distractor outranked everything relevant. This separates
-    "confidently right" from "barely right" — a run can hold its recall while its margins
-    collapse, which is the early warning a recall number cannot give.
-    """
+    """How decisively the retriever preferred a relevant document."""
     title = "Retrieval score margin"
     margins = []
     for t in (traces or []):
@@ -622,16 +549,9 @@ def score_margin_histogram(traces: Any, *, bins: int = 20,
     )
 
 
-# ── Run efficiency + cross-run ───────────────────────────────────────────────
-
 def stage_timing(prov: Dict[str, Any], latency: Optional[Dict[str, Any]] = None,
                  chart_id: str = "stage-timing") -> Dict[str, Any]:
-    """Where the wall clock went, longest stage first.
-
-    Deliberately does NOT overlay cache hit-rate: seconds and a 0-1 rate on one plot
-    would be a dual axis, whose alignment is arbitrary and invents a relationship the
-    data does not contain. The cache story is its own chart below.
-    """
+    """Where the wall clock went, longest stage first."""
     title = "Time per stage"
     timing = dict(prov.get("timing") or {})
     if not timing and latency:
@@ -649,6 +569,7 @@ def stage_timing(prov: Dict[str, Any], latency: Optional[Dict[str, Any]] = None,
         "colorkey": "cat1",
         "hovertemplate": "<b>%{x:.3f}s</b><br>%{y}<extra></extra>",
     }]
+    # no cache-hit overlay: seconds and a 0-1 rate on one plot would need a dual axis
     return chart_spec(
         chart_id, title, series,
         # "summed", not "total": stages can overlap, so this exceeds the run's wall clock.
@@ -663,11 +584,7 @@ def stage_timing(prov: Dict[str, Any], latency: Optional[Dict[str, Any]] = None,
 
 
 def cache_hit_rates(prov: Dict[str, Any], chart_id: str = "cache-hits") -> Dict[str, Any]:
-    """Cache reuse per stage — the usual answer to "why was this run fast/slow".
-
-    Its own panel rather than an overlay on the timing chart, so both keep an honest
-    single axis.
-    """
+    """Cache reuse per stage — the usual answer to "why was this run fast/slow"."""
     title = "Cache reuse"
     cache = prov.get("cache") or prov.get("cache_stats") or {}
     labels, rates, table_rows = [], [], []
@@ -705,6 +622,7 @@ def cache_hit_rates(prov: Dict[str, Any], chart_id: str = "cache-hits") -> Dict[
         "textposition": "outside",
         "hovertemplate": "<b>%{x:.0%}</b> reused<br>%{y}<extra></extra>",
     }]
+    # separate panel rather than an overlay on stage_timing, so each keeps a single honest axis
     return chart_spec(
         chart_id, title, series,
         note="Share of lookups served from cache. A fast run with high reuse is not "
@@ -717,11 +635,7 @@ def cache_hit_rates(prov: Dict[str, Any], chart_id: str = "cache-hits") -> Dict[
 
 
 def token_budget(prov: Dict[str, Any], chart_id: str = "token-budget") -> Dict[str, Any]:
-    """LLM tokens by component, against the run's budget when one is set.
-
-    Stacked prompt/completion because they are parts of the same total the budget
-    measures — and the budget itself is a rule, not another bar.
-    """
+    """LLM tokens by component, against the run's budget when one is set."""
     title = "LLM tokens by component"
     cost = prov.get("cost") or {}
     by_component = cost.get("by_component") or {}
@@ -761,13 +675,7 @@ def token_budget(prov: Dict[str, Any], chart_id: str = "token-budget") -> Dict[s
 
 def leaderboard_scatter(rows: Any, metric: str, xfield: str = "duration_seconds",
                         chart_id: Optional[str] = None) -> Dict[str, Any]:
-    """A metric against cost (wall clock) or against time (run order).
-
-    Both fields already ride on every leaderboard row and nothing plotted them. Quality
-    against duration is the "best at what price" view the Pareto page cannot reach when
-    duration is not one of its objectives; quality against created_at answers "is this
-    sweep actually improving".
-    """
+    """A metric against cost (wall clock) or against time (run order)."""
     over_time = xfield == "created_at"
     chart_id = chart_id or ("metric-over-time" if over_time else "metric-vs-duration")
     title = (f"{metric} over time" if over_time else f"{metric} vs run duration")
@@ -813,17 +721,7 @@ def leaderboard_scatter(rows: Any, metric: str, xfield: str = "duration_seconds"
 
 def compare_relative_deltas(metric_rows: Any, *, top_n: int = 14,
                             chart_id: str = "compare-deltas") -> Dict[str, Any]:
-    """Which metrics moved between two runs, as a relative change.
-
-    Relative (%) rather than raw, because a compare table mixes 0-1 rates with
-    millisecond latencies — putting their raw deltas on one axis would let a latency
-    swing of 40ms dwarf a recall change of 0.4 and read as the bigger effect.
-
-    Deliberately carries NO error bars: these are two independent runs, not a paired
-    comparison, so there is no confidence interval and no significance test behind the
-    numbers. The note says so, because a bar chart of differences invites exactly that
-    misreading.
-    """
+    """Which metrics moved between two runs, as a relative change."""
     title = "Relative change, B vs A"
     rows = []
     for r in (metric_rows or []):
@@ -835,6 +733,7 @@ def compare_relative_deltas(metric_rows: Any, *, top_n: int = 14,
             continue
         if a == 0:
             continue          # a relative change against zero is undefined, not infinite
+        # relative (%) not raw: a 40 ms latency swing must not dwarf a 0.4 recall change on one axis
         rows.append((name, 100.0 * (b - a) / abs(a), a, b))
     if not rows:
         return empty_spec(chart_id, title,
@@ -868,16 +767,7 @@ def compare_relative_deltas(metric_rows: Any, *, top_n: int = 14,
 
 
 def metric_chips(metrics: Any, branches: Any = None) -> Dict[str, Any]:
-    """The run's scalar metrics, each shown once.
-
-    A run stores the same number up to three times: under a display name (``MRR``), under
-    its branch (``asr_text_retrieval/mrr``), and again as that branch's mean in the report.
-    Rendered straight, one single-branch run puts 39 chips on screen carrying 15 distinct
-    facts, and the headline metric gets exactly as much weight as the 25th repeat.
-
-    Deduped on (metric name without its branch prefix, the value as displayed). Two
-    branches that genuinely disagree therefore keep both chips — only the repeats go.
-    """
+    """The run's scalar metrics, each shown once."""
     src = metrics if isinstance(metrics, dict) else {}
     seen: set = set()
     chips: List[Dict[str, Any]] = []
@@ -895,6 +785,7 @@ def metric_chips(metrics: Any, branches: Any = None) -> Dict[str, Any]:
         text = _text(src.get(name))
         if text is None:
             return
+        # dedup key includes the displayed value: branches that disagree keep both chips
         key = (name.rsplit("/", 1)[-1].lower(), text)
         if key in seen:
             return

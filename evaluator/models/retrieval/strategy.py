@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 from typing import Optional
+from ...config.types import RETRIEVAL_MODES, RERANKER_MODES
+from .fusion_registry import list_fusions
 
 
 @dataclass(frozen=True)
@@ -16,11 +18,8 @@ class CoreRetrievalConfig:
     bm25_b: float = 0.75
 
     def validate(self) -> None:
-        from ...config.types import RETRIEVAL_MODES
-
         if self.mode not in RETRIEVAL_MODES:
             raise ValueError(f"Unsupported retrieval mode: {self.mode}")
-        from .fusion_registry import list_fusions
 
         if self.hybrid_fusion_method not in list_fusions():
             raise ValueError(
@@ -48,8 +47,6 @@ class RerankingConfig:
     weight: float = 0.5
 
     def validate(self) -> None:
-        from ...config.types import RERANKER_MODES
-
         if self.mode not in RERANKER_MODES:
             raise ValueError(f"Unsupported reranker mode: {self.mode}")
         if self.top_k <= 0:

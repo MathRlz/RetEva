@@ -7,6 +7,7 @@ file-relative breaks for pip-installed servers).
 
 import os
 import sys
+from evaluator.cli import parse_args, run_evaluation
 
 # Dump a Python+C traceback on native crashes (SIGSEGV) when debugging.
 if os.environ.get("EVALUATOR_FAULTHANDLER") == "1":
@@ -17,8 +18,6 @@ if os.environ.get("EVALUATOR_FAULTHANDLER") == "1":
 
 def main() -> int:
     try:
-        from evaluator.cli import parse_args, run_evaluation
-
         args = parse_args()
         run_evaluation(args)
         return 0

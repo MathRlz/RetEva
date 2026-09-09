@@ -1,13 +1,7 @@
 """Centralized model registry for all model types.
 
-This module provides a plugin-style registry system that allows models to
-self-register, making it easy to add new models without modifying factory code.
-
-Each model class may declare an inner ``Params`` dataclass with a ``size``
-field and a ``SIZES`` class-var mapping size names to HuggingFace model
-identifiers.  The registry auto-discovers this at registration time and
-exposes it via :meth:`ModelRegistry.get_params_class` /
-:func:`resolve_model_name`.
+Models self-register via ``@register_*`` decorators; an inner ``Params`` dataclass may
+declare ``size``/``SIZES`` for :func:`resolve_model_name` to resolve checkpoints.
 """
 from dataclasses import fields as dc_fields
 from typing import Dict, Type, Optional, Any
@@ -21,18 +15,11 @@ class ModelRegistry:
 
     When constructed with ``module``, the registry is *lazily populated*: the
     first lookup imports that module (whose model classes self-register via
-    the ``@register_*`` decorators), so importing ``evaluator.models`` no
-    longer drags every torch/transformers-heavy model module in eagerly.
+    the ``@register_*`` decorators), so importing ``evaluator.models`` does
+    not load the torch/transformers-heavy model modules.
     """
 
     def __init__(self, name: str, module: Optional[str] = None):
-        """Initialize a registry.
-
-        Args:
-            name: Name of this registry (e.g., 'ASR', 'TextEmbedding')
-            module: Dotted module path whose import registers this family's
-                models; imported on first lookup (lazy population).
-        """
         self.name = name
         self._module = module
         self._populated = module is None
@@ -59,14 +46,7 @@ class ModelRegistry:
         default_name: Optional[str] = None,
         **metadata
     ):
-        """Register a model class.
-
-        Args:
-            model_type: Unique identifier for this model type (e.g., 'whisper')
-            model_class: The model class to register
-            default_name: Default model name/checkpoint if not specified
-            **metadata: Additional metadata (description, tags, etc.)
-        """
+        """Register a model class."""
         if model_type in self._registry:
             class_name = model_class.__name__ if model_class is not None else "None"
             logger.warning(
@@ -91,17 +71,7 @@ class ModelRegistry:
         logger.debug(f"Registered {model_type} -> {class_name} in {self.name} registry")
 
     def get(self, model_type: str) -> Type:
-        """Get a registered model class.
-
-        Args:
-            model_type: The model type identifier
-
-        Returns:
-            The registered model class
-
-        Raises:
-            ValueError: If model type is not registered
-        """
+        """Get a registered model class; raises ValueError if unknown."""
         self._ensure_populated()
         model_type = self._aliases.get(model_type, model_type)
         if model_type not in self._registry:
@@ -113,54 +83,24 @@ class ModelRegistry:
         return self._registry[model_type]
 
     def get_default_name(self, model_type: str) -> Optional[str]:
-        """Get the default model name for a model type.
-
-        Args:
-            model_type: The model type identifier
-
-        Returns:
-            Default model name or None
-        """
+        """Get the default model name for a model type, or None."""
         self._ensure_populated()
         return self._default_names.get(model_type)
 
     def get_metadata(self, model_type: str) -> Dict[str, Any]:
-        """Get metadata for a model type.
-
-        Args:
-            model_type: The model type identifier
-
-        Returns:
-            Metadata dictionary
-        """
+        """Get metadata for a model type."""
         self._ensure_populated()
         return self._metadata.get(model_type, {})
 
     def list_types(self) -> list[str]:
-        """List all registered model types.
-
-        Returns:
-            List of registered model type identifiers
-        """
+        """List all registered model types."""
         self._ensure_populated()
         return list(self._registry.keys())
 
     def is_registered(self, model_type: str) -> bool:
-        """Check if a model type is registered.
-
-        Args:
-            model_type: The model type identifier
-
-        Returns:
-            True if registered, False otherwise
-        """
+        """Check if a model type is registered."""
         self._ensure_populated()
         return model_type in self._registry or model_type in self._aliases
-
-    def get_params_class(self, model_type: str) -> Optional[Type]:
-        """Return the Params dataclass for *model_type*, or None."""
-        self._ensure_populated()
-        return self._params_classes.get(model_type)
 
     def get_sizes(self, model_type: str) -> Dict[str, str]:
         """Return {size_name: model_name} for *model_type*, or empty dict."""
@@ -267,11 +207,6 @@ class ModelRegistry:
             @asr_registry.decorator('whisper', default_name='openai/whisper-medium')
             class WhisperModel(ASRModel):
                 ...
-
-        Args:
-            model_type: Unique identifier for this model type
-            default_name: Default model name/checkpoint
-            **metadata: Additional metadata
         """
         def decorator_fn(cls):
             self.register(model_type, cls, default_name, **metadata)
@@ -323,9 +258,5 @@ FAMILY_REGISTRIES: Dict[str, ModelRegistry] = {
 
 
 def get_all_registered_models() -> Dict[str, list[str]]:
-    """Get all registered models across all registries.
-
-    Returns:
-        Dictionary mapping family name to list of registered model types.
-    """
+    """Get all registered models across all registries."""
     return {family: reg.list_types() for family, reg in FAMILY_REGISTRIES.items()}

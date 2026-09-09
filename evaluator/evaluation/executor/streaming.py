@@ -1,23 +1,6 @@
-"""Windowed query-side execution (Roadmap 3a).
-
-The corpus is embedded + indexed once; the *query* side runs one window at a time, so a
-corpus-scale run holds only one window's audio / query vectors at a time. The per-item bus
-artifacts each window produces (query_text, retrieved, …) accumulate across windows, and the
-finalize nodes (per-item metrics + the report assembler + its bootstrap CIs / BH-FDR) run once
-over the full accumulated set — so a windowed run reproduces the whole-run report exactly.
-
-Three windowed-execution roles, by node taxonomy:
-
-- **prelude** (once, full dataset): the ``source`` node (publishes the whole corpus + per-item
-  GT) and the corpus embed/index nodes — window-independent, shared by every window.
-- **windowed** (per window): the per-item query producers (asr, embed, query rewrites,
-  retrieval, refine, fusion) — their output for item *i* depends only on item *i* + the shared
-  index, so they slice cleanly.
-- **finalize** (once, after windows): the metric / report / generation / sink nodes, which need
-  the full per-item set (means, bootstrap CIs, BH-FDR, traces).
-
-Opt-in via ``StreamingConfig.window_size``; default whole-dataset execution is unchanged.
-"""
+"""Windowed query-side execution (``StreamingConfig.window_size``, default off): the corpus
+is embedded/indexed once, the query side runs one window at a time for bounded memory, and
+per-item bus artifacts accumulate across windows so finalize reproduces the whole-run report."""
 
 from __future__ import annotations
 
@@ -28,6 +11,11 @@ import numpy as np
 
 from ...pipeline.graph.operators import node_kind
 from ...pipeline.graph.registry import node_category, node_domain
+from ..item_set import ItemSet
+from .engine import _run_one_node
+from ...datasets.runtime import QueryIdSubset
+from ...logging_config import get_logger
+from ..run_journal import RunJournal, run_key
 
 # Source kinds publish the whole corpus + per-item GT once (window-independent).
 SOURCE_KINDS = frozenset({"dataset_source", "dataset_union"})
@@ -76,10 +64,9 @@ def partition_nodes_for_streaming(graph: Any) -> WindowedNodePartition:
 
 
 def window_bounds(n: int, window_size: int) -> List[Tuple[int, int]]:
-    """The ``[start, stop)`` query-window ranges over ``n`` items.
-
-    A non-positive or ``>= n`` window collapses to a single whole-set window (so an over-large
-    window degrades to today's whole-dataset pass). ``n == 0`` yields no windows."""
+    """The ``[start, stop)`` query-window ranges over ``n`` items. A non-positive or ``>= n``
+    window collapses to a single whole-set window (degrading to a whole-dataset pass);
+    ``n == 0`` yields no windows."""
     if n <= 0:
         return []
     if window_size <= 0 or window_size >= n:
@@ -89,11 +76,9 @@ def window_bounds(n: int, window_size: int) -> List[Tuple[int, int]]:
 
 def merge_window_values(parts: List[Any]) -> Any:
     """Fold one bus slot's per-window values into the whole-run value (order-preserving).
-
-    ItemSets concat by id; ndarrays stack rows; lists extend; a single part passes through. The
-    order is window-then-row, i.e. dataset order — so a windowed run's accumulated per-item
+    ItemSets concat by id; ndarrays stack rows; lists extend; a single part passes through.
+    The order is window-then-row (dataset order), so a windowed run's accumulated per-item
     arrays match the whole run byte-for-byte (the bootstrap RNG resamples the same order)."""
-    from ..item_set import ItemSet
 
     if len(parts) == 1:
         return parts[0]
@@ -110,11 +95,8 @@ def merge_window_values(parts: List[Any]) -> Any:
 
 
 def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
-    """Run ``stage_graph`` windowing the query side (3a). Drop-in for ``_execute_stage_graph``
+    """Run ``stage_graph`` windowing the query side. Drop-in for ``_execute_stage_graph``
     when ``streaming.window_size`` is set; produces the same RunState the whole run would."""
-    from .engine import _run_one_node
-    from ...datasets.runtime import _QueryIdSubset
-    from ...logging_config import get_logger
 
     logger = get_logger(__name__)
     flat = [node for level in stage_graph.topological_levels() for node in level]
@@ -123,9 +105,9 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
     by_id = {n.id: n for n in flat}
 
     # Only the bus slots the finalize role consumes need to survive across windows; every
-    # other windowed slot (e.g. the heavy query vectors) is overwritten each window, so just
-    # one window's worth is resident — that is the memory bound. A finalize slot is one a
-    # finalize node binds as input: (producer_id, artifact_name).
+    # other windowed slot (e.g. heavy query vectors) is overwritten each window — that is the
+    # memory bound. A finalize slot is one a finalize node binds as input: (producer_id,
+    # artifact_name).
     finalize_inputs = {
         (producer, artifact)
         for node in flat if node.id in finalize
@@ -160,7 +142,7 @@ def execute_windowed(state: Any, stage_graph: Any, window_size: int) -> None:
     for w, (start, stop) in enumerate(bounds):
         if w < start_window:
             continue  # already folded into the restored accumulator
-        state.dataset = _QueryIdSubset(full_dataset, list(range(start, stop)))
+        state.dataset = QueryIdSubset(full_dataset, list(range(start, stop)))
         for node in flat:
             if node.id in windowed:
                 _run_one_node(state, node, absorb_errors=False)
@@ -187,8 +169,6 @@ def _setup_window_journal(state: Any, flat: List[Any]):
     """``(journal, start_window, accum)`` for windowed resume — gated on the same
     cache-dir + experiment-id + checkpoint-interval as the level journal. A matching journal
     restores the accumulator and resumes at the first incomplete window."""
-    from ...logging_config import get_logger
-    from ..run_journal import RunJournal, run_key
 
     logger = get_logger(__name__)
     cm = state.cache_manager

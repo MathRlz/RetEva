@@ -1,8 +1,7 @@
 """Shared audio-preparation helpers (TTS synthesis for text-only datasets).
 
 Used by both the CLI (``cli/commands.py``) and the webapi service
-(``services/evaluation_service.py``) so the two paths synthesize audio
-identically.
+(``services/evaluation_service.py``) so the two paths synthesize identically.
 """
 
 from __future__ import annotations
@@ -13,6 +12,9 @@ from typing import Any, List, Optional
 
 from tqdm import tqdm
 from ...utils.progress import progress_disabled
+from evaluator.pipeline.audio import synthesis
+from evaluator.devices.pool import get_active_pool
+from evaluator.config import estimate_model_memory_gb
 
 logger = logging.getLogger(__name__)
 
@@ -25,34 +27,13 @@ def synthesize_missing_query_audio(
     cache_manager: Any = None,
     device_pool: Any = None,
 ) -> int:
-    """Synthesize audio for questions that lack an ``audio_path``.
-
-    Synthesized clips are cached through the shared CacheManager (the ``synthesized_audio``
-    category) when one is supplied and enabled — so they appear in cache stats and obey
-    ``--no-cache`` / ``--clear-cache`` like every other artifact. Keys are content-based
-    (text + voice settings), so an already-cached clip sets the question's ``audio_path``
-    without loading a TTS model. Per-question failures are logged and skipped.
-
-    Cache behaviour:
-      * cache_manager enabled → reuse/store under the cache (content-keyed);
-      * cache_manager disabled (``--no-cache``) → never reuse; always re-synthesize;
-      * no cache_manager (direct callers) → legacy: reuse on-disk WAVs in ``output_dir``.
-
-    Args:
-        questions: BenchmarkQuestion-like objects with ``question_id``,
-            ``question_text`` and a settable ``audio_path``.
-        synth_config: AudioSynthesisConfig (provider, voice, output_dir, ...).
-        log: Optional logger; falls back to module logger.
-        cache_manager: Optional shared CacheManager for synthesized-audio caching.
-        device_pool: Optional GPUPool. A GPU-capable provider's device is allocated
-            through it (reservation + LRU eviction of parked models) instead of taken
-            verbatim from ``synth_config.device``, and released when synthesis ends —
-            the TTS model is freed here, unlike the long-lived embedders. Falls back
-            to the run's active pool; no pool → the config device is used as before.
-
-    Returns:
-        Number of questions whose audio is now available (synthesized + reused).
-    """
+    """Synthesize audio for questions that lack an ``audio_path``, cached through the shared
+    CacheManager (content-keyed by text + voice settings) when supplied and enabled, else
+    legacy on-disk reuse under ``output_dir``; ``--no-cache`` always re-synthesizes.
+    ``device_pool`` allocates/releases the TTS model's device through it (reservation + LRU
+    eviction), falling back to the run's active pool or the config device; the model is freed
+    here, unlike the long-lived embedders. Returns the number of questions whose audio is now
+    available."""
     log = log or logger
     if not questions:
         return 0
@@ -62,27 +43,19 @@ def synthesize_missing_query_audio(
     no_cache = cache_manager is not None and not caching
 
     if cache_manager is not None:
-        # Don't trust a bare `question.audio_path` to mean "already resolved for THIS
-        # synth_config" — it can't tell "resolved by a SIBLING tts variant's different
-        # provider/voice" apart from "resolved for this one". In a multi-variant TTS-
-        # comparison graph (several `tts` nodes sharing one dataset), the shared Question
-        # objects carry only ONE audio_path slot: whichever tts node ran first set it, and
-        # every OTHER variant's naive "already has audio_path, skip" check then silently
-        # reused that first variant's audio instead of synthesizing its own — confirmed
-        # live: a 3-TTS-engine comparison came back with byte-identical downstream metrics
-        # for all 3 "different" engines. Route every question through the real,
-        # provider-discriminating check below instead (`_tts_cache_key` includes
-        # provider/voice/language/sample_rate, so a genuine cache hit/miss is per-config).
+        # A bare `question.audio_path` can't tell "resolved for THIS synth_config" apart from
+        # "resolved by a SIBLING tts variant" — shared Question objects carry only one slot, so
+        # a naive skip-if-set check silently reused the first variant's audio for every other
+        # one (confirmed live: byte-identical metrics across 3 "different" TTS engines). Route
+        # every question through the real, provider-discriminating check below instead.
         pending = list(questions)
     else:
-        # No cache manager (a direct caller with no multi-variant coordination) — legacy:
-        # trust an already-set audio_path as-is.
+        # Direct caller, no multi-variant coordination — legacy: trust audio_path as-is.
         pending = [q for q in questions if not getattr(q, "audio_path", None)]
     if not pending:
         return 0
 
     import dataclasses
-    from evaluator.pipeline.audio.synthesis import AudioSynthesizer
 
     out_dir = Path(synth_config.output_dir) if synth_config.output_dir else None
     if out_dir is not None:
@@ -133,19 +106,13 @@ def synthesize_missing_query_audio(
         else synth_config
     )
 
-    # Route the TTS model's device through the GPU pool, so its footprint is visible to
-    # the pool's packing (embedders no longer land on a GPU already holding a 10GB TTS
-    # model) and a packed GPU can shed parked models to make room for it. Providers with
-    # a 0.0 estimate (piper: CPU-only external binary) skip the pool entirely.
+    # Route the TTS model's device through the GPU pool so its footprint is visible to the
+    # pool's packing. Providers with a 0.0 estimate (piper: CPU-only) skip the pool entirely.
     pool = device_pool
     if pool is None:
-        from evaluator.devices.pool import get_active_pool
-
         pool = get_active_pool()
     tts_pool_key: Optional[str] = None
     if pool is not None:
-        from evaluator.config import estimate_model_memory_gb
-
         memory_gb = estimate_model_memory_gb("tts", synth_config.provider)
         if memory_gb > 0:
             tts_pool_key = f"tts:{synth_config.provider}"
@@ -160,14 +127,14 @@ def synthesize_missing_query_audio(
     # One synthesizer per language (a question's own ``language`` wins over the default).
     synthesizers: dict = {}
 
-    def _get_synth(lang: str) -> AudioSynthesizer:
+    def _get_synth(lang: str) -> "synthesis.AudioSynthesizer":
         if lang not in synthesizers:
             cfg = (
                 dataclasses.replace(base_cfg, language=lang)
                 if lang != default_lang
                 else base_cfg
             )
-            synthesizers[lang] = AudioSynthesizer(cfg)
+            synthesizers[lang] = synthesis.AudioSynthesizer(cfg)
         return synthesizers[lang]
 
     done = 0
@@ -177,10 +144,9 @@ def synthesize_missing_query_audio(
         for question in tqdm(pending, desc="TTS synthesis", unit="clip", disable=progress_disabled()):
             text = getattr(question, "question_text", None)
             if not text:
-                # A silently-skipped question ends up with NO audio_path; the tts node then
-                # cannot publish its ref set (all-or-nothing) and every downstream audio
-                # consumer of this branch dies far from the cause. Count it as a failure so
-                # the node raises HERE, naming the question.
+                # A silently-skipped question ends up with no audio_path and every downstream
+                # consumer dies far from the cause; count it as a failure so the raise below
+                # names the question.
                 failed += 1
                 if first_error is None:
                     first_error = (
@@ -219,20 +185,15 @@ def synthesize_missing_query_audio(
             if hasattr(synth, "log_cache_stats"):
                 synth.log_cache_stats()
     finally:
-        # Release the TTS model(s) before the caller embeds (co-residence has caused
-        # crashes), and return the pool reservation — the model is genuinely freed here,
-        # so the memory really is available again.
+        # Release the TTS model(s) before the caller embeds (co-residence has caused crashes).
         synthesizers.clear()
         _release_torch_memory()
         if pool is not None and tts_pool_key is not None:
             pool.release(tts_pool_key)
 
     if failed:
-        # Fail the TTS node HERE, at the actual error, instead of "succeeding" with holes:
-        # a branch with partial audio measures a different question subset than its siblings
-        # (incomparable in a comparison run), and the missing clips used to surface much
-        # later as a misleading `Question ... has no audio_path` crash in ASR. The executor
-        # turns this raise into failed-branch + skipped-downstream; other branches continue.
+        # Fail HERE instead of "succeeding" with holes: a branch with partial audio is
+        # incomparable to its siblings, and used to surface later as a misleading ASR crash.
         raise RuntimeError(
             f"TTS provider '{synth_config.provider}' failed for {failed}/{len(pending)} "
             f"question(s); first error: {first_error}"

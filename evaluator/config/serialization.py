@@ -11,6 +11,9 @@ from enum import Enum
 from typing import Any, Dict
 
 import yaml
+from .graph_config import DATA_FIELD_TO_KEY, legacy_yaml_to_graph_yaml, resolved_model_config
+from .subconfigs import FEATURE_SUBCONFIGS
+from ..logging_config import get_logger
 
 
 def _serialize_value(val: Any) -> Any:
@@ -71,11 +74,10 @@ def to_yaml(config: Any, yaml_path: str) -> None:
         yaml.dump(config_dict, f, default_flow_style=False, indent=2)
 
 
-def _config_template_label(config: Any) -> Any:
-    """The config's pipeline-mode label — the report's ``pipeline_mode`` echo. Delegates to the
-    ``graph_template`` property (explicit template if any, else the label derived from the
-    graph's node kinds); ``None`` only for a query-head-less custom graph."""
-    return getattr(config, "graph_template", None)
+def _config_run_label(config: Any) -> Any:
+    """The config's run label — the report's ``pipeline_mode`` echo; ``None`` only for a
+    query-head-less custom graph."""
+    return getattr(config, "graph_label", None)
 
 
 def _model_summary(model: Any, family: str) -> str:
@@ -94,24 +96,18 @@ _MODEL_SUMMARY_KEYS = {  # flat-dict key -> (family, the node kind that carries 
 
 
 def _active_model_summaries(config: Any) -> Dict[str, str]:
-    """Model summary strings for ONLY the families the executed graph actually uses, so a default
-    (e.g. ``asr_model: wav2vec2:default``) never leaks for a node the run never had. Resolves each
-    present family's ACTUAL model(s) off the graph's own nodes (the flat default overlaid by each
-    node's own params — same resolver factory.py/validation.py use), not the flat default blindly
-    — a branched config with 2+ distinct models in one family joins them as ``a+b`` instead of
-    silently reporting only the (possibly unset) flat default. Best-effort: if the graph can't be
-    built, falls back to the flat default for all three (the pre-graph-config-shape case)."""
+    """Model summary strings for only the families the executed graph actually uses (no
+    default leak for an absent node); a family with 2+ distinct models across branches
+    joins them as ``a+b``. Best-effort: falls back to the flat default if the graph can't
+    be built."""
     from ..pipeline.graph.operators import node_kind
-    from .graph_config import resolved_model_config
 
     graph = None
     try:
-        from ..pipeline.graph.modes import build_graph_for_config
+        from ..pipeline.graph.build import build_graph_for_config
 
         graph = build_graph_for_config(config)
     except Exception as exc:  # noqa: BLE001 - telemetry must not crash
-        from ..logging_config import get_logger
-
         get_logger(__name__).debug("active-model summary fell back (graph build failed): %s", exc)
 
     out: Dict[str, str] = {}
@@ -135,9 +131,9 @@ def to_dict(config: Any, *, include_config: bool = False) -> Dict[str, Any]:
     """Convert to dictionary.
 
     Args:
-        include_config: If True return full nested dict that can
-            round-trip through ``from_dict``.  If False (default)
-            return compact flat dict for telemetry/logging.
+        include_config: True returns the full nested dict (round-trips through
+            ``from_dict``); False (default) returns the compact flat dict for
+            telemetry/logging.
     """
     if include_config:
         return to_nested_dict(config)
@@ -149,7 +145,7 @@ def to_dict(config: Any, *, include_config: bool = False) -> Dict[str, Any]:
         "checkpoint_interval": config.checkpoint_interval,
         "parallel_enabled": config.parallel_enabled,
         "cache_enabled": config.cache.enabled,
-        "pipeline_mode": _config_template_label(config),
+        "pipeline_mode": _config_run_label(config),
         # Only families the executed graph uses — no default leak for an absent node.
         **_active_model_summaries(config),
         "dataset": config.data.dataset_name,
@@ -181,17 +177,83 @@ def to_nested_dict(config: Any) -> Dict[str, Any]:
         "parallel_enabled": config.parallel_enabled,
         "persist_intermediate_artifacts": config.persist_intermediate_artifacts,
     }
-    from .evaluation import _FEATURE_SUBCONFIGS
 
     for key in config._PLAIN_SUBCONFIGS:
         result[key] = _serialize_dataclass(getattr(config, key))
     result["llm"] = _serialize_dataclass(config.llm)
-    for key in _FEATURE_SUBCONFIGS:  # each capability sub-config is a top-level field now
+    for key in FEATURE_SUBCONFIGS:  # each capability sub-config is a top-level field
         result[key] = _serialize_dataclass(getattr(config, key))
     if config.device_pool is not None:
         result["device_pool"] = _serialize_dataclass(config.device_pool)
-    # The graph spec (explicit nodes/edges or a template reference) — so an explicit-graph
-    # config round-trips through from_dict (it's a plain JSON-able dict).
+    # Graph spec, so an explicit-graph config round-trips through from_dict (plain JSON-able).
     if getattr(config, "graph_override", None):
         result["graph_override"] = config.graph_override
     return result
+
+
+def resolved_node_config(config: Any) -> Dict[str, Any]:
+    """The executed DAG as a self-contained, node-centric config (graph-first).
+
+    Serializes ``build_graph_for_config(config)`` to ``graph: {nodes, edges}`` plus the
+    non-graph config sections. There is no pipeline_mode: the graph IS the spec, so the
+    result can never list a model for a node the run never executed. Round-trips: loading
+    it via ``from_yaml`` rebuilds the same graph.
+    """
+    from ..pipeline.graph.build import build_graph_for_config
+    from ..pipeline.graph.operators import expand_alias, node_kind
+
+    # Reuse the migration translator for the non-graph sections + per-kind resolved-config map
+    # it already computes; drop its graph block + leftover model passthrough for the real DAG.
+    ncfg = legacy_yaml_to_graph_yaml(to_nested_dict(config))
+    per_kind = ncfg.pop("nodes", {}) or {}
+    ncfg.pop("model", None)
+
+    # Multi-source: lift data.datasets (legacy field names) back to the node-centric top-level
+    # `datasets:` map, or the dataset_source nodes' `dataset` refs won't resolve on reload.
+    _ds_map = (ncfg.get("data") or {}).pop("datasets", None)
+    if _ds_map:
+        inv = DATA_FIELD_TO_KEY
+        ncfg["datasets"] = {
+            sid: {inv.get(k, k): v for k, v in (entry or {}).items() if v is not None}
+            for sid, entry in _ds_map.items()
+        }
+
+    # Preview-only schema injected by _attach_dataset_fields — derived on load, never persisted.
+    # Everything else in n.params is structural and must survive (dense/sparse arms, hybrid
+    # flag); the per-kind blob alone gave every same-kind instance identical params, breaking
+    # round-trip.
+    _transient = {"fields", "extra_outputs", "suppress_outputs", "embedding_space"}
+
+    override = getattr(config, "graph_override", None) or {}
+    from ..pipeline.graph.wiring import has_port_edges
+
+    graph = build_graph_for_config(config)
+    nodes = []
+    edges = []
+    for n in graph.nodes:
+        kind = node_kind(n.stage, n.params)
+        entry: Dict[str, Any] = {"id": n.id, "type": kind}
+        # Drop unset fields (None / empty) so a node carries only what was actually resolved.
+        params = {k: v for k, v in (per_kind.get(kind) or {}).items() if v not in (None, {}, [])}
+        # mode is per-arm (dense/sparse), not a shared tuning key — the default `dense` from
+        # the global blob must not stamp every arm; a non-default global hybrid still passes.
+        if kind == "retrieval" and params.get("mode") == "dense":
+            params.pop("mode")
+        # The node's OWN structural params win over the shared per-kind blob; skip the
+        # discriminators the friendly `type` already implies (op/axis/level/…).
+        _op, alias_disc = expand_alias(kind, None)
+        params.update({
+            k: v for k, v in (n.params or {}).items()
+            if k not in _transient and (alias_disc or {}).get(k) != v
+        })
+        if params:
+            entry["params"] = params
+        nodes.append(entry)
+        for dep in n.depends_on:
+            edges.append({"from": dep, "to": n.id})
+    # A config wired with explicit port-level edges IS the edge spec — carry it through
+    # verbatim (the depends_on-derived node-level list is the legacy auto-wire echo).
+    if has_port_edges(override.get("edges")):
+        edges = list(override["edges"])
+    ncfg["graph"] = {"nodes": nodes, "edges": edges}
+    return ncfg

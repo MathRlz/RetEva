@@ -1,11 +1,11 @@
-"""Phase 1.5 (graph-first): ``ModelServiceProvider.get_*`` accept ``**kwargs`` and thread them to
+"""``ModelServiceProvider.get_*`` accept ``**kwargs`` and thread them to
 the factory, registry-driven — so a model's own ``Params`` (e.g. ``pooling``) flow through without
 the provider knowing them. The kwargs fold into the cache key, so distinct param sets cache as
-distinct models (``pooling=mean_abtt`` ≠ ``attention``) while no-kwargs callers key as before.
+distinct models (``pooling=mean_abtt`` ≠ ``attention``) while no-kwargs callers key consistently.
 """
 
-import evaluator.services.model_provider as mp
-from evaluator.services.model_provider import ModelServiceProvider, _kw_key
+import evaluator.pipeline.model_provider as mp
+from evaluator.pipeline.model_provider import ModelServiceProvider, _kw_key
 
 
 def _patch_audio_factory(monkeypatch):
@@ -42,7 +42,8 @@ def test_distinct_kwargs_cache_distinctly(monkeypatch):
 
 
 def test_no_kwargs_keys_unchanged():
-    # back-compat: a no-kwargs call contributes no key fragment, so callers cache exactly as before.
+    # a no-kwargs call contributes no key fragment, so every existing caller's cache key stays
+    # exactly the same.
     assert _kw_key({}) == ()
     assert _kw_key({"pooling": "mean_abtt"}) != ()
     # order-independent: same dict, different insertion order → identical key fragment.

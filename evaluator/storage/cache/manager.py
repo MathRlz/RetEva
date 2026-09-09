@@ -40,7 +40,6 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
         self.checkpoints_dir = self.cache_dir / "checkpoints"
         self.synthesized_audio_dir = self.cache_dir / "synthesized_audio"
 
-        # Centralized mapping for cache directories (replaces if-elif chains)
         self._cache_dirs: Dict[str, Path] = {
             "asr_features": self.asr_features_dir,
             "transcriptions": self.transcriptions_dir,
@@ -61,8 +60,8 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
                     logger.warning("Could not create cache dir %s: %s", dir_path, exc)
             try:
                 self._initialize_manifest_db()
-                # Drop rows whose artifact file is gone (M4) — keeps the manifest bounded
-                # even with the size limit disabled (max_size_gb=0, the default).
+                # Drop rows whose artifact file is gone — keeps the manifest bounded even
+                # with the size limit disabled (max_size_gb=0, the default).
                 self.compact_manifest()
             except (sqlite3.OperationalError, OSError) as exc:
                 # An unwritable / read-only cache_dir (e.g. owned by another user) must not
@@ -77,7 +76,6 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
     def _get_cache_path(
         self, cache_type: str, cache_key: str, extension: str = ""
     ) -> Path:
-        """Get cache file path for a given type and key."""
         if cache_type not in self._cache_dirs:
             raise ValueError(
                 f"Unknown cache type: {cache_type}. "
@@ -111,12 +109,11 @@ class CacheManager(ManifestMixin, IoMixin, EvictionMixin):
             cache_type="asr_features",
             cache_key=cache_key,
             extension=".npz",
+            arrays={"features": features, "attention_mask": attention_mask},
             stage="asr_features",
             model_name=model_name,
             model_version=model_version,
             input_hash=audio_hash,
-            features=features,
-            attention_mask=attention_mask,
         )
 
     def get_transcription(

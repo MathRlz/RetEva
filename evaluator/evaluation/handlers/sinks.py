@@ -1,7 +1,6 @@
 """Sink stage handlers: dataset / leaderboard / tracking output nodes.
 
-Each handler
-registers itself via ``@register_stage_handler`` at import time.
+Each handler registers itself via ``@register_stage_handler`` at import time.
 """
 
 from __future__ import annotations
@@ -9,6 +8,11 @@ from __future__ import annotations
 from ..stage_registry import register_stage_handler
 from ...logging_config import get_logger
 from ..executor.state import RunState
+from .rag import _stage_finalize
+from .metrics import _stage_aggregate
+from ._dispatch import dispatch_operator
+from ..sinks import write_report_json, log_report_to_tracking
+from ...config.serialization import resolved_node_config
 
 logger = get_logger(__name__)
 
@@ -18,9 +22,6 @@ def _stage_sink(s: RunState) -> None:
     """The ``sink`` operator: dispatch by target to finalize / aggregate / dataset /
     leaderboard / tracking. Bodies unchanged (finalize lives in the rag handlers,
     aggregate in the metrics handlers)."""
-    from .rag import _stage_finalize
-    from .metrics import _stage_aggregate
-    from ._dispatch import dispatch_operator
 
     return dispatch_operator("sink", {
         "finalize": _stage_finalize,
@@ -80,16 +81,12 @@ def _stage_dataset_sink(s: RunState) -> None:
 
 
 def _stage_leaderboard_sink(s: RunState) -> None:
-    """Persist the aggregate ``report`` to a JSON sidecar (A6). No-op without a report.
-
-    Also writes the *resolved* config (R1) — the EvaluationConfig as it actually ran, with
-    devices/models/effective batch size filled in — to ``<out>/config_resolved_<name>.json``,
-    so a reproduction uses what ran, not the (possibly auto-completed) submitted config.
-    """
+    """Persist the aggregate ``report`` to a JSON sidecar (no-op without one), plus the
+    *resolved* config to ``<out>/config_resolved_<name>.json`` so a reproduction uses what
+    actually ran, not the submitted config."""
     report = s.results.get("report") if s.results else None
     if not report:
         return
-    from ..sinks import write_report_json
 
     out_dir = getattr(s.config, "output_dir", ".") if s.config else "."
     name = getattr(s.config, "experiment_name", "run") if s.config else "run"
@@ -99,17 +96,13 @@ def _stage_leaderboard_sink(s: RunState) -> None:
 
 
 def _write_resolved_config(s: RunState, out_dir: str, name: str) -> None:
-    """Serialize the resolved config — the *executed DAG* — next to the report (R1).
-
-    Node-centric YAML (graph-first Phase 5): the graph that actually ran + its non-graph
-    config, no ``pipeline_mode``. Best-effort."""
+    """Serialize the resolved config (the *executed DAG*) next to the report as node-centric
+    YAML — the graph that actually ran + its non-graph config, no ``pipeline_mode``. Best-effort."""
     if s.config is None:
         return
     import os
 
     import yaml
-
-    from ...config.graph_config import resolved_node_config
 
     try:
         path = os.path.join(out_dir, f"config_resolved_{name}.yaml")
@@ -125,10 +118,9 @@ def _write_resolved_config(s: RunState, out_dir: str, name: str) -> None:
 
 
 def _stage_tracking_sink(s: RunState) -> None:
-    """Log the aggregate ``report``'s metrics to tracking (A6). No-op without a report."""
+    """Log the aggregate ``report``'s metrics to tracking. No-op without a report."""
     report = s.results.get("report") if s.results else None
     if not report:
         return
-    from ..sinks import log_report_to_tracking
 
     log_report_to_tracking(report)

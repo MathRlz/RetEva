@@ -1,4 +1,4 @@
-"""GPUPool allocation accounting + thread-safety (audit A2/F2)."""
+"""GPUPool allocation accounting + thread-safety."""
 
 import threading
 

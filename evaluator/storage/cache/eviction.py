@@ -63,7 +63,6 @@ class EvictionMixin:
         return stats
 
     def _human_readable_size(self, size_bytes: int | float) -> str:
-        """Convert bytes to human readable format."""
         size: float = float(size_bytes)
         for unit in ["B", "KB", "MB", "GB"]:
             if size < 1024.0:
@@ -115,7 +114,7 @@ class EvictionMixin:
         return int(row[0]) if row else 0
 
     def compact_manifest(self) -> int:
-        """Drop manifest rows whose artifact file no longer exists (audit M4).
+        """Drop manifest rows whose artifact file no longer exists.
 
         The size-limit eviction only runs when ``max_size_gb`` triggers (default 0 =
         disabled), so rows for externally-deleted / stale artifacts otherwise accumulate

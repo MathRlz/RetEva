@@ -17,14 +17,19 @@ from ...datasets import QueryDataset
 from ...storage.cache import CacheManager
 from ...logging_config import get_logger, log_cache_stats, node_logger
 from ...metrics.domain_terms import load_term_weights
-from ...pipeline.graph.modes import build_run_graph
-from ..helpers import detect_graph_template
-from ...pipeline.graph.templates import GRAPH_TEMPLATES
+from ...pipeline.graph.build import build_run_graph, run_label
 from ..stage_registry import validate_graph_handlers
 from ..handlers.rag import drop_mirrored_top_level_keys
 from ..result_schema import RunResults
 from .state import RunState, RunFeatures, EvaluationContext
 from .engine import _execute_stage_graph
+from ...constants import RETRIEVAL_DEPTH
+from ...metrics.ir import report_depth
+from ...pipeline.graph.operators import node_kind
+from .parallel import assert_model_nodes_are_device_managed
+from .streaming import execute_windowed
+from ...datasets import runtime
+from ...config.node_config import resolve_graph_node_configs
 
 logger = get_logger(__name__)
 
@@ -32,7 +37,6 @@ logger = get_logger(__name__)
 def _result_depth(k, source: str) -> int:
     """Retrieval depth, floored at the deepest report cutoff (@10) so the published
     ``recall@10``/``ndcg@10`` are measured rather than a shallower ``@k`` relabelled."""
-    from ...metrics.ir import RETRIEVAL_DEPTH, report_depth
 
     depth = report_depth(k)
     if depth != int(k):
@@ -46,7 +50,6 @@ def _result_depth(k, source: str) -> int:
 def _node_kind(node) -> str:
     """The legacy node-kind name for graph-flag derivation (operator-abstraction): an
     operator node resolves to its old stage name, a pre-collapse node is itself."""
-    from ...pipeline.graph.operators import node_kind
 
     return node_kind(node.stage, node.params)
 
@@ -66,22 +69,17 @@ def run_graph(
     fixed phases, is the source of truth).
 
     Args:
-        dataset: QueryDataset instance containing audio samples and ground truth.
-        context: EvaluationContext bundling the pipelines + execution params (D1/F5 — the
-            sole entry contract: retrieval/asr/text-emb/audio-emb pipelines, cache_manager,
-            k, batch_size, trace_limit, num_workers, checkpoint_interval, experiment_id,
-            resume_from_checkpoint, progress_callback, oracle_mode, and ``features``).
+        context: EvaluationContext bundling the pipelines + execution params (the
+            sole entry contract).
         service_provider: Optional model service provider (offload coordination).
         device_pool: Optional GPUPool (memory-aware allocation + LRU eviction) — reaches
-            per-node model-override builds too (`_build_node_pipeline`), not just the
-            shared global pipeline built before this call.
+            per-node model-override builds too, not just the shared global pipeline built
+            before this call.
         offload_policy: "never" | "on_finish" | "on_finish_soft_cpu" | "on_use_soft_cpu" —
-            free each stage's model after last use ("on_finish_soft_cpu" parks it warm on
-            CPU instead; "on_use_soft_cpu" parks a per-node model the moment its node
-            finishes, so the GPU only ever holds the actively-executing node's models).
-        eval_config: The EvaluationConfig (mode detection, multi-dataset sources, provenance).
-        load_info: Optional model load metadata for the report.
-        graph_override: Optional explicit stage-graph spec replacing the default for the mode.
+            frees each stage's model after last use ("on_finish_soft_cpu" parks it warm on
+            CPU; "on_use_soft_cpu" also parks per-node models the moment each node finishes).
+        eval_config: The EvaluationConfig (multi-dataset sources, provenance).
+        graph_override: The config's explicit stage-graph spec — what runs.
 
     Returns:
         RunResults — the flat metric dict (pipeline_mode, WER/CER, MRR/Recall@k/NDCG@k, …,
@@ -91,9 +89,7 @@ def run_graph(
         ValueError: If neither audio_embedding_pipeline nor asr_pipeline provided.
     """
     features = context.features or RunFeatures()
-    mode, stage_graph = _resolve_mode_and_graph(
-        context, features, eval_config, graph_override
-    )
+    mode, stage_graph = _resolve_mode_and_graph(eval_config, graph_override)
 
     # The dataset is loaded in-graph (the dataset_source node) — on the standard path ``dataset``
     # is None here and the node sets ``state.total`` when it loads; a pre-loaded dataset (oracle
@@ -104,10 +100,9 @@ def run_graph(
         context.batch_size, context.k,
         f", dataset size: {len(dataset)}" if _have_ds else " (dataset loads in-graph)",
     )
-    # Pre-flight (M3): fail a typo'd/unregistered node type before any heavy work; a
-    # model node without a device mapping fails here too (was an import-time assert).
+    # Pre-flight: fail a typo'd/unregistered node type before any heavy work; a
+    # model node without a device mapping fails here too.
     validate_graph_handlers(stage_graph)
-    from .parallel import assert_model_nodes_are_device_managed
 
     assert_model_nodes_are_device_managed()
 
@@ -115,7 +110,6 @@ def run_graph(
     _cb = context.progress_callback or (lambda *_: None)
     _cb("init", 0, _total, f"Starting {mode} evaluation")
 
-    # Seed the run state (M2: setup extracted out of the DAG flow).
     state = _setup_execution_context(
         context=context,
         features=features,
@@ -142,12 +136,9 @@ def run_graph(
 
 def _collect_final_result(state: "RunState", stage_graph) -> RunResults:
     """Assemble the run's returned result from every `finalize` node's own published
-    ``run_report`` (R4/multi-variant — each finalize node builds its own report from its own
-    bound producers; see `_stage_finalize`). Exactly one → that report, flat, byte-identical to
-    the pre-R4 single-shared-`state.results` behavior. N > 1 (a multi-variant graph) →
-    ``{"variants": {node_id: report, ...}, "latency": ..., "node_latency": ...}``. Zero (no
-    `finalize` node in the graph, e.g. a structural-only run) → unchanged fallback to the
-    shared `state.results`."""
+    ``run_report`` (multi-variant). Exactly one → that report, flat. N > 1 → ``{"variants":
+    {node_id: report, ...}, "latency": ..., "node_latency": ...}``. Zero (no `finalize`
+    node, e.g. a structural-only run) → fallback to the shared `state.results`."""
     finalize_ids = [n.id for n in stage_graph.nodes if _node_kind(n) == "finalize"]
     reports = [
         (nid, state.ctx.get(nid, "run_report"))
@@ -165,7 +156,7 @@ def _collect_final_result(state: "RunState", stage_graph) -> RunResults:
             "%d node(s) failed: %s — %d downstream node(s) skipped",
             len(failed), summary, len(skipped),
         )
-    # G5: traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
+    # traces/judge are consolidated into report['traces']/['judge'] during finalize; drop
     # the duplicate top-level keys at the output boundary (sinks read them during the run).
     if not reports:
         drop_mirrored_top_level_keys(state.results)
@@ -188,53 +179,12 @@ def _collect_final_result(state: "RunState", stage_graph) -> RunResults:
     return result
 
 
-def _resolve_mode_and_graph(
-    context: "EvaluationContext",
-    features: "RunFeatures",
-    eval_config: Any,
-    graph_override: Any,
-):
-    """Determine the template label + build the run stage graph (the source of truth for
-    what runs). The config's graph template wins — cross-modal audio_emb builds a text
-    pipeline for the corpus, which pipeline-presence detection would misread as audio_text
-    fusion."""
-    configured_mode = None
-    if eval_config is not None and getattr(eval_config, "model", None) is not None:
-        from ...pipeline.graph.modes import resolve_template_label
-
-        # a back-compat template reference wins; else derive the label from the explicit graph's
-        # node kinds (audio_emb vs audio_text hinges on corpus_embedding vs text_embedding),
-        # which presence-detection alone can't tell apart.
-        configured_mode = resolve_template_label(eval_config)
-    try:
-        mode = detect_graph_template(
-            context.retrieval_pipeline,
-            context.asr_pipeline,
-            context.text_embedding_pipeline,
-            context.audio_embedding_pipeline,
-            configured_mode=configured_mode,
-        )
-    except ValueError:
-        # No query head anywhere: no label from the graph's node kinds AND no pipelines
-        # to detect from. Legal for an explicit graph — e.g. the no-retrieval RAG
-        # baseline (dataset_source -> answer_gen -> judge, generator answers from
-        # parametric knowledge). The mode string is only the run's label; handlers
-        # branch on what actually ran.
-        explicit = getattr(eval_config, "graph_override", None) or graph_override
-        if not (explicit or {}).get("nodes"):
-            raise
-        mode = "custom"
-    logger.info("Evaluation template: %s (DAG)", GRAPH_TEMPLATES.get(mode, mode))
-    stage_graph = build_run_graph(
-        mode,
-        graph_override=graph_override,
-        embedding_fusion_config=features.embedding_fusion_config,
-        query_opt_config=features.query_opt_config,
-        query_correction_config=features.query_correction_config,
-        retrieval_pipeline=context.retrieval_pipeline,
-        eval_config=eval_config,
-        trace_limit=context.trace_limit,
-    )
+def _resolve_mode_and_graph(eval_config: Any, graph_override: Any):
+    """The run's label + its stage graph (the source of truth for what runs). The label is only
+    a label — handlers branch on what actually ran, never on this string."""
+    mode = run_label(graph_override)
+    logger.info("Evaluation graph: %s (DAG)", mode)
+    stage_graph = build_run_graph(graph_override, eval_config=eval_config)
     stage_levels = [
         [node.id for node in level] for level in stage_graph.topological_levels()
     ]
@@ -246,12 +196,10 @@ def _dispatch_execution(
     state: "RunState", stage_graph: Any, eval_config: Any, features: "RunFeatures"
 ) -> None:
     """DAG-driven execution: the stage graph drives what runs and in what order. With
-    ``streaming.window_size`` set, run the query side window-by-window (3a) — same
+    ``streaming.window_size`` set, run the query side window-by-window — same
     RunState, bounded memory; else the whole-dataset pass."""
     _window = getattr(getattr(eval_config, "streaming", None), "window_size", None)
     if _window:
-        from .streaming import execute_windowed
-
         execute_windowed(state, stage_graph, int(_window))
     else:
         _execute_stage_graph(state, stage_graph, features.query_opt_config)
@@ -273,20 +221,14 @@ def _setup_execution_context(
     device_pool: Any = None,
     offload_policy: str = "never",
 ) -> RunState:
-    """Build the seeded ``RunState`` for a graph run (M2: extracted from ``run_graph``
-    so the DAG flow stays readable): multi-dataset sources + join validation, the
-    feature-config unpacking, offload policy, and the zeroed stage-times map.
-
-    The pipelines + execution params come from ``context`` (D1/F6 — no longer re-listed as
-    a dozen individual params); ``features`` is the caller-normalized feature bundle.
-    """
-    # The dataset is loaded in-graph (the dataset_source node) — when ``dataset`` is None here,
-    # that node loads the sources + the join gate. The only callers that still pass a pre-loaded
-    # dataset (the oracle re-run, direct ``run_graph`` callers, tests) get the sources loaded here.
+    """Build the seeded ``RunState`` for a graph run: multi-dataset sources + join
+    validation, the feature-config unpacking, offload policy, and the zeroed stage-times map."""
+    # dataset is loaded in-graph when None (dataset_source node); callers that pass a
+    # pre-loaded dataset (oracle re-run, direct callers, tests) get the sources loaded here.
     if dataset is not None:
-        from ...datasets.runtime import load_dataset_sources
-
-        dataset_sources, disable_ir_metrics, join_warning = load_dataset_sources(eval_config)
+        dataset_sources, disable_ir_metrics, join_warning = runtime.load_dataset_sources(
+            eval_config
+        )
     else:
         dataset_sources, disable_ir_metrics, join_warning = {}, False, ""
     state = RunState(
@@ -345,7 +287,6 @@ def _setup_execution_context(
     }
     # resolve every feature node's effective config ONCE (global ⊕ node params),
     # so handlers look theirs up instead of overlaying an allowlist at run time.
-    from ..node_config import resolve_graph_node_configs
 
     state.node_configs = resolve_graph_node_configs(state, stage_graph)
     state.stage_times = {
@@ -376,7 +317,7 @@ def _graph_shape_flags(stage_graph: Any) -> Dict[str, bool]:
 
 
 def _configure_offload(state: RunState, service_provider: Any, eval_config: Any) -> None:
-    """Soft-CPU offload (2c): size the provider's warm pool from config before any release."""
+    """Soft-CPU offload: size the provider's warm pool from config before any release."""
     if state.soft_cpu_offload and hasattr(service_provider, "configure_soft_offload"):
         sr = getattr(eval_config, "service_runtime", None)
         service_provider.configure_soft_offload(

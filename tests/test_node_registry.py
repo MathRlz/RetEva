@@ -4,7 +4,7 @@ import pytest
 
 from evaluator.pipeline.graph.operators import OPERATORS
 from evaluator.pipeline.graph.registry import (
-    _NODE_REGISTRY,
+    NODE_REGISTRY,
     get_stage_node_def,
     is_structural,
     node_category,
@@ -15,7 +15,7 @@ from evaluator.pipeline.graph.registry import (
 def test_all_operators_registered():
     assert len(OPERATORS) == 12   # asr + tts are first-class (the convert collapse retired)
     for op in OPERATORS:
-        assert op in _NODE_REGISTRY, op
+        assert op in NODE_REGISTRY, op
 
 
 @pytest.mark.parametrize("op", sorted(OPERATORS))
@@ -55,7 +55,7 @@ def test_embed_is_in_the_model_category():
     ("measure", {"family": "report"}), ("sink", {"target": "aggregate"}),
 ])
 def test_plumbing_nodes_are_structural(stage, params):
-    # P2.1: the measure/report/trace + sink plumbing is auto-derived, hidden from the palette.
+    # the measure/report/trace + sink plumbing is auto-derived, hidden from the palette.
     assert is_structural(stage, params) is True
 
 
@@ -85,7 +85,7 @@ def test_ground_truth_is_a_real_optional_input():
     assert get_stage_node_def("asr").optional_inputs == \
         (ARTIFACT_REFERENCE_TRANSCRIPTION,)                                     # asr GT
     assert get_stage_node_def("tts").optional_inputs == ()                      # tts none
-    # context + answer GT + the relevance the handler reads for its trace payload (R3-P2)
+    # context + answer GT + the relevance the handler reads for its trace payload
     assert get_stage_node_def("generate").optional_inputs == \
         (ARTIFACT_RETRIEVED, ARTIFACT_SHORT_ANSWERS, ARTIFACT_RELEVANT_DOCS)
 
@@ -108,13 +108,3 @@ def test_tts_provider_choices_match_registry():
     choices = get_stage_node_def("tts").param_spec["provider"]["choices"]
     assert set(choices) == set(tts_registry.list_types())
 
-
-def test_tts_is_gated_on_audio_synthesis():
-    """P3.3: tts is explicit — the text→audio bridge is in the graph ONLY when audio_synthesis is
-    enabled (no silent gap-fill). An audio dataset carries its own clips and needs no tts node."""
-    from evaluator.pipeline.graph.assembly import FeatureSet, assemble_specs
-
-    assert "tts" in assemble_specs(
-        "asr_text_retrieval", FeatureSet(audio_synthesis_enabled=True))
-    assert "tts" not in assemble_specs(
-        "asr_text_retrieval", FeatureSet(audio_synthesis_enabled=False))

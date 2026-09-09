@@ -1,10 +1,7 @@
 """SONAR speech embedding model implementation.
 
-The SONAR speech encoder lands in the same 1024-d space as the SONAR text
-encoder (``t2e/sonar.py``), so audio queries can be retrieved against a text
-corpus zero-shot — no trained projection head required.
-
-SONAR speech encoders are language-specific (``sonar_speech_encoder_<lang>``).
+Lands in the same 1024-d space as the SONAR text encoder (``t2e/sonar.py``), so audio
+queries retrieve against a text corpus zero-shot, with no trained projection head.
 """
 import os
 import tempfile
@@ -35,12 +32,6 @@ class SonarSpeechModel(SonarPipelineMixin, AudioEmbeddingModel):
         }
 
     def __init__(self, model_name: str = "sonar_speech_encoder_eng"):
-        """
-        Initialize SONAR speech encoder.
-
-        Args:
-            model_name: SONAR speech encoder identifier (language-specific).
-        """
         self.model_name = model_name
         self.device = torch.device("cpu")
         self._pipeline = self._build_pipeline(self.device)

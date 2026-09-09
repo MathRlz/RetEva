@@ -1,7 +1,7 @@
 """Post-retrieval refinement strategies: rerank, MMR, threshold filtering.
 
-Pure functions extracted from ``pipeline/retrieval_pipeline.py``; they take the
-relevant config slice + state explicitly so the pipeline only orchestrates.
+Pure functions that take the relevant config slice + state explicitly, so the pipeline
+(``pipeline/retrieval_pipeline.py``) only orchestrates.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from ...logging_config import get_logger
 from .rag.strategies import DistanceMetric, mmr_rerank, threshold_filter
 from .scoring import min_max_norm, payload_key, payload_text, tokenize
 from .strategy import PostProcessingConfig, RerankingConfig
+from ...config.types import RERANKER_MODES
 
 if TYPE_CHECKING:
     from .rag.reranker import CrossEncoderReranker
@@ -49,7 +50,6 @@ def rerank_results(
 
     limited = results[: max(k, reranking.top_k)]
 
-    # Cross-encoder reranking takes precedence if reranker is set
     if reranker is not None:
         return reranker.rerank(query_text, limited, top_k=k)
 
@@ -71,8 +71,6 @@ def rerank_results(
 
         merged.sort(key=lambda x: x[1], reverse=True)
         return merged[:k]
-
-    from ...config.types import RERANKER_MODES
 
     if reranking.mode not in RERANKER_MODES:
         raise ValueError(f"Unsupported reranker_mode: {reranking.mode}")

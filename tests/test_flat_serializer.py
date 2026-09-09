@@ -1,6 +1,6 @@
 """Flat `to_dict(include_config=False)` telemetry emits a model summary only for the families the
-executed graph uses — the original bug was a default `asr_model: wav2vec2:default` for a run that
-never had an ASR node (audit / graph-first Phase 3)."""
+executed graph uses — never a default `asr_model: wav2vec2:default` for a run that never had an
+ASR node."""
 
 from evaluator.config.evaluation import EvaluationConfig
 from evaluator.config.graph_config import build_evaluation_config_kwargs
@@ -37,7 +37,7 @@ def test_asr_only_emits_asr_only():
 
 
 def test_flat_dict_pipeline_mode_is_the_derived_label():
-    # Audit 2026-07 #3: the flat config echo (stored in leaderboard rows) must carry the
+    # the flat config echo (stored in leaderboard rows) must carry the
     # derived graph label, not None (graph_override['template'] is never set post-cut-over).
     cfg = EvaluationConfig.from_dict(
         build_evaluation_config_kwargs({"dataset": _DATASET,

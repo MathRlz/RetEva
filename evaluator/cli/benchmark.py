@@ -8,6 +8,7 @@ from typing import List, Optional
 import numpy as np
 import torch
 
+from evaluator import models
 from evaluator.benchmarks import (
     ModelBenchmark,
     BenchmarkResult,
@@ -15,37 +16,22 @@ from evaluator.benchmarks import (
     export_to_json,
     export_to_csv,
 )
+from evaluator.models import WhisperModel
 
 
 def create_synthetic_audio(
     duration_sec: float = 3.0,
     sample_rate: int = 16000,
 ) -> torch.Tensor:
-    """Create synthetic audio for benchmarking.
-
-    Args:
-        duration_sec: Duration in seconds.
-        sample_rate: Sample rate in Hz.
-
-    Returns:
-        Synthetic audio tensor.
-    """
+    """Create synthetic audio for benchmarking."""
     num_samples = int(duration_sec * sample_rate)
-    # Generate simple sine wave with some noise
     t = torch.linspace(0, duration_sec, num_samples)
     audio = 0.5 * torch.sin(2 * np.pi * 440 * t) + 0.1 * torch.randn(num_samples)
     return audio
 
 
 def create_synthetic_texts(num_texts: int = 100) -> List[str]:
-    """Create synthetic texts for benchmarking.
-
-    Args:
-        num_texts: Number of texts to generate.
-
-    Returns:
-        List of synthetic texts.
-    """
+    """Create synthetic texts for benchmarking."""
     base_texts = [
         "The quick brown fox jumps over the lazy dog.",
         "Medical research has shown significant advances in treatment options.",
@@ -62,7 +48,6 @@ def create_synthetic_texts(num_texts: int = 100) -> List[str]:
     texts = []
     for i in range(num_texts):
         base = base_texts[i % len(base_texts)]
-        # Add variation
         texts.append(f"[Sample {i+1}] {base}")
 
     return texts
@@ -139,15 +124,54 @@ Examples:
     return parser.parse_args(args)
 
 
+# (--model value, evaluator.models class, banner text, short name used in error output)
+_EMBEDDING_BENCHMARKS = (
+    ("labse", "LabseModel", "LaBSE embedding model", "LaBSE"),
+    ("bge-m3", "BgeM3Model", "BGE-M3 embedding model", "BGE-M3"),
+    ("jina", "JinaV4Model", "Jina v4 embedding model", "Jina v4"),
+)
+
+
+def _benchmark_embedding_model(
+    benchmark: ModelBenchmark,
+    args: argparse.Namespace,
+    device: torch.device,
+    texts: List[str],
+    class_name: str,
+    banner: str,
+    label: str,
+) -> Optional[BenchmarkResult]:
+    """Benchmark one embedding model. A missing optional dependency or a runtime failure is
+    reported and skipped so the remaining models still get benchmarked."""
+    try:
+        model_class = getattr(models, class_name)
+
+        print("=" * 60)
+        print(f"Benchmarking {banner}...")
+        print("=" * 60)
+
+        model = model_class()
+        model.to(device)
+
+        result = benchmark.benchmark_embedding(
+            model=model,
+            texts=texts,
+            warmup=args.warmup,
+            batch_size=args.batch_size,
+        )
+        print(result)
+        print()
+        return result
+
+    except ImportError as e:
+        print(f"Warning: Could not import {class_name}: {e}")
+    except Exception as e:
+        print(f"Error benchmarking {label}: {e}")
+    return None
+
+
 def run_benchmark_cli(args: argparse.Namespace) -> List[BenchmarkResult]:
-    """Run benchmarks based on CLI arguments.
-
-    Args:
-        args: Parsed command line arguments.
-
-    Returns:
-        List of benchmark results.
-    """
+    """Run benchmarks based on CLI arguments."""
     results = []
     benchmark = ModelBenchmark(verbose=args.verbose)
     device = torch.device(args.device)
@@ -159,13 +183,10 @@ def run_benchmark_cli(args: argparse.Namespace) -> List[BenchmarkResult]:
     # Benchmark ASR models
     if args.model in ["whisper", "all"]:
         try:
-            from evaluator.models import WhisperModel
-
             print("=" * 60)
             print("Benchmarking Whisper ASR model...")
             print("=" * 60)
 
-            # Create synthetic audio samples
             audio_samples = [
                 {
                     "audio": create_synthetic_audio(args.audio_duration),
@@ -194,89 +215,18 @@ def run_benchmark_cli(args: argparse.Namespace) -> List[BenchmarkResult]:
     # Benchmark embedding models
     texts = create_synthetic_texts(args.samples)
 
-    if args.model in ["labse", "all"]:
-        try:
-            from evaluator.models import LabseModel
-
-            print("=" * 60)
-            print("Benchmarking LaBSE embedding model...")
-            print("=" * 60)
-
-            model = LabseModel()
-            model.to(device)
-
-            result = benchmark.benchmark_embedding(
-                model=model,
-                texts=texts,
-                warmup=args.warmup,
-                batch_size=args.batch_size,
+    for key, class_name, banner, label in _EMBEDDING_BENCHMARKS:
+        if args.model in [key, "all"]:
+            result = _benchmark_embedding_model(
+                benchmark, args, device, texts, class_name, banner, label
             )
-            results.append(result)
-            print(result)
-            print()
-
-        except ImportError as e:
-            print(f"Warning: Could not import LabseModel: {e}")
-        except Exception as e:
-            print(f"Error benchmarking LaBSE: {e}")
-
-    if args.model in ["bge-m3", "all"]:
-        try:
-            from evaluator.models import BgeM3Model
-
-            print("=" * 60)
-            print("Benchmarking BGE-M3 embedding model...")
-            print("=" * 60)
-
-            model = BgeM3Model()
-            model.to(device)
-
-            result = benchmark.benchmark_embedding(
-                model=model,
-                texts=texts,
-                warmup=args.warmup,
-                batch_size=args.batch_size,
-            )
-            results.append(result)
-            print(result)
-            print()
-
-        except ImportError as e:
-            print(f"Warning: Could not import BgeM3Model: {e}")
-        except Exception as e:
-            print(f"Error benchmarking BGE-M3: {e}")
-
-    if args.model in ["jina", "all"]:
-        try:
-            from evaluator.models import JinaV4Model
-
-            print("=" * 60)
-            print("Benchmarking Jina v4 embedding model...")
-            print("=" * 60)
-
-            model = JinaV4Model()
-            model.to(device)
-
-            result = benchmark.benchmark_embedding(
-                model=model,
-                texts=texts,
-                warmup=args.warmup,
-                batch_size=args.batch_size,
-            )
-            results.append(result)
-            print(result)
-            print()
-
-        except ImportError as e:
-            print(f"Warning: Could not import JinaV4Model: {e}")
-        except Exception as e:
-            print(f"Error benchmarking Jina v4: {e}")
+            if result is not None:
+                results.append(result)
 
     return results
 
 
 def main(args: Optional[List[str]] = None) -> None:
-    """Main entry point for benchmark CLI."""
     parsed_args = parse_benchmark_args(args)
 
     results = run_benchmark_cli(parsed_args)
@@ -285,12 +235,10 @@ def main(args: Optional[List[str]] = None) -> None:
         print("No benchmark results collected.")
         sys.exit(1)
 
-    # Generate and print report
     report = generate_benchmark_report(results)
     print()
     print(report)
 
-    # Export if output path specified
     if parsed_args.output:
         output_path = Path(parsed_args.output)
 

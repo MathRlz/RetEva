@@ -41,9 +41,7 @@ def build_jobs_router(jobs: JobManager) -> APIRouter:
     )
     def submit_from_graph(payload: GraphRunRequest) -> Dict[str, str]:
         """Translate a builder canvas spec into a config and submit it as a job — closing the
-        builder→run loop. An invalid graph (unknown node, no dataset, space mismatch) is a 400
-        with the translator/validation message, not a 500.
-        """
+        builder→run loop; an invalid graph is a 400, not a 500."""
         try:
             # Shared translate + validate path (dataset choice, topology, embedding spaces) — the
             # same `build_validated_run_config` /ui/run-graph uses, so UI and API can't drift.

@@ -11,14 +11,7 @@ DEVICE_PATTERN = re.compile(r'^(cpu|cuda(:\d+)?|mps)$')
 
 
 def validate_device_string(device: str) -> None:
-    """Validate device string format.
-
-    Args:
-        device: Device string to validate (e.g., "cpu", "cuda:0", "mps").
-
-    Raises:
-        ValueError: If device string format is invalid.
-    """
+    """Validate device string format."""
     if not DEVICE_PATTERN.match(device):
         raise ValueError(
             f"Invalid device format: '{device}'. "
@@ -26,10 +19,8 @@ def validate_device_string(device: str) -> None:
         )
 
 
-# Model size estimates in GB (approximate VRAM requirements: weights at their load dtype
-# plus inference activation headroom). Under-estimating packs too many models on one GPU
-# and the run dies with a runtime OOM the pool never saw coming — when in doubt, round UP:
-# an over-estimate merely spreads models across devices or parks one on CPU.
+# Model size estimates in GB (approximate VRAM: weights at load dtype + inference activation
+# headroom). Under-estimating packs too many models per GPU and OOMs; when in doubt, round UP.
 MODEL_MEMORY_ESTIMATES_GB: Dict[str, Dict[str, float]] = {
     "asr": {
         "whisper": 3.5,  # whisper-large fp16 + decode activations (medium fits in less)
@@ -64,7 +55,6 @@ MODEL_MEMORY_ESTIMATES_GB: Dict[str, Dict[str, float]] = {
     },
 }
 
-# Known embedding dimensions for model types
 MODEL_EMBEDDING_DIMS: Dict[str, int] = {
     "labse": 768,
     "jina_v4": 2048,
@@ -76,29 +66,21 @@ MODEL_EMBEDDING_DIMS: Dict[str, int] = {
 
 
 def detect_device(preferred: Optional[str] = None) -> str:
-    """Detect the best available device for model execution.
-
-    Args:
-        preferred: Preferred device string (e.g., "cuda:0", "cpu"). If valid, use it.
-
-    Returns:
-        Device string: the preferred device if valid, otherwise auto-detected device.
+    """Detect the best available device for model execution: the preferred device if
+    valid, otherwise auto-detected.
 
     Raises:
         ValueError: If preferred device has invalid format.
     """
     import torch
 
-    # If preferred is specified, validate and return it
     if preferred is not None:
-        # Validate format first
         validate_device_string(preferred)
 
         if preferred == "cpu":
             return "cpu"
         if preferred.startswith("cuda"):
             if torch.cuda.is_available():
-                # Check if the specific CUDA device exists
                 try:
                     device_idx = int(preferred.split(":")[1]) if ":" in preferred else 0
                     if device_idx < torch.cuda.device_count():
@@ -107,18 +89,13 @@ def detect_device(preferred: Optional[str] = None) -> str:
                     pass
             # Preferred CUDA device not available, fall through to auto-detect
 
-    # Auto-detect
     if torch.cuda.is_available():
         return "cuda:0"
     return "cpu"
 
 
 def get_available_gpu_count() -> int:
-    """Return the number of available CUDA GPUs.
-
-    Returns:
-        Number of CUDA devices available, 0 if CUDA is not available.
-    """
+    """Return the number of available CUDA GPUs."""
     try:
         import torch
 
@@ -128,14 +105,7 @@ def get_available_gpu_count() -> int:
 
 
 def get_gpu_memory_gb(device_idx: int = 0) -> Optional[float]:
-    """Get total GPU memory in GB for a specific device.
-
-    Args:
-        device_idx: CUDA device index.
-
-    Returns:
-        Total memory in GB, or None if unavailable.
-    """
+    """Get total GPU memory in GB for a specific device."""
     try:
         import torch
         if torch.cuda.is_available() and device_idx < torch.cuda.device_count():
@@ -147,14 +117,7 @@ def get_gpu_memory_gb(device_idx: int = 0) -> Optional[float]:
 
 
 def get_gpu_free_memory_gb(device_idx: int = 0) -> Optional[float]:
-    """Get free GPU memory in GB for a specific device.
-
-    Args:
-        device_idx: CUDA device index.
-
-    Returns:
-        Free memory in GB, or None if unavailable.
-    """
+    """Get free GPU memory in GB for a specific device."""
     try:
         import torch
         if torch.cuda.is_available() and device_idx < torch.cuda.device_count():
@@ -173,17 +136,13 @@ def estimate_model_memory_gb(
 
     Args:
         model_category: One of 'asr', 'text_embedding', 'audio_embedding'.
-        model_type: The specific model type (e.g., 'whisper', 'labse').
-
-    Returns:
-        Estimated memory in GB.
     """
     if model_type is None:
         return 0.0
 
     category_estimates = MODEL_MEMORY_ESTIMATES_GB.get(model_category, {})
     if model_type not in category_estimates:
-        # F26: a genuinely-unregistered model silently borrows the category default, which
+        # A genuinely-unregistered model silently borrows the category default, which
         # skews GPU-pool packing. Surface it so the estimate map gets the new entry.
         logger.warning(
             "No memory estimate for %s model '%s'; using the category default "
@@ -195,18 +154,11 @@ def estimate_model_memory_gb(
 
 
 def get_text_embedding_dim(model_type: Optional[str]) -> Optional[int]:
-    """Get the embedding dimension for a text embedding model type.
-
-    Args:
-        model_type: The text embedding model type.
-
-    Returns:
-        Embedding dimension, or None if unknown.
-    """
+    """Get the embedding dimension for a text embedding model type."""
     if model_type is None:
         return None
     if model_type not in MODEL_EMBEDDING_DIMS:
-        # F26: unknown dim — the caller falls back to runtime probing; log so a missing
+        # Unknown dim — the caller falls back to runtime probing; log so a missing
         # MODEL_EMBEDDING_DIMS entry for a known model is visible.
         logger.debug(
             "No embedding dim registered for text model '%s'; resolving at runtime.",

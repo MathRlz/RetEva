@@ -16,10 +16,6 @@ from .errors import (
 def generate_error_report(results: dict, categories: Optional[dict] = None) -> str:
     """Generate a formatted text report summarizing ASR errors, retrieval
     failures, and (when ``categories`` is given) categorized errors.
-
-    Args:
-        results: Results dictionary containing evaluation data.
-        categories: Optional category definitions for error categorization.
     """
     lines = []
     lines.append("=" * 70)

@@ -1,4 +1,4 @@
-"""Roadmap 4b: order-preserving, determinism-neutral parallel map for CPU-bound stages."""
+"""Order-preserving, determinism-neutral parallel map for CPU-bound stages."""
 
 import pytest
 

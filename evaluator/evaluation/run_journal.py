@@ -1,15 +1,9 @@
-"""Full-run checkpoint/resume across the whole DAG, not just ASR (task T6).
+"""Full-run checkpoint/resume across the whole DAG, not just ASR.
 
-Only ASR checkpointed before, so a crash at node 8/12 recomputed everything. The ``RunJournal``
-snapshots the executor's resumable state at each *level* boundary (level-granular so it composes
-with T5's parallel levels) and records the last completed level. A rerun with the same config +
-graph restores that snapshot and resumes at the first incomplete level; the journal is cleared on
-success. A different config/graph yields a different ``run_key`` so a stale journal is ignored
-(never a wrong resume).
-
-State is pickled (it holds ItemSets / numpy embeddings / retrieved payloads that JSON can't carry,
-unlike the ASR JSON checkpoint). The ``RunContext`` and ``DropSink`` locks aren't picklable, so we
-snapshot their plain data (``ctx._store`` / ``drop_sink.by_node``) and rebuild around them.
+Snapshots the executor's resumable state at each level boundary and resumes at the first
+incomplete level on a rerun with the same config+graph. State is pickled (ItemSets/numpy
+embeddings JSON can't carry); the unpicklable ``RunContext``/``DropSink`` locks are
+snapshotted as plain data and rebuilt around instead.
 """
 
 from __future__ import annotations
@@ -20,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from ..logging_config import get_logger
+from .provenance import config_hash
 
 logger = get_logger(__name__)
 
@@ -35,13 +30,9 @@ _CODE_FINGERPRINT: Optional[str] = None
 
 
 def _code_fingerprint() -> str:
-    """Fingerprint of the installed evaluator SOURCE (path + size + mtime of every .py,
-    ~3 ms, cached per process). Folded into ``run_key`` so a journal written by OLD code
-    is silently ignored after any code update: resuming such a journal skips the very
-    levels a fix changed, making the fix look broken (a run crashed under old handler
-    code, the handler was fixed, the rerun resumed PAST the fixed handler and crashed
-    identically — observed live). mtime-based on purpose: the journal is machine-local,
-    and a manual file copy (no git metadata) must also invalidate it."""
+    """Fingerprint of the installed evaluator source (path+size+mtime of every .py, cached per
+    process): folded into ``run_key`` so a journal from OLD code is ignored after a code update
+    (else a resumed run skips the very levels a fix changed, and the fix looks broken)."""
     global _CODE_FINGERPRINT
     if _CODE_FINGERPRINT is None:
         from pathlib import Path
@@ -51,6 +42,8 @@ def _code_fingerprint() -> str:
         for p in sorted(pkg.rglob("*.py")):
             try:
                 st = p.stat()
+                # mtime on purpose: the journal is machine-local and a plain file copy (no git
+                # metadata) must invalidate it too
                 h.update(f"{p.relative_to(pkg)}|{st.st_size}|{st.st_mtime_ns}\n".encode())
             except OSError:
                 continue
@@ -61,7 +54,6 @@ def _code_fingerprint() -> str:
 def run_key(config: Any, node_ids: Tuple[str, ...]) -> str:
     """Stable id for a run: same config identity + same graph + same CODE ⇒ same key
     (resumable). Any source change yields a new key, so stale journals never resume."""
-    from .provenance import config_hash
 
     base = config_hash(config) if config is not None else "noconfig"
     return hashlib.sha256(
@@ -75,15 +67,6 @@ def snapshot_state(state: Any) -> Dict[str, Any]:
     blob["__ctx_store__"] = dict(getattr(state.ctx, "_store", {}))
     blob["__dropped__"] = dict(getattr(state.drop_sink, "by_node", {}))
     return blob
-
-
-def restore_state(state: Any, blob: Dict[str, Any]) -> None:
-    """Restore a snapshot onto ``state`` in place (rebuilding the lock-bearing stores)."""
-    for f in _SNAPSHOT_FIELDS:
-        if f in blob:
-            setattr(state, f, blob[f])
-    state.ctx._store = dict(blob.get("__ctx_store__", {}))
-    state.drop_sink.by_node = dict(blob.get("__dropped__", {}))
 
 
 def try_restore(state: Any, blob: Dict[str, Any]) -> bool:

@@ -1,22 +1,7 @@
-"""Evaluation results dataclass and utilities.
-
-This module provides structured result handling for evaluation runs,
-including serialization, loading, and pretty printing capabilities.
-
-Result-type boundary (T1). Two result types coexist on purpose, at different layers:
-
-- :class:`RunResults` (``evaluation/result_schema.py``) is the **internal** result: a
-  ``dict`` subclass of ~40 metric keys with typed accessors, produced by the executor
-  (``run_graph`` / ``run_from_bundle``) and consumed inside the evaluation engine.
-- :class:`EvaluationResults` (here) is the **public** result: a dataclass that wraps the
-  metrics dict together with the ``EvaluationConfig`` and run metadata (timestamps,
-  versions, sample counts) and adds JSON file save/load + pretty printing. The public API
-  (``api.py`` / ``public_api.py``) builds an ``EvaluationResults`` from a ``RunResults``.
-
-So: ``RunResults`` = the metrics payload; ``EvaluationResults`` = that payload + provenance
-+ I/O, for callers. They are not merged because the internal dict must stay a plain mapping
-(its own serialized form at the engine edge), while the public type carries config/metadata.
-"""
+"""Evaluation results: :class:`EvaluationResults` (public) wraps the metrics dict with the
+run's :class:`EvaluationConfig` + metadata, adding JSON save/load + pretty printing.
+:class:`~evaluator.evaluation.result_schema.RunResults` stays a plain mapping (the engine's
+serialized form) and is not merged into this class for that reason."""
 
 import json
 from dataclasses import dataclass, field
@@ -25,11 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, Union
 
 from ..config import EvaluationConfig
+from ..analysis.report_export import report_to_metrics_table
 
-# Canonical headline-metric priority — the report keys shown first / most prominently
-# (the textual ``summary()`` here, the web status chips, any "primary metric" UI). One list so
-# the console summary and the UI never disagree about which metrics lead. Keys absent from a
-# given run are simply skipped.
+# Headline-metric display order — shared by ``summary()`` and the UI so they never disagree
+# about which metrics lead. Keys absent from a given run are simply skipped.
 HEADLINE_METRICS = (
     "MRR", "MAP", "Recall@1", "Recall@5", "Recall@10", "NDCG@5", "WER", "CER",
 )
@@ -37,13 +21,8 @@ HEADLINE_METRICS = (
 
 @dataclass
 class EvaluationResults:
-    """Structured container for evaluation results.
-
-    Attributes:
-        metrics: Dictionary of evaluation metrics (e.g., MRR, WER, Recall@k).
-        config: The EvaluationConfig used for this evaluation run.
-        metadata: Additional run metadata (start_time/end_time, duration_seconds,
-            evaluator_version, num_samples, pipeline_mode, ...).
+    """``metadata`` holds run metadata: start_time/end_time, duration_seconds,
+    evaluator_version, num_samples, pipeline_mode, ...
     """
 
     metrics: Dict[str, Any]
@@ -51,7 +30,6 @@ class EvaluationResults:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Validate and normalize fields after initialization."""
         if not isinstance(self.metrics, dict):
             raise TypeError(f"metrics must be a dict, got {type(self.metrics)}")
 
@@ -67,13 +45,9 @@ class EvaluationResults:
             self.metadata["created_at"] = datetime.now().isoformat()
 
     def to_dict(self, include_config: bool = False) -> Dict[str, Any]:
-        """Return a dict with metrics at top level plus structured
-        ``_config``/``_metadata`` sections.
-
-        Args:
-            include_config: If True, include the full config under ``_config``;
-                otherwise only experiment_name/pipeline_mode. Default: False.
-        """
+        """Dict with metrics at top level plus ``_config``/``_metadata`` sections.
+        ``include_config=True`` includes the full config under ``_config``; otherwise just
+        experiment_name/pipeline_mode."""
         result = dict(self.metrics)
 
         result["_metadata"] = dict(self.metadata)
@@ -83,18 +57,14 @@ class EvaluationResults:
         else:
             result["_config"] = {
                 "experiment_name": self.config.experiment_name,
-                "pipeline_mode": self.config.graph_template,
+                "pipeline_mode": self.config.graph_label,
             }
 
         return result
 
     def save(self, path: Union[str, Path], indent: int = 2) -> None:
-        """Save results (with full config) to a JSON file.
-
-        Args:
-            path: File path to save to. Parent directory is created if needed.
-            indent: JSON indentation level. Default: 2.
-        """
+        """Save results (with full config) to a JSON file; the parent directory is
+        created if needed."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -104,14 +74,13 @@ class EvaluationResults:
             json.dump(data, f, indent=indent)
 
     def __str__(self) -> str:
-        """Pretty print results: experiment info, metrics, and metadata."""
         lines = []
 
         exp_name = self.config.experiment_name or "Unknown"
         lines.append(f"Evaluation Results: {exp_name}")
         lines.append("=" * 80)
 
-        pipeline_mode = self.config.graph_template
+        pipeline_mode = self.config.graph_label
         lines.append(f"Pipeline Mode: {pipeline_mode}")
         lines.append("")
 
@@ -148,7 +117,6 @@ class EvaluationResults:
         return "\n".join(lines)
 
     def __repr__(self) -> str:
-        """Return detailed representation for debugging."""
         return (
             f"EvaluationResults("
             f"experiment='{self.config.experiment_name}', "
@@ -157,23 +125,13 @@ class EvaluationResults:
         )
 
     def get_metric(self, name: str, default: Any = None) -> Any:
-        """Return the metric value for ``name`` (e.g. "MRR", "Recall@5"),
-        or ``default`` if absent."""
         return self.metrics.get(name, default)
 
     def to_dataframe(self):
-        """Tidy per-branch metric rows as a pandas ``DataFrame`` (C2): one row per
-        ``(branch, metric)`` with mean / ci_lower / ci_upper / n from the keyed ``report``
-        — the notebook-side sibling of ``evaluator export -f metrics-table``. Empty
-        DataFrame when the run carries no keyed report.
-
-        Example:
-            >>> df = results.to_dataframe()
-            >>> df[df.metric == "recall@5"].set_index("branch")["mean"]
-        """
+        """Tidy per-branch metric rows as a pandas ``DataFrame``: one row per
+        ``(branch, metric)`` with mean / ci_lower / ci_upper / n from the keyed ``report``.
+        Empty DataFrame when the run carries no keyed report."""
         import pandas as pd
-
-        from ..analysis.report_export import report_to_metrics_table
 
         return pd.DataFrame(report_to_metrics_table(self.metrics))
 

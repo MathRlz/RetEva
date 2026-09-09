@@ -26,7 +26,6 @@ class AudioSample:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Validate and convert audio array to float32."""
         if not isinstance(self.audio_array, np.ndarray):
             self.audio_array = np.array(self.audio_array, dtype=np.float32)
         elif self.audio_array.dtype != np.float32:
@@ -41,19 +40,12 @@ class DatasetLoaderProtocol(Protocol):
     """
 
     def load(self) -> List[AudioSample]:
-        """Load all samples from the dataset.
-
-        Returns:
-            List of AudioSample objects.
-        """
         ...
 
     def __len__(self) -> int:
-        """Return the number of samples in the dataset."""
         ...
 
     def __iter__(self) -> Iterator[AudioSample]:
-        """Iterate over samples in the dataset."""
         ...
 
 
@@ -62,18 +54,6 @@ class GenericDatasetLoader:
 
     This loader wraps any iterable data source and applies
     a mapping function to convert items to AudioSample format.
-
-    Example:
-        >>> def map_fn(item):
-        ...     return AudioSample(
-        ...         audio_array=item["audio"],
-        ...         sampling_rate=16000,
-        ...         transcription=item["text"],
-        ...         sample_id=item["id"]
-        ...     )
-        >>> loader = GenericDatasetLoader(my_data, map_fn)
-        >>> for sample in loader:
-        ...     print(sample.transcription)
     """
 
     def __init__(
@@ -82,13 +62,6 @@ class GenericDatasetLoader:
         map_fn: Callable[[Any], AudioSample],
         filter_fn: Optional[Callable[[Any], bool]] = None,
     ):
-        """Initialize the generic loader.
-
-        Args:
-            data: Source data (list or iterator of items).
-            map_fn: Function to convert each item to AudioSample.
-            filter_fn: Optional function to filter items before mapping.
-        """
         self._data = list(data) if not isinstance(data, list) else data
         self._map_fn = map_fn
         self._filter_fn = filter_fn
@@ -107,21 +80,13 @@ class GenericDatasetLoader:
         return self._samples
 
     def load(self) -> List[AudioSample]:
-        """Load all samples from the dataset.
-
-        Returns:
-            List of AudioSample objects.
-        """
         return self._load_samples()
 
     def __len__(self) -> int:
-        """Return the number of samples."""
         return len(self._load_samples())
 
     def __iter__(self) -> Iterator[AudioSample]:
-        """Iterate over samples."""
         return iter(self._load_samples())
 
     def __getitem__(self, idx: int) -> AudioSample:
-        """Get a sample by index."""
         return self._load_samples()[idx]

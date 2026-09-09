@@ -1,7 +1,6 @@
-"""R4/per-variant persistence: `save_run_artifacts` (report/resolved-config/run-log +
+"""`save_run_artifacts` (report/resolved-config/run-log +
 per-variant answers.jsonl/metrics.json) and its wiring into the execution paths that write
-files (`evaluation_service.run_evaluation` — the webapi/API path that previously wrote
-NOTHING to disk)."""
+files, including `evaluation_service.run_evaluation` — the webapi/API path."""
 
 import json
 
@@ -96,9 +95,9 @@ def test_save_run_artifacts_writes_one_directory_per_variant(tmp_path):
 
 
 def test_run_evaluation_service_writes_artifacts_to_output_dir(tmp_path, monkeypatch):
-    # Wiring check for the previously-silent webapi/API path: `_run_core` stands in for the
-    # (heavy, model-loading) real execution core — this only pins that `run_evaluation` now
-    # actually calls `save_run_artifacts` with the run's real metrics + config.
+    # Wiring check for the webapi/API path: `_run_core` stands in for the
+    # (heavy, model-loading) real execution core — this only pins that `run_evaluation`
+    # calls `save_run_artifacts` with the run's real metrics + config.
     import evaluator.services.evaluation_service as svc
 
     canned_metrics = {"MRR": 0.42, "report": {"traces": {"query_traces": []}}}

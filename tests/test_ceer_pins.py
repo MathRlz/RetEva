@@ -1,4 +1,4 @@
-"""A5 pins (CRITIQUE.md): CEER against a hand-computed table over its error classes.
+"""CEER against a hand-computed table over its error classes.
 
 CEER has no reference implementation, so its semantic is pinned exhaustively instead:
 count-based loss over the reference's critical-token occurrences, per error class —

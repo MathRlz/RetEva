@@ -1,4 +1,4 @@
-"""A1 pins (CRITIQUE.md): lineage fan-out is statistically sound.
+"""Lineage fan-out is statistically sound.
 
 Variants (``q42·aug0/1``) roll up to one parent-level score before pairing/reduction —
 the cluster-safe unit — and a variant's GT resolves via its lineage parent, so augmented
@@ -41,7 +41,7 @@ def test_metric_gt_joins_variants_via_lineage_parent():
 
 
 def test_variant_rollup_knob_flows_through_build_report():
-    # A1 knob: build_report reduces variants with the configured reducer.
+    # build_report reduces variants with the configured reducer.
     augmented = {"wer": ItemSet(["q1·aug0", "q1·aug1"], [0.2, 0.6])}
     report = build_report({"aug": augmented}, variant_rollup="max")
     assert report["branches"]["aug"]["wer"]["mean"] == 0.6

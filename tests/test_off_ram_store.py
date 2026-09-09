@@ -1,13 +1,10 @@
-"""Roadmap 3b: off-RAM corpus/index — Parquet payload store + mmap FAISS store."""
+"""Off-RAM corpus/index — Parquet payload store + mmap FAISS store."""
 
 import numpy as np
 import pytest
 
 from evaluator.storage.payload_store import ParquetPayloadStore
 from evaluator.storage.vector_store import FaissMmapVectorStore, FaissVectorStore
-
-
-# ── ParquetPayloadStore ──────────────────────────────────────────────
 
 
 def test_payload_store_round_trips_by_id(tmp_path):
@@ -24,21 +21,11 @@ def test_payload_store_out_of_range_is_none(tmp_path):
     assert store.get(1) is None
 
 
-def test_payload_store_get_many_preserves_input_order(tmp_path):
-    payloads = [{"i": i} for i in range(12)]
-    store = ParquetPayloadStore.write(payloads, tmp_path / "p.parquet", row_group_size=4)
-    # ids spanning multiple row groups, scrambled — result must align 1:1 with the request
-    assert store.get_many([7, 0, 11, 3]) == [{"i": 7}, {"i": 0}, {"i": 11}, {"i": 3}]
-
-
 def test_payload_store_fetch_crosses_row_group_boundaries(tmp_path):
     payloads = [{"i": i} for i in range(9)]
     store = ParquetPayloadStore.write(payloads, tmp_path / "p.parquet", row_group_size=3)
     # row groups [0,1,2] [3,4,5] [6,7,8]; touch each
     assert [store.get(i)["i"] for i in (2, 5, 8, 0)] == [2, 5, 8, 0]
-
-
-# ── FaissMmapVectorStore ─────────────────────────────────────────────
 
 
 def _vectors(n=20, dim=8, seed=0):

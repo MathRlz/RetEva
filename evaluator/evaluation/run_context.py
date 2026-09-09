@@ -1,13 +1,7 @@
-"""RunContext: the per-node artifact blackboard threaded through DAG handlers.
-
-Artifacts are keyed by ``(producer_node_id, output_name)`` so the same artifact *type*
-can be produced by multiple node instances (e.g. two ``rerank`` nodes both produce
-``retrieved``) and each consumer reads a *specific* producer's output. A consumer
-resolves its inputs to concrete ``(producer_id, output_name)`` slots via the graph's
-edge bindings (see ``pipeline/stage_graph.py``); this class is just the typed store.
-
-For single-instance graphs (``id == type``) the binding points at the unique producer,
-reproducing today's "shared artifact" semantics without special-casing.
+"""RunContext: the per-node artifact blackboard threaded through DAG handlers, keyed by
+``(producer_node_id, output_name)`` so multiple instances of the same node kind (e.g. two
+``rerank`` nodes) resolve to distinct producers via the graph's edge bindings (see
+``pipeline/graph/wiring.py``).
 """
 
 from __future__ import annotations
@@ -19,12 +13,8 @@ _Slot = Tuple[str, str]  # (producer_node_id, output_name)
 
 
 class RunContext:
-    """Typed artifact store keyed by ``(producer_node_id, output_name)``.
-
-    Thread-safe: under intra-level parallel execution (T5) several branch handlers write
-    their own ``(node_id, name)`` slots concurrently. A lock guards the dict so those
-    concurrent puts/reads are safe; slots are disjoint per producer, so there is no
-    cross-branch contention beyond the dict itself."""
+    """Thread-safe: a lock guards concurrent puts/reads from parallel branch handlers; slots
+    are disjoint per producer, so there's no cross-branch contention beyond the dict itself."""
 
     def __init__(self) -> None:
         self._store: Dict[_Slot, Any] = {}

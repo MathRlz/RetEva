@@ -1,7 +1,7 @@
 """Dataset descriptor registry: builtins register with the right type/domain/capabilities."""
 
 from evaluator.config.types import DatasetType
-from evaluator.datasets.descriptor import get_descriptor
+from evaluator.config.dataset_descriptors import get_descriptor
 
 
 def test_admed_voice_registered_medical_audio_transcription():

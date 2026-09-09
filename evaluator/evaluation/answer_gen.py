@@ -1,15 +1,6 @@
-"""Answer generation (RAG Phase 4.5).
-
-Two modes, selected by whether a context (retrieved docs) is present:
-
-* **RAG / open-book** — a ``retrieved`` edge feeds the ``generate`` node; the model answers
-  *grounded in* the retrieved passages (the default prompts say "use ONLY the context").
-* **Closed-book** — no ``retrieved`` edge (no-corpus dataset, or a graph wired without a
-  retrieval node); the context is empty, so the model answers from its own parametric
-  knowledge. The prompts switch to a no-context variant (no dangling "Context:" block, no
-  "use only the context" instruction), and the hallucination heuristic is N/A (there is no
-  context to ground against). This quantifies how much retrieval *adds* over the model alone.
-"""
+"""Answer generation: RAG (grounded in retrieved context) or closed-book (the model's own
+knowledge, when no context is present). Closed-book quantifies how much retrieval adds over
+the model alone; its hallucination heuristic is N/A (no context to ground against)."""
 
 from __future__ import annotations
 
@@ -19,6 +10,8 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..llm_client.client import LLMClient
+from ..llm_client.parallel import map_completions
+from ..metrics.rag import context_recall, drug_dosage_safety
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +105,10 @@ def _normalize_decision(value: Any) -> Optional[str]:
 
 
 def parse_structured_answer(text: str) -> Tuple[str, str]:
-    """Split a reply into ``(decision, long_answer)``.
-
-    ``decision`` is one of :data:`DECISION_LABELS` or :data:`DECISION_UNKNOWN` when the model
-    ignored the format. ``long_answer`` is the ``Long Answer:`` section, falling back to the
-    whole reply (minus a leading decision line) — so a format miss degrades the decision metric
-    only, never silently zeroes ROUGE.
+    """Split a reply into ``(decision, long_answer)``. ``decision`` is one of
+    :data:`DECISION_LABELS` or :data:`DECISION_UNKNOWN`; a missing ``Long Answer:`` label
+    falls back to the whole reply minus any leading decision line — so a format miss
+    degrades the decision metric only, never silently zeroes ROUGE.
     """
     raw = (text or "").strip()
     if not raw:
@@ -138,11 +129,8 @@ def parse_structured_answer(text: str) -> Tuple[str, str]:
 
 
 def _prompt_defaults(method: str, closed_book: bool) -> Tuple[str, str]:
-    """Default (system_prompt, prompt_template) for a method, in the right context mode.
-
-    A user-set ``config.system_prompt`` / ``config.prompt_template`` still overrides these;
-    the closed-book templates simply drop the ``{context}`` placeholder (``str.format``
-    ignores the unused ``context`` kwarg)."""
+    """Default (system_prompt, prompt_template) for a method; closed-book templates simply
+    drop the ``{context}`` placeholder since ``str.format`` ignores an unused kwarg."""
     if method == "chain_of_thought":
         return (
             (_CLOSED_BOOK_COT_SYSTEM_PROMPT, _CLOSED_BOOK_COT_PROMPT_TEMPLATE)
@@ -166,11 +154,9 @@ def _build_context(
     corpus_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
     embedder: Any = None,
 ) -> Tuple[str, List[str]]:
-    """Build context string from top retrieved docs. Returns (context_text, doc_ids).
-
-    With ``config.context_source == "full_text"`` each doc contributes the chunks of its full
-    article closest to ``question`` instead of the indexed passage; a doc without full text
-    falls back to that passage."""
+    """Build context string from top retrieved docs -> (context_text, doc_ids); with
+    ``config.context_source == "full_text"`` each doc uses full-article chunks nearest
+    ``question`` instead of the indexed passage."""
     full_text_mode = (
         getattr(config, "context_source", "retrieved_text") == "full_text"
         and corpus_lookup is not None
@@ -192,11 +178,9 @@ def _build_context(
 
 
 def chunk_text(text: str, size: int, overlap: int = 0) -> List[str]:
-    """Split ``text`` into ~``size``-char chunks, preferring paragraph then sentence breaks.
-
-    A full article is far longer than any prompt budget, so it is chunked and filtered rather
-    than truncated (the head of a paper is Introduction/Methods — rarely the answer).
-    """
+    """Split ``text`` into ~``size``-char chunks, preferring paragraph then sentence breaks —
+    chunked and filtered rather than truncated, since a full article's head
+    (Introduction/Methods) is rarely the answer."""
     text = (text or "").strip()
     if not text:
         return []
@@ -208,7 +192,6 @@ def chunk_text(text: str, size: int, overlap: int = 0) -> List[str]:
         end = min(start + size, len(text))
         if end < len(text):
             window = text[start:end]
-            # Prefer a paragraph break, else a sentence end, else a hard cut.
             cut = max(window.rfind("\n\n"), window.rfind(". "))
             if cut > size // 2:
                 end = start + cut + 1
@@ -240,11 +223,9 @@ def select_full_text_context(
     config,
     embedder: Any,
 ) -> Optional[str]:
-    """The chunks of a doc's FULL article closest to ``question``, or None to fall back.
-
-    Returns None when the doc has no ``metadata.full_text``, when no embedder is available, or
-    when embedding fails — the caller then uses the retrieved passage exactly as before.
-    """
+    """The chunks of a doc's FULL article closest to ``question``, or None (no
+    ``metadata.full_text``, no embedder, or an embedding failure) — the caller then falls
+    back to the retrieved passage as before."""
     doc_id = str(payload.get("doc_id", payload.get("id", "")))
     doc = corpus_lookup.get(doc_id) or {}
     full = (doc.get("metadata") or {}).get("full_text") or payload.get("full_text")
@@ -280,10 +261,6 @@ def generate_single_answer(
     corpus_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
     embedder: Any = None,
 ) -> Dict[str, Any]:
-    """Generate answer for one question using retrieved context.
-
-    Returns dict with keys: generated_answer, method, context_doc_ids.
-    """
     context, doc_ids = _build_context(
         retrieved_payloads, config.context_docs, config.context_max_chars,
         question=question, config=config, corpus_lookup=corpus_lookup, embedder=embedder,
@@ -434,16 +411,9 @@ def generate_answers(
         all_query_texts: Query text per index (ASR hypothesis or ground-truth question).
         corpus_lookup: doc_id → payload dict used to find reference answers (and, with
             ``context_source: full_text``, each doc's full article).
-        config: AnswerGenerationConfig instance.
         embedder: the run's text-embedding pipeline, used to rank full-article chunks against
             the question. None → the first chunks are used instead of the closest ones.
-
-    Returns:
-        Dict with keys: model, method, cases, details, mean_rouge1, mean_rouge2, mean_rougeL.
-        Each detail has: query_id, question, generated_answer, reference_answer,
-        rouge1, rouge2, rougeL, context_doc_ids.
     """
-    from ..llm_client.parallel import map_completions
 
     client = LLMClient(config.to_llm_config(), component="answer_gen")
 
@@ -517,14 +487,11 @@ def score_answers(
     config,
     decision_gt: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """answer_metrics comparison: score the generated answers vs their reference answers +
-    retrieved context. Enriches each detail (decision / rouge / hallucination / dose-safety /
-    context-recall) IN PLACE and adds the ``mean_*`` aggregates to ``answer_results``.
-
-    ``decision_gt`` maps query_id → the dataset's yes/no/maybe label (PubMedQA
-    ``final_decision``, published as ``short_answers``); when given, the reply's
-    ``Short Answer:`` line is exact-matched against it. ROUGE and the reference-based metrics
-    score the ``Long Answer:`` prose, not the decision line."""
+    """answer_metrics comparison: scores generated answers vs reference answers + retrieved
+    context, enriching each detail IN PLACE and adding ``mean_*`` aggregates to
+    ``answer_results``. ``decision_gt`` (query_id → yes/no/maybe) is exact-matched against
+    the reply's ``Short Answer:`` line; ROUGE and the reference-based metrics score the
+    ``Long Answer:`` prose, not the decision line."""
     all_query_ids, all_relevant, all_results_with_scores = traces_data
     rouge1_list: List[float] = []
     rouge2_list: List[float] = []
@@ -538,9 +505,6 @@ def score_answers(
 
     for i, detail in enumerate(answer_results.get("details", [])):
         reply = detail.get("generated_answer", "")
-        # The reply carries BOTH fields; the decision is scored on its own and the prose is what
-        # the reference-based metrics compare (scoring the whole reply would count the decision
-        # line as answer text).
         decision, answer = parse_structured_answer(reply)
         detail["decision_pred"] = decision
         if decision == DECISION_UNKNOWN:
@@ -586,7 +550,6 @@ def score_answers(
                         detail.get("query_id"),
                         exc,
                     )
-                from ..metrics.rag import context_recall, drug_dosage_safety
 
                 contexts = [
                     p.get("text", p.get("content", "")) for p in retrieved_payloads

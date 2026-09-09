@@ -15,7 +15,7 @@ class _Wav:
 
 
 def test_admed_declares_train_test_default_both():
-    from evaluator.datasets.descriptor import get_descriptor
+    from evaluator.config.dataset_descriptors import get_descriptor
 
     d = get_descriptor("admed_voice")
     assert list(d.splits) == ["train", "test"]

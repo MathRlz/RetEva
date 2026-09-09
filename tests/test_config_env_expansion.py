@@ -1,4 +1,4 @@
-"""P3 pins: ``${VAR}`` in a config YAML expands from the environment at load.
+"""``${VAR}`` in a config YAML expands from the environment at load.
 
 Campaign configs keep machine-specific dataset/checkpoint roots in env vars so one
 committed config runs on any machine.
@@ -38,6 +38,9 @@ def test_yaml_load_expands(tmp_path, monkeypatch):
         "dataset:\n  id: pubmed_qa\n"
         "  questions: ${CAMPAIGN_DATA}/q.json\n"
         "  corpus: ${CAMPAIGN_DATA}/c.json\n"
+        "graph:\n  nodes: [dataset_source, text_embedding]\n"
+        "  edges: [{from: dataset_source, output: reference_text,"
+        " to: text_embedding, input: query_text}]\n"
     )
     cfg = EvaluationConfig.from_yaml(str(cfg_path), validate=False)
     assert cfg.data.questions_path == f"{tmp_path}/q.json"

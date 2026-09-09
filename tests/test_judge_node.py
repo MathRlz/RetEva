@@ -1,4 +1,4 @@
-"""J1: the multi-aspect LLM judge — per-trace scoring, prompt assembly, aggregation. Uses a stub
+"""The multi-aspect LLM judge — per-trace scoring, prompt assembly, aggregation. Uses a stub
 LLM client (no real calls)."""
 
 import json
@@ -103,13 +103,13 @@ def test_judge_overall_metric_computes():
 
 
 def test_attach_judge_metrics_merges_into_report():
-    # J3: the finalize-node merge scores the judge ItemSets via the registry and folds the
+    # the finalize-node merge scores the judge ItemSets via the registry and folds the
     # scalars into the existing report branch + the flat leaderboard keys.
     from types import SimpleNamespace
 
     from evaluator.evaluation.run_context import RunContext
     from evaluator.evaluation.item_set import ItemSet
-    from evaluator.evaluation.handlers.metrics import attach_judge_metrics
+    from evaluator.evaluation.handlers.rag import attach_judge_metrics
 
     ctx = RunContext()
     ctx.put("answer_judge", "judge_scores", ItemSet(["q1", "q2"], [0.8, 0.6]))
@@ -120,7 +120,7 @@ def test_attach_judge_metrics_merges_into_report():
         "report": {"branches": {"asr_text_retrieval": {"recall@5": {"mean": 0.7, "n": 2}}}},
         "asr_text_retrieval/recall@5": 0.7,
     }
-    # R3-P1: the merge reads the finalize node's DECLARED judge bindings, not a bus scan.
+    # the merge reads the finalize node's DECLARED judge bindings, not a bus scan.
     finalize = SimpleNamespace(id="finalize", bindings=(
         ("judge_scores", "answer_judge"), ("judge_pass", "answer_judge"),
         ("judge_aspect_relevance", "answer_judge"),
@@ -146,7 +146,7 @@ def test_attach_judge_metrics_noop_without_judge():
     from types import SimpleNamespace
 
     from evaluator.evaluation.run_context import RunContext
-    from evaluator.evaluation.handlers.metrics import attach_judge_metrics
+    from evaluator.evaluation.handlers.rag import attach_judge_metrics
 
     results = {"report": {"branches": {"m": {"recall@5": {"mean": 0.7, "n": 2}}}}}
     finalize = SimpleNamespace(id="finalize", bindings=(("judge_scores", "answer_judge"),))
@@ -157,14 +157,14 @@ def test_attach_judge_metrics_noop_without_judge():
 
 
 def test_publish_then_attach_end_to_end():
-    # J6 wiring: the answer_judge publish half (_publish_judge_scores) and the finalize merge
+    # the answer_judge publish half (_publish_judge_scores) and the finalize merge
     # half (attach_judge_metrics) agree on artifact names + shapes — judge details in → judge
     # metrics on the report out, through the real handler code, no LLM/models needed.
     from types import SimpleNamespace
 
     from evaluator.evaluation.run_context import RunContext
     from evaluator.evaluation.handlers.rag import _publish_judge_scores
-    from evaluator.evaluation.handlers.metrics import attach_judge_metrics
+    from evaluator.evaluation.handlers.rag import attach_judge_metrics
 
     ctx = RunContext()
 
@@ -191,7 +191,7 @@ def test_publish_then_attach_end_to_end():
     ]
     _publish_judge_scores(s, details)
     # The executor swaps current_node per stage: the merge runs on the finalize node,
-    # whose declared bindings carry the judge artifacts (R3-P1).
+    # whose declared bindings carry the judge artifacts.
     s.current_node = SimpleNamespace(id="finalize", bindings=(
         ("judge_scores", "answer_judge"), ("judge_pass", "answer_judge"),
         ("judge_aspect_relevance", "answer_judge"),

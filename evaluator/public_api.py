@@ -13,18 +13,14 @@ from .evaluation.results import EvaluationResults
 from .config.model_presets import get_preset, list_presets
 
 __all__ = [
-    # High-level execution API
     "evaluate_from_config",
     "evaluate_from_preset",
     "quick_evaluate",
     "run_evaluation",
-    # Core types
     "EvaluationConfig",
     "EvaluationResults",
-    # Preset discovery
     "get_preset",
     "list_presets",
-    # Exceptions
     "EvaluationError",
     "ConfigurationError",
 ]

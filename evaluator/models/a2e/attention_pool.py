@@ -1,10 +1,7 @@
 """Attention pooling audio embedding model implementation.
 
-The attention-pool + projection architecture is encoder-agnostic; the encoder
-specifics (feature extractor, frozen encoder, hidden dim, and the post-encoder mask
-downsampling) live behind a small ``_EncoderBackend`` so the same model works on a
-Whisper encoder (``attention_pool``) or a SeamlessM4T-v2 encoder
-(``attention_pool_m4t``). The backend is chosen from the encoder name.
+Encoder-agnostic: encoder specifics (feature extractor, frozen encoder, hidden dim, mask
+downsampling) live behind a small ``_EncoderBackend``, chosen from the encoder name.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -17,6 +14,7 @@ import numpy as np
 from ..base import AudioEmbeddingModel
 from ..registry import register_audio_embedding_model
 from ...logging_config import get_logger
+from .postprocessing import whiten_batch, abtt_batch
 
 logger = get_logger(__name__)
 
@@ -75,8 +73,6 @@ class MeanPoolingWithWhitening(nn.Module):
         self.register_buffer("W", W)
 
     def forward(self, x, mask=None):
-        from .postprocessing import whiten_batch
-
         pooled = MeanPooling().forward(x, mask)
         return whiten_batch(pooled, self.m, self.W)
 
@@ -90,8 +86,6 @@ class MeanPoolingWithAbtt(nn.Module):
         self.register_buffer("pc1", pc1)
 
     def forward(self, x, mask=None):
-        from .postprocessing import abtt_batch
-
         pooled = MeanPooling().forward(x, mask)
         return abtt_batch(pooled, self.mu, self.pc1)
 
@@ -136,7 +130,12 @@ class ProjectionHead(nn.Module):
 
 
 def _resample_to_16k(audio_list: List[torch.Tensor], sampling_rates: List[int]) -> List[np.ndarray]:
-    """Resample each clip to 16 kHz and return mono numpy arrays."""
+    """Resample each clip to 16 kHz and return mono numpy arrays.
+
+    Not routed through utils.audio.to_mono_16k: no channel downmix here — callers
+    (e.g. AudioSamplesQueryDataset, admed_voice) own the channel layout, and some
+    reach this with un-downmixed audio that to_mono_16k's downmix would alter.
+    """
     processed = []
     for idx in range(len(audio_list)):
         audio = audio_list[idx]
@@ -150,9 +149,7 @@ def _resample_to_16k(audio_list: List[torch.Tensor], sampling_rates: List[int]) 
     return processed
 
 
-# ----------------------------------------------------------------------------
 # Encoder backends — the only encoder-specific pieces.
-# ----------------------------------------------------------------------------
 class _EncoderBackend(ABC):
     """Feature extraction + frozen encoder + mask downsampling for one encoder."""
 
@@ -248,7 +245,6 @@ class _M4TBackend(_EncoderBackend):
 
 
 def _select_backend(audio_encoder_name: str) -> _EncoderBackend:
-    """Pick the encoder backend from the encoder name."""
     name = (audio_encoder_name or "").lower()
     if "seamless" in name or "m4t" in name:
         return _M4TBackend(audio_encoder_name)
@@ -310,16 +306,7 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
                  emb_dim: int = 2048,
                  model_path: Optional[str] = None,
                  pooling: str = "attention"):
-        """
-        Initialize attention pool audio model.
-
-        Args:
-            audio_encoder_name: Name of the audio encoder (Whisper or SeamlessM4T).
-            emb_dim: Embedding dimension (should match text embedder).
-            model_path: Path to pre-trained APM model weights (.pt file).
-            pooling: Sequence-pooling strategy — one of ``POOLING_CHOICES`` (attention /
-                mean / mean_whiten / mean_abtt). The whiten/ABTT stats load from the checkpoint.
-        """
+        # pooling is one of POOLING_CHOICES; the whiten/ABTT stats load from the checkpoint.
         self.audio_encoder_name = audio_encoder_name
         self.emb_dim = emb_dim
         self.model_path = model_path
@@ -427,9 +414,8 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
                              full_state: dict, *, reregister_buffers: bool = False) -> None:
         """Strict-load ``incoming`` into ``module`` after asserting it covers every expected key.
 
-        A missing expected key would otherwise leave that submodule at random init (the old
-        ``if incoming:`` guard did this silently). Raise a clear error instead, naming the missing
-        keys + the checkpoint's actual top-level prefixes."""
+        A missing expected key would otherwise leave that submodule at random init. Raise a clear
+        error instead, naming the missing keys + the checkpoint's actual top-level prefixes."""
         expected = set(module.state_dict().keys())
         if not expected:  # e.g. plain MeanPooling — nothing to load
             return
@@ -455,7 +441,6 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
         logger.info("APM checkpoint %s: loaded %s (%d key(s))", model_path, label, len(incoming))
 
     def to(self, device: torch.device):
-        """Move model to device."""
         self.device = device
         self.backend.to(device)
         self.audio_encoder = self.backend.encoder
@@ -466,12 +451,10 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
 
     def preprocess_audio(self, audio_list: List[torch.Tensor],
                          sampling_rates: List[int]):
-        """Preprocess audio with the backend's feature extractor."""
         return self.backend.preprocess(audio_list, sampling_rates)
 
     def encode_from_features(self, features: torch.Tensor,
                              attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
-        """Encode preprocessed features into embeddings."""
         features = features.to(self.device)
         attention_mask = attention_mask.to(self.device) if attention_mask is not None else None
 
@@ -496,12 +479,10 @@ class AttentionPoolAudioModel(AudioEmbeddingModel):
     def encode_audio(self, audio_list: List[torch.Tensor],
                      sampling_rates: List[int],
                      show_progress: bool = False) -> np.ndarray:
-        """Encode audio directly into embeddings."""
         features, attention_mask = self.preprocess_audio(audio_list, sampling_rates)
         return self.encode_from_features(features, attention_mask)
 
     def name(self) -> str:
-        """Return model name."""
         name = (f"AttentionPoolAudioModel - encoder:{self.audio_encoder_name}"
                 f" - emb_dim:{self.emb_dim} - pooling:{self.pooling_kind}")
         if self.model_path:

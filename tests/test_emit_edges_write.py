@@ -1,4 +1,4 @@
-"""B5 pins (CRITIQUE.md): `evaluator graph --emit-edges --write` rewrites in place.
+"""`evaluator graph --emit-edges --write` rewrites in place.
 
 Text-level rewrite: comments survive, stale port-level entries are replaced, hand-added
 ordering-only ``{from, to}`` edges are kept, and a config without an ``edges:`` block gains

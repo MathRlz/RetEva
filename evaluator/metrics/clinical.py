@@ -1,13 +1,8 @@
-"""Clinical / safety-oriented metrics (architecture M2).
+"""Clinical / safety-oriented metrics.
 
-CEER — Critical Entity Error Rate — measures transcription/correction errors on the entities
-that matter clinically (drug names, doses, units), where a low overall WER can still hide a
-dangerous error (e.g. "100 micrograms" → "100 grams"). It is the per-item error rate over the
-*critical* tokens present in the reference, so a query with no critical tokens scores 0.
-
-The critical-term set defaults to common dose units/forms and can be extended with a domain
-term list (e.g. drug names) via ``evaluator/metrics/domain_terms.py``. See
-``evaluator-architecture.md`` §10.
+CEER (Critical Entity Error Rate): per-item error rate over the reference's clinically
+critical tokens (drug doses/units) — a low overall WER can still hide a dangerous error (e.g.
+"100 micrograms" -> "100 grams"). Extend the default term set via ``domain_terms.py``.
 """
 
 from __future__ import annotations

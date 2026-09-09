@@ -6,6 +6,7 @@ import numpy as np
 from transformers import AutoModel, AutoConfig
 from ..base import TextEmbeddingModel
 from ..registry import register_text_embedding_model
+from ...utils.progress import progress_disabled
 
 
 @register_text_embedding_model('jina_v4', default_name='jinaai/jina-embeddings-v4', description='JINA Embeddings v4')
@@ -38,7 +39,6 @@ class JinaV4Model(TextEmbeddingModel):
 
     def encode(self, texts: List[str], show_progress: bool = False, desc: str = "Embedding") -> np.ndarray:
         from tqdm import tqdm
-        from ...utils.progress import progress_disabled
         task = "retrieval"
         prompt_name = "query"
         return_numpy = False

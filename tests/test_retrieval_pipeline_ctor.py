@@ -1,7 +1,7 @@
-"""D2/F7: RetrievalPipeline takes strategy_config as the sole knob source.
+"""RetrievalPipeline takes strategy_config as the sole knob source.
 
-The old per-knob legacy kwargs (retrieval_mode, use_mmr, rrf_k, ...) were a dead path and
-are gone; None still falls back to an all-defaults config identical to the old defaults.
+Per-knob legacy kwargs (retrieval_mode, use_mmr, rrf_k, ...) are not accepted; None still
+falls back to an all-defaults config.
 """
 
 import pytest
@@ -29,6 +29,6 @@ def test_explicit_strategy_config_is_used():
 
 
 def test_legacy_per_knob_kwargs_are_removed():
-    # the dead legacy path no longer exists — passing an old knob is a TypeError
+    # legacy per-knob kwargs are not accepted — passing one is a TypeError
     with pytest.raises(TypeError):
         _rp(retrieval_mode="hybrid", use_mmr=True)

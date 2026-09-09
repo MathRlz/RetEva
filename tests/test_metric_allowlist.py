@@ -1,4 +1,4 @@
-"""B1 pins (CRITIQUE.md): the config `metrics:` allowlist computes exactly what it names.
+"""The config `metrics:` allowlist computes exactly what it names.
 
 Auto-injection stays the default (absent key = collect-all, byte-identical reports); when
 the allowlist is set the run computes exactly those registry metrics — explicit naming
@@ -47,16 +47,16 @@ def test_unknown_name_raises_with_registered_set():
 
 
 def test_config_validation_rejects_unknown_metric_names():
-    from evaluator.config.validation import _validate_metric_allowlist
+    from evaluator.evaluation.validation import _check_metric_allowlist
 
     class Cfg:
         metrics = ["wer", "nope"]
 
     errors = []
-    _validate_metric_allowlist(Cfg(), errors)
+    _check_metric_allowlist(Cfg(), errors)
     assert len(errors) == 1
     assert "nope" in errors[0] and "Registered:" in errors[0]
 
     errors = []
-    _validate_metric_allowlist(type("C", (), {"metrics": None})(), errors)
+    _check_metric_allowlist(type("C", (), {"metrics": None})(), errors)
     assert errors == []

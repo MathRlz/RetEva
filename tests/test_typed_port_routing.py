@@ -1,4 +1,4 @@
-"""B2 pins (CRITIQUE.md): type-open OneOf ports + derivation-ranked candidates.
+"""Type-open OneOf ports + derivation-ranked candidates.
 
 A multi-name (OneOf) port accepts any registered artifact of the same modality via an
 explicit edge — the declared chain is a default and tiebreak, not a closed gate — and a
@@ -111,8 +111,8 @@ def test_dataset_query_text_routes_into_asr_reference_transcription():
 
 
 def test_plain_port_accepts_same_modality_routed_extra():
-    # tts's query_text input is a plain (single-name) port, but B2 lets a same-modality
-    # artifact route into it via an explicit edge — get_artifact/input resolve the alias
+    # tts's query_text input is a plain (single-name) port, but a same-modality artifact can
+    # still route into it via an explicit edge — get_artifact/input resolve the alias
     # at run time (state.py:_input_candidates), so the handler needs no code change.
     nodes = bind_explicit_edges(
         ["dataset_source", "query_correction", "tts"],

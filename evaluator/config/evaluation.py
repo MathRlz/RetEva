@@ -37,22 +37,11 @@ from .dataset_sink import DatasetSinkConfig
 from .base import estimate_model_memory_gb
 from .base import get_text_embedding_dim  # noqa: F401 — re-exported for importers
 from .base import get_gpu_memory_gb  # noqa: F401 — re-exported; preflight patch target
+from .subconfigs import FEATURE_SUBCONFIGS
 from . import loading as _loading
 from . import serialization as _serialization
 from . import validation as _validation
 
-
-# Feature sub-config field name -> class. Single source for from_dict/presets.
-_FEATURE_SUBCONFIGS = {
-    "audio_synthesis": AudioSynthesisConfig,
-    "augmentation": AudioAugmentationConfig,
-    "answer_generation": AnswerGenerationConfig,
-    "judge": JudgeConfig,
-    "query_optimization": QueryOptimizationConfig,
-    "query_correction": QueryCorrectionConfig,
-    "embedding_fusion": EmbeddingFusionConfig,
-    "rag": RagFlowConfig,
-}
 
 
 @dataclass
@@ -65,8 +54,7 @@ class EvaluationConfig:
     """
 
     experiment_name: str = "evaluation"
-    # Optional group id tying several runs into one logical experiment (e.g. a sweep); the
-    # leaderboard can pivot/compare a group (architecture-improvements §3).
+    # Ties several runs into one logical experiment (e.g. a sweep) for leaderboard grouping.
     experiment_group: Optional[str] = None
     output_dir: str = "evaluation_results"
 
@@ -76,9 +64,8 @@ class EvaluationConfig:
     data: DataConfig = field(default_factory=DataConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     llm_server: LLMServerConfig = field(default_factory=LLMServerConfig)
-    # Optional capability sub-configs — each its own default (disabled) so an un-drawn feature
-    # still resolves for the handlers' global fall-back. A capability runs when its NODE is in the
-    # graph (the spec); there is no `features:` grouping — every one is a top-level field.
+    # Optional capability sub-configs, each defaulting to disabled so an un-drawn feature still
+    # resolves for the handlers' fallback; a capability runs when its NODE is in the graph.
     audio_synthesis: AudioSynthesisConfig = field(default_factory=AudioSynthesisConfig)
     augmentation: AudioAugmentationConfig = field(default_factory=AudioAugmentationConfig)
     answer_generation: AnswerGenerationConfig = field(default_factory=AnswerGenerationConfig)
@@ -97,27 +84,23 @@ class EvaluationConfig:
     checkpoint_enabled: bool = True
     checkpoint_interval: int = 50
     resume_from_checkpoint: bool = True
-    # Opt-in (off by default — storage cost): additionally persist per-variant intermediate
-    # artifacts (today: retrieved.jsonl) alongside the always-on answers.jsonl/metrics.json —
-    # see evaluation/results_io.py:save_run_artifacts.
+    # Opt-in (off by default — storage cost): persists per-variant intermediate artifacts
+    # (e.g. retrieved.jsonl) alongside the always-on answers.jsonl/metrics.json; see
+    # save_run_artifacts.
     persist_intermediate_artifacts: bool = False
 
-    # Explicit DAG override (config C2): {"nodes": [stage_id, ...], "edges": {to: [from]}}.
-    # When set, the executor builds the graph from this spec (via build_graph_from_spec)
-    # instead of deriving it from pipeline_mode. mode still drives handler behavior.
+    # Explicit DAG override: {"nodes": [...], "edges": {to: [from]}}; the executor builds
+    # the graph from this spec via build_graph_from_spec.
     graph_override: Optional[Dict[str, Any]] = None
 
-    # Statistical analysis
     compute_confidence_intervals: bool = False
 
-    # Metric allowlist (B1): when set, the report computes EXACTLY these registry metrics
-    # (explicit naming bypasses MetricSpec.opt_in; a metric whose inputs the graph doesn't
-    # produce is skipped). None keeps collect-all — every satisfiable metric.
+    # Metric allowlist: when set, the report computes EXACTLY these registry metrics (bypassing
+    # MetricSpec.opt_in; skipped if the graph doesn't produce its inputs). None = collect all.
     metrics: Optional[List[str]] = None
 
-    # Lineage-variant rollup (A1): how fan-out variants (q42·aug0/1) reduce to their
-    # parent before pairing/CIs — "mean" (default) | "min" | "max" (worst-case is min or
-    # max depending on the metric's direction).
+    # Lineage-variant rollup: how fan-out variants (q42·aug0/1) reduce to their parent before
+    # pairing/CIs — "mean" (default) | "min" | "max" (worst-case, direction-dependent).
     variant_rollup: str = "mean"
 
     # Domain term weighting for TW-WER
@@ -125,40 +108,35 @@ class EvaluationConfig:
 
     # `parallel_enabled` drives the DAG executor's intra-level branch concurrency.
     parallel_enabled: bool = False
-    # CPU-bound per-item stage parallelism (Roadmap 4b): "sync" (default — today's in-line map),
-    # "thread", or "process" (a ProcessPool for GIL-bound stages). The map is order-preserving and
-    # determinism-neutral (per-item seeding makes each item independent of the worker).
+    # CPU-bound per-item stage parallelism: "sync" (default, in-line map), "thread", or
+    # "process" (ProcessPool for GIL-bound stages); order-preserving and determinism-neutral
+    # (per-item seeding makes each item independent of the worker).
     cpu_stage_executor: str = "sync"
     cpu_stage_workers: int = 0  # 0 = auto (os.cpu_count)
 
-    # Memoized resolved DAG (see the ``graph`` property below). ``init=False`` so
-    # ``dataclasses.replace()`` (used throughout to derive a modified copy, e.g.
-    # ``with_auto_devices``) can never carry a stale cached graph forward onto a copy whose
-    # ``graph_override``/nodes might differ — every replace()'d copy starts uncached and
-    # re-resolves lazily on first ``.graph`` access.
+    # Memoized resolved DAG (see the graph property below). init=False so dataclasses.replace()
+    # (used throughout, e.g. with_auto_devices) never carries a stale cached graph onto a copy
+    # whose graph_override/nodes might differ — every replace()'d copy re-resolves lazily.
     _graph_cache: Any = field(default=None, repr=False, compare=False, init=False)
 
     @property
     def graph(self) -> Any:
         """The resolved execution DAG (a ``StageGraph``) for this config — memoized on first
         access so ``factory.py``/``validation.py`` don't each re-derive it. See
-        ``build_graph_for_config``. A branched config's own ``build_branched_graph`` result is
-        NOT cached here — callers that need the pre-CSE branched graph still call it directly."""
+        ``build_graph_for_config``."""
         if self._graph_cache is None:
-            from ..pipeline.graph.modes import build_graph_for_config
+            from ..pipeline.graph.build import build_graph_for_config
 
             self._graph_cache = build_graph_for_config(self)
         return self._graph_cache
 
     @property
-    def graph_template(self) -> Optional[str]:
-        """The pipeline-mode LABEL for this config: derived from the explicit graph's node kinds
-        (``label_from_graph``) — the graph is the spec, this is just its label. A back-compat
-        template reference (``graph_override['template']``, legacy flat dicts only) wins when
-        present. ``None`` only for a model-only / query-head-less custom graph."""
-        from ..pipeline.graph.modes import resolve_template_label
+    def graph_label(self) -> Optional[str]:
+        """The run LABEL for this config, derived from the explicit graph's node kinds — the
+        graph is the spec, this is just its label. ``None`` for a query-head-less custom graph."""
+        from ..pipeline.graph.build import graph_label
 
-        return resolve_template_label(self)
+        return graph_label(self.graph_override)
 
     def with_auto_devices(self) -> "EvaluationConfig":
         """Return a copy with device assignments auto-configured from available
@@ -167,7 +145,6 @@ class EvaluationConfig:
         if self.device_pool is not None:
             return self._configure_devices_with_pool()
 
-        # Legacy behavior: use ModelConfig.auto_configure_devices()
         new_model = replace(self.model)
         new_model.auto_configure_devices()
 
@@ -175,15 +152,14 @@ class EvaluationConfig:
 
     def _configure_devices_with_pool(self) -> "EvaluationConfig":
         """Configure devices using GPU pool allocation."""
-        from .devices.pool import pool_from_config
+        from ..devices.pool import pool_from_config
 
         pool = pool_from_config(self.device_pool)
 
         new_model = replace(self.model)
 
         # Allocate a device for every model family that is actually configured (graph-first: the
-        # graph carries the models; a family with no model_type set is simply skipped). Was keyed
-        # off the removed pipeline_mode's required fields.
+        # graph carries the models; a family with no model_type set is simply skipped).
         _alloc = (
             ("asr", "asr_model_type", "asr_device"),
             ("text_embedding", "text_emb_model_type", "text_emb_device"),
@@ -237,12 +213,11 @@ class EvaluationConfig:
             "llm_server",
             "tracking",
             "service_runtime",
-            *_FEATURE_SUBCONFIGS,
+            *FEATURE_SUBCONFIGS,
         }
     )
     # Plain sub-configs: key → class. No custom construction logic needed.
     # Adding a new sub-config here is the only change required in this file.
-    # (The optional features live under `features` — see _FEATURE_SUBCONFIGS.)
     _PLAIN_SUBCONFIGS = {
         "cache": CacheConfig,
         "logging": LoggingConfig,
@@ -280,9 +255,9 @@ class EvaluationConfig:
 
         The on-disk schema is the node-centric shape (experiment/dataset/graph/nodes/
         runtime); ``build_evaluation_config_kwargs`` translates it before construction.
-        Legacy-shape keys still pass through (the translator is backward-compatible), so
-        this is the single load chokepoint for the CLI, public API, and presets. Raises
-        ConfigurationError if ``validate=True`` (default) and validation fails.
+        Legacy-shape keys still pass through, so this is the single load chokepoint for
+        the CLI, public API, and presets. Raises ConfigurationError if ``validate=True``
+        (default) and validation fails.
         """
         return _loading.build_from_yaml(cls, yaml_path, validate=validate)
 
@@ -307,8 +282,8 @@ class EvaluationConfig:
         """Convert to dictionary.
 
         Args:
-            include_config: If True return full nested dict that can
-                round-trip through ``from_dict``.  If False (default)
-                return compact flat dict for telemetry/logging.
+            include_config: True returns the full nested dict (round-trips through
+                ``from_dict``); False (default) returns the compact flat dict for
+                telemetry/logging.
         """
         return _serialization.to_dict(self, include_config=include_config)

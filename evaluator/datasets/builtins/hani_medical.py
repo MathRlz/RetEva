@@ -4,12 +4,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..types import AudioTranscriptionDataset, register_eval_dataset
+from ...config.dataset_descriptors import resolve_split
+from ..loaders import factory
+from ..runtime import AudioSamplesQueryDataset
 
 if TYPE_CHECKING:
     from ...config.data import DataConfig
     from ..core import QueryDataset
 
-# Reproducibility (R1b): pinned by ``repo@revision`` so an upstream re-upload cannot move the
+# Reproducibility: pinned by ``repo@revision`` so an upstream re-upload cannot move the
 # data under a rerun — the HF loader splits on '@'. Override (or unpin) with
 # ``data.huggingface_dataset``; re-pin here after a deliberate, reviewed dataset bump.
 _HANI_DATASET = (
@@ -31,10 +34,6 @@ class HaniMedicalDataset(AudioTranscriptionDataset):
 
     @classmethod
     def from_config(cls, data: "DataConfig") -> "QueryDataset":
-        from ..descriptor import resolve_split
-        from ..loaders.factory import create_dataset_loader
-        from ..runtime import AudioSamplesQueryDataset
-
         split = (resolve_split(data, cls.default_split) or cls.default_split).lower()
         # "both" = the union of every declared HF split; a named split loads just that one.
         hf_splits = cls.splits if split == "both" else (split,)
@@ -44,7 +43,7 @@ class HaniMedicalDataset(AudioTranscriptionDataset):
         }
         samples = []
         for hf_split in hf_splits:
-            loader = create_dataset_loader(
+            loader = factory.create_dataset_loader(
                 source="huggingface",
                 huggingface_dataset=(
                     getattr(data, "huggingface_dataset", None) or _HANI_DATASET

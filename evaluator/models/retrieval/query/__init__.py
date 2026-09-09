@@ -1,20 +1,6 @@
-"""Query optimization module.
+"""Query optimization: rewriting, HyDE, decomposition, and multi-query generation via LLMs
+to improve retrieval."""
 
-This package provides advanced query optimization techniques including query
-rewriting, HyDE (Hypothetical Document Embeddings), query decomposition, and
-multi-query generation using LLMs to improve retrieval performance.
-
-Main Components:
-    - optimization: Query optimization implementations
-    - prompts: Prompt templates for query optimization
-
-Usage:
-    from evaluator.models.retrieval.query import rewrite_query, generate_hypothetical_document
-
-    optimized = rewrite_query(query, config)
-"""
-
-# Import optimization functions
 from .optimization import (
     rewrite_query,
     generate_hypothetical_document,
@@ -23,7 +9,6 @@ from .optimization import (
     combine_retrieval_results,
 )
 
-# Import prompts if they exist
 try:
     from .prompts import (  # noqa: F401
         QUERY_REWRITE_PROMPT,

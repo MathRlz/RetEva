@@ -1,4 +1,4 @@
-"""Roadmap 1d — MLflow/W&B bridge: pure payload extraction + import-guarded logging."""
+"""MLflow/W&B bridge: pure payload extraction + import-guarded logging."""
 
 import contextlib
 import sys

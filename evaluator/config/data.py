@@ -8,91 +8,45 @@ from ..config.types import DatasetType, to_enum
 
 @dataclass
 class DataConfig:
-    """
-    Configuration for dataset loading and processing.
-
-    Specifies dataset sources, paths, processing options, and batch settings.
-    Supports multiple dataset sources including local files, HuggingFace datasets,
-    and custom loaders.
-
-    Attributes:
-        dataset_name: Name/identifier of the dataset. Default: "admed_voice".
-        questions_path: Path to questions/queries file. Optional.
-        corpus_path: Path to corpus/documents file. Optional.
-        prepared_dataset_dir: Path to pre-prepared dataset directory. Optional.
-        data_path: Filesystem location/root of the dataset (e.g. the admed_voice base
-            directory). Optional — datasets that read it fall back to their own default
-            (env var / data dir) when unset.
-        strict_validation: Enforce strict dataset validation. Default: True.
-        trace_limit: Limit number of samples (0 = no limit). Default: 0.
-        batch_size: Batch size for processing. Default: 32.
-        num_workers: Number of data loading workers. Default: 0.
-        test_size: Fraction of data for test split (0.0 = no split). Default: 0.0.
-        split: Which split to load — dataset-dependent (e.g. train / test / both /
-            validation). None = the dataset's default_split. Validated against the
-            descriptor's declared splits ("both" = the union of all declared splits).
-
-        dataset_source: Source type. Default: "local".
-            Options: "local", "huggingface", "custom".
-        huggingface_dataset: HuggingFace dataset identifier. Optional.
-        huggingface_subset: HuggingFace dataset subset/config. Optional.
-        huggingface_split: HuggingFace dataset split. Default: "test".
-        audio_dir: Directory containing audio files. Optional.
-        transcripts_file: Path to transcripts file. Optional.
-        column_mapping: Custom column name mapping. Optional.
-        default_language: Default language code. Default: "en".
-        max_samples: Maximum samples to load. Optional.
-        sample_rate: Target sample rate for resampling. Optional.
-
-    Examples:
-        >>> config = DataConfig(
-        ...     dataset_name="pubmed",
-        ...     batch_size=16,
-        ...     trace_limit=100
-        ... )
-        >>> # Load from HuggingFace
-        >>> config = DataConfig(
-        ...     dataset_source="huggingface",
-        ...     huggingface_dataset="mozilla-foundation/common_voice_13_0",
-        ...     huggingface_subset="en"
-        ... )
-    """
+    """Configuration for dataset loading and processing: sources, paths, processing
+    options, and batch settings. Field comments below carry per-field semantics."""
 
     dataset_name: str = "admed_voice"
     questions_path: Optional[str] = None
     corpus_path: Optional[str] = None
     prepared_dataset_dir: Optional[str] = None
+    # Unset: datasets that read it fall back to their own default (env var / data dir).
     data_path: Optional[str] = None
     strict_validation: bool = True
-    trace_limit: int = 0
+    trace_limit: int = 0  # 0 = no limit
     batch_size: int = 32
     # Estimate the ASR batch from a one-sample GPU warm-up instead of using `batch_size`
-    # statically (§8 Roadmap 1b). Opt-in; no-op on CPU; batch size doesn't change outputs.
+    # statically. Opt-in; no-op on CPU; doesn't change outputs.
     warmup_batch_sizing: bool = False
     num_workers: int = 0
-    test_size: float = 0.0
+    test_size: float = 0.0  # 0.0 = no split
+    # Dataset-dependent (train/test/both/validation/...); None = the descriptor's
+    # default_split, "both" = union of all declared splits.
     split: Optional[str] = None
 
     # Dataset loader configuration
     dataset_source: str = "local"  # local, huggingface, custom
-    huggingface_dataset: Optional[str] = None  # HF dataset identifier
-    huggingface_subset: Optional[str] = None  # HF dataset subset/config
-    huggingface_split: str = "test"  # HF dataset split
-    audio_dir: Optional[str] = None  # Local audio directory path
-    transcripts_file: Optional[str] = None  # Path to transcripts file
-    column_mapping: Optional[Dict[str, str]] = None  # Custom column mapping
-    default_language: str = "en"  # Default language code
-    max_samples: Optional[int] = None  # Maximum samples to load
-    sample_rate: Optional[int] = None  # Target sample rate for resampling
+    huggingface_dataset: Optional[str] = None
+    huggingface_subset: Optional[str] = None
+    huggingface_split: str = "test"
+    audio_dir: Optional[str] = None
+    transcripts_file: Optional[str] = None
+    column_mapping: Optional[Dict[str, str]] = None
+    default_language: str = "en"
+    max_samples: Optional[int] = None
+    sample_rate: Optional[int] = None
 
     # Dataset type for automatic metric selection
     dataset_type: Optional[Union[str, DatasetType]] = None
 
-    # Multi-dataset graphs (B4): id -> per-source spec. Each entry holds DataConfig
-    # field names (questions_path, corpus_path, dataset_name, ...) plus an optional
-    # `role` (corpus/questions/both). A `dataset_source` node references an entry by id
-    # via its `dataset` param; the per-source loader (B1) builds one loaded dataset per
-    # entry. None / empty = single-dataset mode (the scalar fields above are used).
+    # Multi-dataset graphs: id -> per-source spec (DataConfig field names + optional
+    # `role` corpus/questions/both). A dataset_source node references an entry via its
+    # `dataset` param. None/empty = single-dataset mode (the scalar fields above are used).
     datasets: Optional[Dict[str, Dict[str, Any]]] = field(default=None)
 
     def __post_init__(self):

@@ -1,15 +1,8 @@
 """Available-LLM listing for the builder's model picker (the global graph LLM).
 
-Two endpoint kinds:
-
-* ``local`` — the curated local list (``registry.CURATED_LOCAL_MODELS``) merged with a *live*
-  probe of a running Ollama server (``/api/tags``), so models you've actually ``ollama pull``-ed
-  are flagged ``pulled`` and float to the top. A pulled model missing from the list is added.
-* ``api`` — a small static set of common OpenAI-compatible chat models (the catalog is
-  local-only; API model ids are different).
-
-Pure-ish: the only side effect is a 2s best-effort HTTP GET to Ollama, which degrades to an
-empty pull-set when the server is down.
+``local`` merges the curated list (``registry.CURATED_LOCAL_MODELS``) with a live probe of a
+running Ollama server, flagging pulled models; ``api`` is a static OpenAI-compatible set.
+Pure-ish: the only side effect is a 2s best-effort HTTP GET to Ollama.
 """
 
 from __future__ import annotations

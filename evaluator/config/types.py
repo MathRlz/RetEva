@@ -8,7 +8,7 @@ class VectorDBType(str, Enum):
     INMEMORY = "inmemory"
     FAISS = "faiss"
     FAISS_GPU = "faiss_gpu"
-    FAISS_MMAP = "faiss_mmap"  # on-disk mmap index + off-RAM payloads (Roadmap 3b)
+    FAISS_MMAP = "faiss_mmap"  # on-disk mmap index + off-RAM payloads
     CHROMADB = "chromadb"
     QDRANT = "qdrant"
 
@@ -29,10 +29,8 @@ class DatasetType(str, Enum):
         return self.value
 
 
-# ── Closed option sets validated as plain strings ─────────────────────────────────────
-# The canonical source for each: config validation, the builder/form selects, the
-# operators-catalog node forms, the CLI, and the /api/introspection/schema endpoint all
-# reference these tuples, so a value can never drift between the UI and the core.
+# Closed option sets validated as plain strings; the canonical source shared by config
+# validation, the builder/CLI/schema endpoint, so a value can't drift between UI and core.
 RETRIEVAL_MODES = ("dense", "sparse", "hybrid")
 RERANKER_MODES = ("none", "token_overlap", "cross_encoder")
 SERVICE_STARTUP_MODES = ("lazy", "eager")
@@ -52,18 +50,7 @@ DATASET_TYPE_MODALITY = {
 
 
 def to_enum(value: Any, enum_class: type[Enum]) -> Enum:
-    """Convert a value to an enum, accepting both strings and enum instances.
-
-    Args:
-        value: String value or enum instance to convert.
-        enum_class: Target enum class.
-
-    Returns:
-        Enum instance.
-
-    Raises:
-        ValueError: If value is not a valid enum member.
-    """
+    """Convert a value to an enum, accepting both strings and enum instances."""
     if isinstance(value, enum_class):
         return value
     if isinstance(value, str):
@@ -79,14 +66,7 @@ def to_enum(value: Any, enum_class: type[Enum]) -> Enum:
 
 
 def enum_to_str(value: Union[str, Enum]) -> str:
-    """Convert enum to string for serialization.
-
-    Args:
-        value: String or enum instance.
-
-    Returns:
-        String value.
-    """
+    """Convert enum to string for serialization."""
     if isinstance(value, Enum):
         return value.value
     return value

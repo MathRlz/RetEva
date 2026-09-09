@@ -1,18 +1,7 @@
-"""Metric-spec registry + per-item computation (architecture A4).
-
-A metric is declared once with the artifacts it needs — a *scored* artifact and an optional
-*ground-truth* artifact — and a per-item scoring function. The builder/runtime can then
-**auto-inject** a metric wherever its declared inputs are present (default = the dataset's
-mode set; opt-in ``collect_all`` = every metric whose inputs are satisfiable).
-
-Computation is keyed: :func:`compute_metric` ``align``s the scored and GT ``ItemSet``s by id
-(gaps tolerated) and emits a per-item ``item_scores`` ``ItemSet``. Reduction to scalars and
-cross-branch deltas is the aggregate node's job (see ``aggregate.py``), per the strict
-per-item / aggregate split.
-
-Underlying scoring reuses ``metrics/ir.py`` + ``metrics/stt.py``. See
-``evaluator-architecture.md`` §7.
-"""
+"""Metric-spec registry + per-item computation. A metric declares the artifacts it needs (a
+*scored* artifact + optional *ground-truth* artifact); the builder/runtime auto-injects it
+wherever those inputs are present. :func:`compute_metric` aligns scored/GT ``ItemSet``s by id;
+reducing to scalars and cross-branch deltas is ``aggregate.py``'s job."""
 
 from __future__ import annotations
 
@@ -21,8 +10,8 @@ from functools import lru_cache
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from ..metrics.clinical import critical_entity_error_rate
+from ..constants import IR_CUTOFFS
 from ..metrics.ir import (
-    IR_CUTOFFS,
     average_precision,
     ndcg_at_k,
     precision_at_k,
@@ -45,7 +34,7 @@ class MetricSpec:
     fn: ScoreFn
     gt: Optional[str] = None  # ground-truth artifact name (None = reference-free)
     higher_is_better: bool = True
-    opt_in: bool = False  # computed only when the caller passes include_opt_in (C7)
+    opt_in: bool = False  # computed only when the caller passes include_opt_in
 
     @property
     def inputs(self) -> Sequence[str]:
@@ -106,17 +95,14 @@ def compute_metrics(
     include_opt_in: bool = False,
     only: Optional[Sequence[str]] = None,
 ) -> Dict[str, ItemSet]:
-    """Run every applicable metric over the available keyed ``artifacts``.
+    """Run every applicable metric over the available keyed ``artifacts`` -> ``{metric_name:
+    item_scores}``. A per-branch metrics node calls this; ``aggregate`` then reduces the
+    returned ``item_scores`` to scalars + cross-branch deltas.
 
-    Returns ``{metric_name: item_scores}`` (the metrics whose inputs are all present). This is
-    what a per-branch metrics node calls; the ``aggregate`` node then reduces the returned
-    ``item_scores`` to scalars + cross-branch deltas.
-
-    ``only`` (the config's ``metrics:`` allowlist, B1) computes exactly those registered
-    names — explicit naming bypasses ``opt_in``; a name whose inputs the artifacts don't
-    carry is skipped (unknown names raise via :func:`get_metric`, but config validation
-    rejects them earlier). ``None`` keeps collect-all.
-    """
+    ``only`` (the config's ``metrics:`` allowlist) computes exactly those registered names —
+    explicit naming bypasses ``opt_in``; a name whose inputs aren't present is skipped
+    (unknown names raise via :func:`get_metric`, but config validation rejects them
+    earlier). ``None`` keeps collect-all."""
     if only is not None:
         have = set(artifacts.keys())
         seen: Dict[str, MetricSpec] = {}
@@ -145,13 +131,10 @@ def compute_metric(spec: MetricSpec, artifacts: Mapping[str, ItemSet]) -> ItemSe
     return ItemSet(ids, [float(spec.fn(s, g)) for s, g in zip(scored_vals, gt_vals)])
 
 
-# ── built-in metrics ──────────────────────────────────────────────────
-# ASR: scored = the ASR hypothesis (query_text, now immutable since correction/optimization
-# emit distinct names), gt = reference_transcription — the SPOKEN transcription the report
-# paths publish into this slot (formerly misnamed "reference_text", which is a different,
-# question-text bus artifact). `wer`/`cer` always measure ASR quality — the old
-# raw_wer/raw_cer (which scored a separate raw_query_text snapshot) are subsumed.
-# A "corrected WER" is now expressible by pointing a second metric at corrected_query_text.
+# ASR: scored = query_text (immutable ASR hypothesis); gt = reference_transcription (the
+# SPOKEN transcription, distinct from the question-text bus artifact). wer/cer always
+# measure ASR quality; a "corrected WER" is expressible by pointing a second metric at
+# corrected_query_text.
 register_metric(
     "wer",
     scored="query_text",
@@ -167,8 +150,7 @@ register_metric(
     higher_is_better=False,
 )
 # CEER — critical-entity (drug/dose/unit) error rate; a low WER can hide a dangerous error.
-# Supersedes the legacy term-weighted WER (`TW_WER`, L2): TW_WER crudely up-weighted a broad
-# medical vocabulary, whereas CEER targets the actually-dangerous drug/dose/unit entities.
+# Targets the actually-dangerous entities rather than up-weighting a broad medical vocabulary.
 register_metric(
     "ceer",
     scored="query_text",
@@ -178,18 +160,14 @@ register_metric(
 )
 
 
-# ── C7 opt-in metrics (query_correction.corrected_metrics, default off) ──
 # corrected_* score the CORRECTED text against the reference — the default wer/cer/ceer
-# score the immutable ASR hypothesis, so a corrector's effect on transcription quality is
-# invisible without these. ceer_rx / corrected_ceer_rx extend CEER's critical set with the
-# drug vocabulary (default CEER counts dose units only — a fixed drug name doesn't move it).
-# All five are `opt_in`: the handler passes include_opt_in only when the run's
+# score the immutable ASR hypothesis, so a corrector's effect would otherwise be invisible.
+# ceer_rx/corrected_ceer_rx extend CEER's critical set with drug vocabulary (default CEER
+# counts dose units only). All five are `opt_in`: enabled only when the run's
 # query_correction config sets `corrected_metrics` — reports are otherwise byte-identical.
 @lru_cache(maxsize=None)
 def _rx_terms() -> frozenset:
     """Drug-aware CEER critical set: default units ∪ medical.json weight≥3 ∪ drug_terms."""
-    from ..metrics.clinical import DEFAULT_CRITICAL_TERMS
-    from ..metrics.domain_terms import load_drug_terms, load_term_weights
 
     terms = set(DEFAULT_CRITICAL_TERMS)
     terms |= {t for t, w in load_term_weights("medical").items() if w >= 3.0}
@@ -272,8 +250,7 @@ register_metric(
     gt="relevant_docs",
     fn=lambda ret, rel: float(reciprocal_rank(ret, rel)),
 )
-# Mean average precision (per-query AP; the run mean is MAP). Ported into the registry so the
-# report is a true superset of the legacy IR scalars ahead of the greenfield cutout (G5).
+# Mean average precision (per-query AP; the run mean is MAP).
 register_metric(
     "map",
     scored="retrieved",
@@ -281,11 +258,12 @@ register_metric(
     fn=lambda ret, rel: float(average_precision(ret, rel)),
 )
 
-# --- LLM judge metrics (reference-free) ---------------------------------------------------------
-# The judge node publishes per-query numeric ItemSets; each metric scores its own artifact, so a
-# metric auto-injects only when that artifact is present (i.e. only the *configured* aspects fire).
-# fn is the identity — the score is already in [0, 1] (pass is 1.0/0.0 → its mean is the pass rate).
+# The judge publishes per-query numeric ItemSets; each metric scores its own artifact, so it
+# auto-injects only when present (only configured aspects fire). fn is the identity — the
+# score is already in [0, 1] (pass is 1.0/0.0 → its mean is the pass rate).
 from ..config.judge import VALID_JUDGE_ASPECTS  # noqa: E402
+from ..metrics.clinical import DEFAULT_CRITICAL_TERMS
+from ..metrics.domain_terms import load_drug_terms, load_term_weights
 
 register_metric("judge_overall", scored="judge_scores", gt=None, fn=lambda v, _g: float(v))
 register_metric("judge_pass_rate", scored="judge_pass", gt=None, fn=lambda v, _g: float(v))

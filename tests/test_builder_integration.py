@@ -1,22 +1,20 @@
-"""Phase 4.6 — no-model integration: cover the builder→run path *past* the fake-runner boundary.
+"""No-model integration: cover the builder→run path *past* the fake-runner boundary.
 
 The from-graph endpoint tests stub the runner (they stop at submit). These exercise the real
 chain spec → config → built DAG → resolved node config (pure topology + config, no models
 loaded), so the translation that feeds the executor is verified end to end.
 """
 
-from pathlib import Path
-
 import pytest
 
-from evaluator.config.graph_config import resolved_node_config
+from evaluator.config.serialization import resolved_node_config
 from evaluator.pipeline import build_graph_for_config
 from evaluator.pipeline.graph.operators import node_kind
 from evaluator.webapi.form_config import graph_spec_to_config_dict, prepare_run_config
+from tests.fixtures_paths import MINI_C, MINI_Q
 
-_ROOT = Path(__file__).resolve().parents[1]
-_Q = str(_ROOT / "examples/data/pubmed_qa_small/questions.json")
-_C = str(_ROOT / "examples/data/pubmed_qa_small/corpus.json")
+_Q = MINI_Q
+_C = MINI_C
 
 
 def _spec():

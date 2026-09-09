@@ -1,4 +1,4 @@
-"""Roadmap 3a: a windowed run reproduces the whole-run report (mock pipelines, no models).
+"""A windowed run reproduces the whole-run report (mock pipelines, no models).
 
 The parity proof for the windowed query-side driver: the same config / dataset / deterministic
 mock pipelines, run whole vs windowed, must yield an identical report — including the per-item
@@ -17,6 +17,7 @@ from evaluator.models.retrieval.strategy import RetrievalStrategyConfig
 from evaluator.pipeline.retrieval_pipeline import RetrievalPipeline
 from evaluator.storage.cache import CacheManager
 from evaluator.storage.vector_store import InMemoryVectorStore
+from tests.graph_test_helpers import explicit_graph, mode_graph
 
 
 def _vec(text):
@@ -78,7 +79,7 @@ def _dataset(n=7):
 def _run(window_size=None, n=7, cpu_executor=None):
     cache = CacheManager(enabled=False)
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": "asr_text_retrieval"}
+    cfg.graph_override = mode_graph("asr_text_retrieval")
     cfg.model.asr_model_type = "whisper"
     cfg.model.text_emb_model_type = "jina_v4"
     cfg.compute_confidence_intervals = True  # exercise the order-sensitive bootstrap CIs
@@ -94,7 +95,8 @@ def _run(window_size=None, n=7, cpu_executor=None):
         text_embedding_pipeline=_MockTextEmb(),
         cache_manager=cache, k=5, batch_size=4,
     )
-    return run_graph(_dataset(n), context, eval_config=cfg)
+    return run_graph(_dataset(n), context, eval_config=cfg,
+                     graph_override=cfg.graph_override)
 
 
 # Volatile keys that legitimately differ run-to-run (time / environment / provenance identity).
@@ -152,12 +154,16 @@ def test_windowed_actually_ran_metrics():
 
 
 def _run_corrected(window_size=None, n=7):
-    """A run with query correction + the C7 opt-in corrected metrics enabled."""
+    """A run with query correction + the opt-in corrected metrics enabled."""
     from evaluator.evaluation.executor.state import RunFeatures
 
     cache = CacheManager(enabled=False)
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": "asr_text_retrieval"}
+    cfg.graph_override = explicit_graph([
+        "dataset_source", "corpus_embedding", "vector_db", "asr", "query_correction",
+        "text_embedding", "retrieval", "transcription_metrics", "retrieval_metrics",
+        "metrics", "finalize",
+    ])
     cfg.model.asr_model_type = "whisper"
     cfg.model.text_emb_model_type = "jina_v4"
     cfg.query_correction.enabled = True
@@ -174,21 +180,19 @@ def _run_corrected(window_size=None, n=7):
         cache_manager=cache, k=5, batch_size=4,
         features=RunFeatures(query_correction_config=cfg.query_correction),
     )
-    return run_graph(_dataset(n), context, eval_config=cfg)
+    return run_graph(_dataset(n), context, eval_config=cfg,
+                     graph_override=cfg.graph_override)
 
 
 def test_windowed_run_reproduces_corrected_metrics():
-    # R3-P1 regression: streaming's accumulate-set derives from finalize BINDINGS; before
-    # the terminal reads were declared, corrected_query_text survived only the last window
-    # (whole n=7 vs windowed n=1). Declared reads make the lifetime analysis see it.
+    # streaming's accumulate-set derives from finalize BINDINGS; without the terminal reads
+    # declared, corrected_query_text would survive only the last window (whole n=7 vs windowed
+    # n=1). Declared reads make the lifetime analysis see it across every window.
     whole = _run_corrected(window_size=None)
     windowed = _run_corrected(window_size=3)
     assert _canon(whole["report"]) == _canon(windowed["report"])
     branches = whole["report"]["branches"]
-    assert any("corrected_wer" in m for m in branches.values())  # the C7 metrics really ran
-
-
-# ── Window-granular checkpoint / resume ──────────────────────────────
+    assert any("corrected_wer" in m for m in branches.values())  # the opt-in corrected metrics really ran
 
 
 class _CrashASR(_MockASR):
@@ -208,7 +212,7 @@ class _CrashASR(_MockASR):
 def _run_ckpt(cache_dir, *, window_size, asr=None, resume=False):
     cache = CacheManager(cache_dir=str(cache_dir), enabled=False)
     cfg = EvaluationConfig()
-    cfg.graph_override = {"template": "asr_text_retrieval"}
+    cfg.graph_override = mode_graph("asr_text_retrieval")
     cfg.model.asr_model_type = "whisper"
     cfg.model.text_emb_model_type = "jina_v4"
     cfg.streaming.window_size = window_size
@@ -223,7 +227,8 @@ def _run_ckpt(cache_dir, *, window_size, asr=None, resume=False):
         checkpoint_interval=1,
         resume_from_checkpoint=resume,
     )
-    return run_graph(_dataset(7), context, eval_config=cfg)
+    return run_graph(_dataset(7), context, eval_config=cfg,
+                     graph_override=cfg.graph_override)
 
 
 def test_checkpointing_does_not_change_the_report(tmp_path):

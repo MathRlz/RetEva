@@ -1,17 +1,7 @@
-"""Per-item failure isolation: drop-and-log, not abort-the-run (architecture §3, task T1).
+"""Per-item failure isolation: drop-and-log, not abort-the-run.
 
-The design contract is that one bad item must not sink a whole evaluation — a node that throws
-on a single query drops *that id* (logged + recorded) and the run continues, the id simply absent
-from the downstream measurement. Until now only ASR honored this; every other node aborted.
-
-``isolate_batch`` covers the executor's batched ops (embedding, vector search) feeding
-positional ``all_*`` lists. A physical drop there would desync those parallel lists, so on a
-batch failure it retries per item and substitutes a caller-supplied ``placeholder`` for a
-failing item (keeping alignment) while still recording the dropped id. The keyed ``report``
-path (the source of truth) then excludes those ids, so a placeholder never reaches a metric.
-
-Dropped ids funnel into a ``DropSink`` so provenance can surface ``dropped_by_node`` (shares
-the S2 plumbing).
+One bad item must not sink a whole evaluation — a node that throws on a single query drops
+that id (logged + recorded) and the run continues, with downstream measurement excluding it.
 """
 
 from __future__ import annotations
@@ -27,14 +17,13 @@ logger = get_logger(__name__)
 class DropSink:
     """Accumulates per-node dropped item ids across the run (node_id → [query_id…]).
 
-    Thread-safe (T5): branch handlers running in parallel may each drop items concurrently.
+    Thread-safe: branch handlers running in parallel may each drop items concurrently.
     """
 
     def __init__(self) -> None:
         self.by_node: Dict[str, List[str]] = {}
-        # Per-drop attribution (R7): the failing node, item, and the exception that caused it,
-        # so a shrinking sample becomes "10% failed embedding (RuntimeError: clip too long)"
-        # instead of an opaque count.
+        # Per-drop attribution (node, item, exception) turns a shrinking sample into
+        # "10% failed embedding (RuntimeError: clip too long)" instead of an opaque count.
         self.details: List[Dict[str, str]] = []
         self._lock = threading.Lock()
 
@@ -59,7 +48,7 @@ class DropSink:
         return {i for ids in self.by_node.values() for i in ids}
 
     def failure_summary(self) -> Dict[str, Any]:
-        """Aggregate the drops for a report ``failure_analysis`` section (R7): total dropped,
+        """Aggregate the drops for a report ``failure_analysis`` section: total dropped,
         per-node counts, the top error types, and a few examples for debugging. Empty dict
         when nothing was dropped (so a clean run adds nothing to the report)."""
         from collections import Counter
@@ -91,8 +80,7 @@ def isolate_batch(
 
     A per-item failure is recorded and its slot filled with ``placeholder`` so the result stays
     positionally aligned to ``values`` (no desync of the executor's parallel ``all_*`` lists).
-    The keyed ``report`` excludes recorded ids, so the placeholder never reaches a metric.
-    Returns a list aligned 1:1 with ``values``."""
+    The keyed ``report`` excludes recorded ids, so the placeholder never reaches a metric."""
     try:
         return list(batch_fn(list(values)))
     except Exception as exc:  # noqa: BLE001 - fall back to isolated per-item

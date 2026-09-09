@@ -24,7 +24,7 @@ def test_requests_actually_overlap():
 
 
 def test_serial_path_does_not_overlap():
-    """workers=1 is the old behaviour: the same barrier can never be satisfied."""
+    """workers=1 runs serially: the same barrier can never be satisfied."""
     barrier = threading.Barrier(4, timeout=0.5)
 
     def _wait(i):

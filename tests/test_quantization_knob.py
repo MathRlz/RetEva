@@ -1,4 +1,4 @@
-"""Roadmap 1a — quantization knob: config resolution + opt-in factory application."""
+"""Quantization knob: config resolution + opt-in factory application."""
 
 import logging
 

@@ -24,8 +24,8 @@ _RETRY_BACKOFF_S = (0.5, 2.0)
 
 
 def _is_transient(exc: Exception) -> bool:
-    """Retryable failures only: timeouts, connection errors, HTTP 429/5xx. Auth/schema
-    4xx (and everything else) fail immediately — retrying them can't help (A4)."""
+    """Retryable only: timeouts, connection errors, HTTP 429/5xx; auth/schema 4xx fail
+    immediately (retrying can't help)."""
     import socket
     import urllib.error
 
@@ -35,13 +35,10 @@ def _is_transient(exc: Exception) -> bool:
 
 
 def _explain(exc: Exception, cfg: Any) -> str:
-    """The failure plus what the SERVER said and what to try — the bare exception is not enough.
-
-    A local server under memory pressure answers 5xx with a body naming the real cause (e.g. a
-    KV-cache allocation failure when `OLLAMA_NUM_PARALLEL` slots each reserve the model's full
-    context). Without the body you get "HTTP Error 500" or a bare "timed out" and no idea that
-    the fix is `OLLAMA_CONTEXT_LENGTH`, not the client.
-    """
+    """The failure plus what the SERVER said — a bare exception (e.g. "HTTP Error 500" or
+    "timed out") hides the real cause; a local server under memory pressure names it in the
+    body (often an Ollama VRAM/KV-cache issue fixed via `OLLAMA_CONTEXT_LENGTH`, not the
+    client)."""
     import urllib.error
 
     detail = str(exc)
@@ -71,11 +68,8 @@ def _cache_key(messages: List[Dict[str, str]], model: str, temperature: float) -
 
 
 class LLMClient:
-    """OpenAI-compatible chat completions client.
-
-    Args:
-        config: LLMConfig (or any object with the same attributes).
-    """
+    """OpenAI-compatible chat completions client; ``config`` may be any object with
+    the same attributes as :class:`LLMConfig`."""
 
     def __init__(self, config: LLMConfig, *, component: str = "llm") -> None:
         self._config = config
@@ -87,15 +81,8 @@ class LLMClient:
         *,
         use_cache: bool = False,
     ) -> str:
-        """POST messages to the configured endpoint, return assistant content.
-
-        Args:
-            messages: OpenAI-format message list.
-            use_cache: If True, return cached result for identical requests.
-
-        Raises:
-            RuntimeError: On HTTP or JSON errors.
-        """
+        """POST messages to the configured endpoint, return assistant content; failures
+        (HTTP, JSON, timeout) surface as ``RuntimeError``."""
         cfg = self._config
         model = cfg.model
         temperature = cfg.temperature
@@ -151,9 +138,8 @@ class LLMClient:
         except (KeyError, IndexError) as exc:
             raise RuntimeError(f"Unexpected LLM response structure: {body}") from exc
 
-        # Record token usage + latency for the run's cost report (T8). The usage block is
-        # OpenAI-compatible; missing fields default to 0 (a server that omits them still
-        # contributes latency + a call count). May raise BudgetExceededError to stop the run.
+        # Usage fields default to 0 when the server omits them (call count + latency still
+        # count); may raise BudgetExceededError to stop the run.
         usage = body.get("usage") or {}
         COST.record(
             self._component,

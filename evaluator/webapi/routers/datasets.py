@@ -5,6 +5,11 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from evaluator.config.types import DATASET_TYPE_MODALITY
+from evaluator.config.dataset_descriptors import get_descriptor, list_registered_datasets
+from evaluator.config.graph_config import DATA_FIELD_TO_KEY
+from evaluator.pipeline.artifacts import artifact_modality, is_registered
+from evaluator.datasets import list_known_dataset_names
+from evaluator.datasets.profiles import DATASET_TYPE_DEFAULTS
 
 
 def _modality(dataset_type: str) -> str:
@@ -17,14 +22,11 @@ def build_datasets_router() -> APIRouter:
     @router.get("/api/dataset/{dataset_id}/fields")
     def dataset_fields_endpoint(dataset_id: str) -> Dict[str, Any]:
         """Return DatasetDescriptor metadata for a registered dataset id (used by wizard step 2)."""
-        from evaluator.datasets.descriptor import get_descriptor, list_registered_datasets
         desc = get_descriptor(dataset_id)
         if desc is None:
             known = ", ".join(list_registered_datasets())
             raise HTTPException(
                 status_code=404, detail=f"Unknown dataset '{dataset_id}'. Known: {known}")
-        from evaluator.config.graph_config import _DATA_FIELD_TO_KEY
-        from evaluator.pipeline.artifacts import artifact_modality, is_registered
 
         return {
             "id": desc.id,
@@ -36,7 +38,7 @@ def build_datasets_router() -> APIRouter:
             "required_data_fields": list(desc.required_data_fields),
             "splits": list(desc.splits),
             "default_split": desc.default_split,
-            # Column schema (§2): what the dataset node shows on the DAG.
+            # Column schema: what the dataset node shows on the DAG.
             "fields": [
                 {
                     "name": name,
@@ -56,7 +58,7 @@ def build_datasets_router() -> APIRouter:
             # Required settings as the builder's node-param keys (the node-centric
             # YAML vocabulary) — the UI hardcodes nothing.
             "required_settings": [
-                {"key": _DATA_FIELD_TO_KEY.get(field, field), "field": field}
+                {"key": DATA_FIELD_TO_KEY.get(field, field), "field": field}
                 for field in desc.required_data_fields
             ],
         }
@@ -65,9 +67,6 @@ def build_datasets_router() -> APIRouter:
     def list_datasets() -> Dict[str, Any]:
         """Return known datasets with grouping metadata (modality + domain), plus the bare
         id list (back-compat) and type defaults."""
-        from evaluator.datasets import list_known_dataset_names
-        from evaluator.datasets.descriptor import get_descriptor
-        from evaluator.datasets.profiles import _DATASET_TYPE_DEFAULTS
 
         ids = list_known_dataset_names()
         datasets = []
@@ -91,7 +90,7 @@ def build_datasets_router() -> APIRouter:
             "datasets": datasets,   # rich entries for the grouped picker
             "dataset_type_defaults": {
                 str(dt): {"evaluation_mode": p.evaluation_mode}
-                for dt, p in _DATASET_TYPE_DEFAULTS.items()
+                for dt, p in DATASET_TYPE_DEFAULTS.items()
             },
         }
 

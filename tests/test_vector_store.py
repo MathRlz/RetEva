@@ -1,8 +1,10 @@
 """InMemoryVectorStore: cosine build + nearest-neighbour search."""
 
 import numpy as np
+import pytest
 
 from evaluator.storage.vector_store import InMemoryVectorStore
+from evaluator.storage.backends._common import check_vector_payload_lengths, primitive_payload
 
 
 def _store():
@@ -42,7 +44,7 @@ def test_search_batch_matches_per_query_search():
 
 def test_payload_at_is_bounds_checked():
     # A backend can return a stale/oversized _payload_idx; _payload_at returns None
-    # (skipped hit) instead of IndexError or a wrong document (A4/F4).
+    # (skipped hit) instead of IndexError or a wrong document.
     from evaluator.storage.vector_store import VectorStore
 
     class _S(VectorStore):
@@ -85,7 +87,7 @@ def _capture(logger_name):
 
 
 def test_search_drops_out_of_range_payloads():
-    # H3: a corrupted/short payload list (e.g. a load() with mismatched sidecar) must drop the
+    # a corrupted/short payload list (e.g. a load() with mismatched sidecar) must drop the
     # bad hit + log, not IndexError mid-run.
     import numpy as np
     from evaluator.storage.vector_store import InMemoryVectorStore
@@ -113,3 +115,37 @@ def test_search_batch_drops_out_of_range_payloads():
     rows = s.search_batch(np.eye(3, dtype="float32"), k=3)
     flat = {p for row in rows for p, _ in row}
     assert flat == {"a", "b"}  # 'c' (index 2) dropped, no crash
+
+
+def test_faiss_stores_share_search_implementation():
+    from evaluator.storage import vector_store as vs
+
+    assert vs.FaissVectorStore.search is vs._FaissStore.search
+    assert vs.FaissMmapVectorStore.search_batch is vs._FaissStore.search_batch
+    assert vs.FaissGpuVectorStore.search is vs._FaissStore.search
+
+
+def test_check_vector_payload_lengths_raises_on_mismatch():
+    with pytest.raises(ValueError, match="^Number of vectors"):
+        check_vector_payload_lengths([1, 2, 3], [1, 2])
+
+
+def test_primitive_payload_drops_non_primitives_by_default():
+    payload = {"a": 1, "b": [1], "c": object()}
+    assert primitive_payload(payload, 7, allow_lists=False) == {"a": 1, "_payload_idx": 7}
+
+
+def test_primitive_payload_allow_lists_keeps_list_values():
+    payload = {"a": 1, "b": [1], "c": object()}
+    assert primitive_payload(payload, 7, allow_lists=True) == {
+        "a": 1,
+        "b": [1],
+        "_payload_idx": 7,
+    }
+
+
+def test_primitive_payload_non_dict_falls_back_to_str():
+    assert primitive_payload(42, 7, allow_lists=False) == {
+        "_payload_idx": 7,
+        "_payload_str": "42",
+    }

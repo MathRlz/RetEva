@@ -1,4 +1,4 @@
-"""Roadmap 4a: cross-run Pareto frontier — pure logic + group query + webapi endpoint."""
+"""Cross-run Pareto frontier — pure logic + group query + webapi endpoint."""
 
 from pathlib import Path
 
@@ -11,9 +11,6 @@ from evaluator.analysis.pareto import (
     pareto_frontier,
 )
 from evaluator.storage import ExperimentStore
-
-
-# ── pure logic ───────────────────────────────────────────────────────
 
 
 def test_parse_objectives_defaults_to_max():
@@ -66,9 +63,6 @@ def test_annotate_flags_frontier_and_excludes_incomparable():
 def test_single_objective_frontier_is_the_max():
     frontier = pareto_frontier(_ROWS, [("recall", "max")])
     assert {r["run_id"] for r in frontier} == {1}  # only the top recall is non-dominated
-
-
-# ── group query + endpoint ───────────────────────────────────────────
 
 
 def _store_with_group(tmp_path):

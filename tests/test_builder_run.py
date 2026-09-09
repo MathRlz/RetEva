@@ -1,11 +1,9 @@
-"""Phase 1 — the builder→run loop: a graph built in the visual builder can be submitted as a
+"""The builder→run loop: a graph built in the visual builder can be submitted as a
 job. Covers the spec→config translation helper and the POST /api/jobs/from-graph endpoint.
 
 A fake evaluation_runner is injected so jobs run in-process (no subprocess, no model loading) —
 the JobManager only uses the real subprocess path when the runner *is* ``run_evaluation``.
 """
-
-from pathlib import Path
 
 import pytest
 
@@ -15,10 +13,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 from evaluator.config.graph_config import GraphConfigError  # noqa: E402
 from evaluator.webapi.app import create_app  # noqa: E402
 from evaluator.webapi.form_config import graph_spec_to_config_dict  # noqa: E402
+from tests.fixtures_paths import E2E_MINI, MINI_C, MINI_Q  # noqa: E402
 
-_ROOT = Path(__file__).resolve().parents[1]
-_Q = str(_ROOT / "examples/data/pubmed_qa_small/questions.json")
-_C = str(_ROOT / "examples/data/pubmed_qa_small/corpus.json")
+_Q = MINI_Q
+_C = MINI_C
 
 
 def _spec(dataset_params=None):
@@ -66,9 +64,6 @@ def client(captured):
     return TestClient(create_app(evaluation_runner=fake_runner))
 
 
-# ── translation helper ──────────────────────────────────────────────────────────
-
-
 def test_spec_to_config_synthesizes_dataset():
     cfg = graph_spec_to_config_dict(_spec(), experiment_name="t")
     assert cfg["experiment_name"] == "t"
@@ -77,7 +72,7 @@ def test_spec_to_config_synthesizes_dataset():
 
 
 def test_builder_derives_plumbing_from_meaningful_graph():
-    """P3.2: the builder authors only meaningful operations; graph_spec_to_config_dict appends the
+    """The builder authors only meaningful operations; graph_spec_to_config_dict appends the
     structural plumbing (metric comparisons + report + finalize) so the canvas graph runs as the
     full DAG, auto-wired. Meaningful nodes (incl. per-node models) are preserved."""
     from evaluator import EvaluationConfig
@@ -106,12 +101,11 @@ def test_spec_to_config_unknown_dataset_raises():
 
 
 def test_duplicate_model_role_keeps_per_node_models():
-    """Node-centric config: two stage-typed embed nodes of the same role no longer clobber — EACH
-    keeps its own model ON the node (a per-node override the executor reads via
+    """Node-centric config: two stage-typed embed nodes of the same role do not clobber each
+    other — EACH keeps its own model ON the node (a per-node override the executor reads via
     ``resolved_model_config``); neither is promoted into the flat ``model.*`` default (only a
     top-level ``nodes.<role>`` block sets that — absent here). Translation succeeds with BOTH
-    models preserved (the old 'same model role' rejection is gone — two distinct same-role
-    models are now expressible)."""
+    models preserved — two distinct same-role models are expressible."""
     spec = {"mode": "asr_text_retrieval", "nodes": [
         {"id": "dataset_source", "type": "source",
          "params": {"dataset": "pubmed_qa", "questions": _Q, "corpus": _C}},
@@ -136,9 +130,6 @@ def test_spec_to_config_does_not_mutate_caller_spec():
     second = graph_spec_to_config_dict(spec)
     assert spec == snapshot
     assert first == second
-
-
-# ── endpoint ────────────────────────────────────────────────────────────────────
 
 
 def test_run_from_graph_submits_job(client, captured):
@@ -178,23 +169,28 @@ def test_drawing_llm_feature_node_enables_it():
 
 
 def test_run_graph_applies_per_node_edits(client, captured):
-    """Config & Run inline forms: a preset → config_to_canvas_spec → edit a node's param →
+    """Config & Run inline forms: a config → config_to_canvas_spec → edit a node's param →
     /ui/run-graph submits a config reflecting the edit (the round-trip the page relies on)."""
-    from evaluator import EvaluationConfig, get_preset, list_presets
+    from evaluator import EvaluationConfig
+    from evaluator.config.graph_config import resolved_model_config
+    from evaluator.pipeline import build_graph_for_config
     from evaluator.webapi.form_builder import config_to_canvas_spec
 
-    preset = next((p for p in list_presets() if "small" in p), list_presets()[0])
-    canvas = config_to_canvas_spec(EvaluationConfig.from_dict(get_preset(preset)))
+    # a single-arm ASR graph whose asr node carries the plain `asr` id the edit targets
+    canvas = config_to_canvas_spec(EvaluationConfig.from_yaml(E2E_MINI))
     nodes = [{"id": n["id"], "type": n["type"], "params": dict(n.get("params") or {})}
              for n in canvas["nodes"] if not n.get("structural")]
     asr = [n for n in nodes if n["id"] == "asr"]
-    assert asr, "preset has an asr node to edit"
+    assert asr, "config has an asr node to edit"
     asr[0]["params"]["size"] = "tiny"   # the user's per-node edit
     r = client.post(
-        "/ui/run-graph", json={"spec": {"mode": canvas["mode"], "nodes": nodes}, "name": preset}
+        "/ui/run-graph", json={"spec": {"mode": canvas["mode"], "nodes": nodes}, "name": "e2e_mini"}
     )
     assert r.status_code == 200
-    assert captured["config"].model.asr_size == "tiny"   # the edit reached the run config
+    # the edit reached the run config, on the node the executor resolves it from
+    cfg = captured["config"]
+    asr_node = next(n for n in build_graph_for_config(cfg).nodes if n.id == "asr")
+    assert resolved_model_config(cfg, asr_node).asr_size == "tiny"
 
 
 def test_validate_graph_reports_bad_dataset_path(client):
@@ -216,7 +212,7 @@ def test_validate_graph_reports_bad_dataset_path(client):
 
 
 def test_build_metrics_preview_includes_judge(client):
-    """J5: a canvas graph containing the LLM-judge node previews its config-independent judge
+    """A canvas graph containing the LLM-judge node previews its config-independent judge
     metrics (judge_overall + judge_pass_rate) — the node declares both judge_scores + judge_pass
     as outputs, so graph_advice's applicable-metrics advice surfaces them while editing."""
     from evaluator import EvaluationConfig
@@ -238,7 +234,7 @@ def test_build_metrics_preview_includes_judge(client):
 
 
 def test_build_no_spurious_ground_truth_warning(client):
-    """P3.1: the GT notice is gated to source-DECLARED ground truth (relevant_docs). pubmed_qa
+    """The GT notice is gated to source-DECLARED ground truth (relevant_docs). pubmed_qa
     publishes it, so a retrieval graph raises no 'ground truth' warning — and the run-time-loaded
     transcription GT (reference_text, not a declared node output) never false-positives."""
     from evaluator import EvaluationConfig
@@ -279,7 +275,7 @@ def test_validate_builder_shares_the_export_run_pipeline_not_just_topology(clien
             {"id": "corpus_embedding", "type": "corpus_embedding", "params": {}},
             {"id": "vector_db", "type": "vector_db", "params": {}},
             {"id": "text_embedding", "type": "text_embedding", "params": {"model": "labse"}},
-            # renamed from "retrieval" to "metrics" -- collides with the auto-derived report node
+            # id "metrics" collides with the auto-derived report node, though type=retrieval
             {"id": "metrics", "type": "retrieval", "params": {}},
         ],
         "edges": [
@@ -301,11 +297,11 @@ def test_validate_builder_shares_the_export_run_pipeline_not_just_topology(clien
 
 
 def test_validate_graph_shares_the_export_run_pipeline_and_shows_metrics(client):
-    """Config & Run's own Validate (`/ui/validate-graph`) had the identical gap the builder's
-    Validate had: it built a bare `EvaluationConfig` from `graph_spec_to_config_dict` directly
-    and called `collect_problems`, never running `complete_structural_plumbing` or
-    `graph_advice` -- so it neither caught an Export/Run-only failure nor ever showed applicable
-    metrics. Fixed to share `build_validated_run_config` + `graph_advice`, same as the builder."""
+    """Config & Run's own Validate (`/ui/validate-graph`) shares the identical pipeline the
+    builder's Validate uses: `build_validated_run_config` + `graph_advice`, instead of building
+    a bare `EvaluationConfig` from `graph_spec_to_config_dict` and calling `collect_problems`
+    directly, which would neither catch an Export/Run-only failure nor show applicable
+    metrics."""
     ds = {"dataset": "pubmed_qa", "questions": _Q, "corpus": _C}
     spec = {
         "mode": "asr_text_retrieval",
@@ -331,10 +327,10 @@ def test_validate_graph_shares_the_export_run_pipeline_and_shows_metrics(client)
     }
     html = client.post("/ui/validate-graph", json={"spec": spec}).text
     assert "Valid" in html and "levels" in html
-    assert 'class="chip"' in html  # applicable-metrics chips, previously never shown here
+    assert 'class="chip"' in html  # applicable-metrics chips
 
     # and the same rename-collision class of bug the builder's Validate now catches
-    spec["nodes"][-1]["id"] = "metrics"  # renamed from "retrieval" -- collides with the
+    spec["nodes"][-1]["id"] = "metrics"  # collides with the auto-derived report node
     spec["edges"] = [{**e, "to": "metrics"} if e["to"] == "retrieval" else e for e in spec["edges"]]
     bad_html = client.post("/ui/validate-graph", json={"spec": spec}).text
     assert "error-box" in bad_html

@@ -1,8 +1,8 @@
-"""R4: multi-variant graphs (N `metrics`/`finalize` node pairs sharing an upstream producer)
-must not lose every variant but one. `RunState.results` is a single shared dict — before the
-R4 fix, `_stage_metrics`'s `s.results = results` and `_stage_finalize`'s in-place mutation
-meant only the LAST-executed metrics/finalize node's numbers survived. This pins the fix at
-both levels: the low-level aggregation (`_collect_final_result`) and a full graph run.
+"""Multi-variant graphs (N `metrics`/`finalize` node pairs sharing an upstream producer) must
+not lose every variant but one. `RunState.results` is a single shared dict, so
+`_stage_metrics`'s `s.results = results` and `_stage_finalize`'s in-place mutation could let
+only the LAST-executed metrics/finalize node's numbers survive. This pins the fix at both
+levels: the low-level aggregation (`_collect_final_result`) and a full graph run.
 """
 
 from evaluator.evaluation.executor.run import _collect_final_result
@@ -105,7 +105,7 @@ def test_two_retrieval_variants_both_survive_a_real_graph_run():
     nodes = [
         "dataset_source",
         {"id": "audio_embedding", "type": "audio_embedding",
-         "params": {"model": "attention_pool", "dim": 8}},
+         "params": {"dim": 8}},
         "corpus_embedding",
         {"id": "vector_db", "type": "vector_db", "params": {"store": "inmemory"}},
         {"id": "retrieval_a", "type": "retrieval", "params": {"k": 1}},
@@ -131,10 +131,10 @@ def test_two_retrieval_variants_both_survive_a_real_graph_run():
 
     assert set(res["variants"]) == {"finalize_a", "finalize_b"}
     a, b = res["variants"]["finalize_a"], res["variants"]["finalize_b"]
-    # Genuinely two independent report objects, not the same shared dict read twice (the R4
-    # bug: before the fix, `s.results = results` in `_stage_metrics` meant only the LAST of
-    # metrics_a/metrics_b to execute would leave any trace at all — `res` wouldn't even have a
-    # "variants" key, let alone two populated ones).
+    # Genuinely two independent report objects, not the same shared dict read twice — if
+    # `s.results = results` in `_stage_metrics` mutated a shared dict, only the LAST of
+    # metrics_a/metrics_b to execute would leave any trace at all: `res` wouldn't even have a
+    # "variants" key, let alone two populated ones.
     assert a is not b
     assert a.get("MRR") is not None and b.get("MRR") is not None
     assert a.get("Recall@5") is not None and b.get("Recall@5") is not None

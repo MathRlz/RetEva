@@ -3,11 +3,11 @@
 import logging
 import threading
 from collections import OrderedDict
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Generator
+from typing import Callable, Dict, List, Optional
 
 from .monitor import GPUMonitor, get_monitor
+from .strategy import pick_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +39,6 @@ class GPUPool:
     The GPUPool tracks which devices are available and how much memory
     is reserved on each. It supports different allocation strategies
     and can fall back to CPU when GPU memory is exhausted.
-
-    Example:
-        >>> pool = GPUPool(["cuda:0", "cuda:1"])
-        >>> device = pool.allocate("asr", memory_gb=2.5)
-        >>> print(device)
-        'cuda:0'
-        >>> pool.release("asr")
     """
 
     def __init__(
@@ -67,8 +60,8 @@ class GPUPool:
         self._lru: OrderedDict[str, None] = OrderedDict()
         self._strategy = None
         # The webapi runs allocations on a ThreadPoolExecutor; without this lock two
-        # threads can both pass the ``free >= memory_gb`` check and over-commit a GPU
-        # (F2). Re-entrant: ``allocate`` holds it while the strategy calls back into
+        # threads can both pass the ``free >= memory_gb`` check and over-commit a GPU.
+        # Re-entrant: ``allocate`` holds it while the strategy calls back into
         # ``_reserve``.
         self._lock = threading.RLock()
 
@@ -80,7 +73,6 @@ class GPUPool:
             self._devices[device] = self._create_device_usage(device)
 
     def _auto_detect_devices(self) -> List[str]:
-        """Auto-detect available GPU devices."""
         gpu_count = self._monitor.get_device_count()
         if gpu_count == 0:
             logger.info("No GPUs detected, using CPU")
@@ -91,7 +83,6 @@ class GPUPool:
         return devices
 
     def _create_device_usage(self, device: str) -> DeviceUsage:
-        """Create a DeviceUsage object for a device."""
         if device == "cpu":
             # CPU has "unlimited" memory for our purposes
             return DeviceUsage(device=device, total_memory_gb=float('inf'))
@@ -123,7 +114,7 @@ class GPUPool:
         logger.debug(f"Allocating device for '{model_type}' (requires {memory_gb:.2f}GB)")
 
         # Hold the lock across the whole find-then-reserve so two threads can't both see the
-        # same device as free and over-commit it (F2). RLock → nested _reserve / round-robin OK.
+        # same device as free and over-commit it. RLock → nested _reserve / round-robin OK.
         with self._lock:
             # Idempotent per model key: a graph that builds the same model for several
             # nodes must not stack reservations for one loaded instance.
@@ -194,7 +185,6 @@ class GPUPool:
         )
 
     def _find_best_device(self, memory_gb: float) -> Optional[str]:
-        """Find the device with the most free memory that can fit the model."""
         best_device = None
         best_free = -1.0
 
@@ -208,7 +198,6 @@ class GPUPool:
         return best_device
 
     def _reserve(self, device: str, model_type: str, memory_gb: float) -> None:
-        """Reserve memory on a device for a model."""
         with self._lock:
             if device not in self._devices:
                 return
@@ -220,7 +209,6 @@ class GPUPool:
                 self._lru.move_to_end(model_type)
 
     def release(self, model_type: str) -> None:
-        """Release a model's allocation."""
         with self._lock:
             for device, usage in self._devices.items():
                 if model_type in usage.allocations:
@@ -267,7 +255,7 @@ class GPUPool:
     def evict_lru_one(self, prefer_device: Optional[str] = None) -> bool:
         """Evict the single least-recently-used GPU-resident model (via its registered
         eviction callback) and release its reservation. Returns True when a model was
-        evicted — the runtime OOM recovery path (T7b) calls this repeatedly until the
+        evicted — the runtime OOM recovery path calls this repeatedly until the
         failing forward pass fits or nothing evictable remains. ``prefer_device`` targets
         models on that device first (the GPU the OOM happened on — freeing a different
         GPU does nothing for the failing forward pass), falling back to any device."""
@@ -304,7 +292,6 @@ class GPUPool:
 
     @property
     def devices(self) -> List[str]:
-        """List of devices in the pool."""
         return list(self._devices.keys())
 
     @property
@@ -312,33 +299,9 @@ class GPUPool:
         """List of GPU devices in the pool (excludes CPU)."""
         return [d for d in self._devices.keys() if d != "cpu"]
 
-    @contextmanager
-    def managed_allocation(
-        self,
-        model_type: str,
-        memory_gb: float,
-        cleanup_on_exit: bool = False
-    ) -> Generator[str, None, None]:
-        """Allocate, yield the device string, and release on exit;
-        ``cleanup_on_exit`` also clears the GPU cache."""
-        device = self.allocate(model_type, memory_gb)
-        try:
-            yield device
-        finally:
-            self.release(model_type)
-            if cleanup_on_exit:
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except (RuntimeError, ImportError) as exc:
-                    logger.debug("GPU cache clear failed during cleanup: %s", exc)
-
-
 def pool_from_config(device_pool_cfg) -> "GPUPool":
     """The one GPUPool builder both the config-side device resolution and the
-    pipeline factory use (they used to hold byte-equivalent copies)."""
-    from .strategy import pick_strategy
+    pipeline factory use."""
 
     pool = GPUPool(
         devices=list(device_pool_cfg.available_devices),

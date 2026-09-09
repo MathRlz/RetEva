@@ -1,24 +1,33 @@
-"""Test helper: explicit graph.nodes for a pipeline mode.
+"""Test helper: explicit graph.nodes lists a config can carry.
 
-Configs no longer accept graph.mode (it's rejected by the loader) — a config is an explicit graph.
-Tests that only need "a config that builds mode X's graph" use this to generate the explicit node
-list (the same builder skeleton assemble_specs produces), instead of the removed mode shorthand.
+A config is an explicit graph (graph.mode is rejected by the loader), so tests that only need
+"a config shaped like X" build one from a literal node list here.
 """
-from evaluator.pipeline.graph.assembly import FeatureSet, assemble_specs
+
+#: The canonical node list behind each run label, for tests that assert on a labelled graph.
+_LABEL_NODES = {
+    "asr_only": ["dataset_source", "asr", "transcription_metrics", "metrics", "finalize"],
+    "asr_text_retrieval": [
+        "dataset_source", "corpus_embedding", "vector_db", "asr", "text_embedding",
+        "retrieval", "transcription_metrics", "retrieval_metrics", "metrics", "finalize",
+    ],
+    "audio_emb_retrieval": [
+        "dataset_source", "corpus_embedding", "vector_db", "audio_embedding", "retrieval",
+        "retrieval_metrics", "metrics", "finalize",
+    ],
+    # cross-modal fusion: the text-query stream is asr(audio) -> text_embedding, fused with the
+    # audio_embedding stream before one retrieval
+    "audio_text_retrieval": [
+        "dataset_source", "corpus_embedding", "vector_db", "asr", "audio_embedding",
+        "text_embedding", "fusion", "retrieval", "embedding_alignment_metrics",
+        "retrieval_metrics", "metrics", "finalize",
+    ],
+}
 
 
-def mode_nodes(mode, **features):
-    """The explicit graph.nodes list for a pipeline mode (+ optional FeatureSet flags)."""
-    return assemble_specs(mode, FeatureSet(**features))
-
-
-def mode_graph(mode, **features):
-    """A full explicit `graph:` block (nodes + generated port-level edges) for a mode —
-    what a post-cut-over config carries; edges via the sanctioned authoring generator."""
-    from evaluator.pipeline.graph.wiring import emit_edges
-
-    nodes = mode_nodes(mode, **features)
-    return {"nodes": nodes, "edges": emit_edges(nodes)}
+def mode_graph(label):
+    """A full explicit `graph:` block (nodes + generated port-level edges) for a run label."""
+    return explicit_graph(_LABEL_NODES[label])
 
 
 def explicit_graph(nodes, extra_edges=()):

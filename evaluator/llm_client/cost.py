@@ -1,14 +1,7 @@
-"""LLM cost accounting: tokens, latency, and an optional budget cap (task T8).
+"""LLM cost accounting: tokens, latency, and an optional budget cap.
 
-A voice→IR comparison should report *compute cost per method*, not only accuracy — an answer
-that needs a 30B judge per query is not "free". Every LLM call (judge / answer_gen /
-query_optimization) records its token usage + wall time here, tagged by component, and the run
-surfaces the totals in ``report.provenance.cost``. An optional token budget stops a run before it
-runs away.
-
-Process-scoped + thread-safe: one run executes at a time per process (the webapi runs each job as
-a subprocess), but within a run T5 may fire LLM nodes from several branches concurrently, so the
-accumulator is locked. ``reset()`` is called at run start.
+Process-scoped and thread-safe (the accumulator is lock-guarded) since several branches may
+fire LLM nodes concurrently within one run; ``reset()`` is called at run start.
 """
 
 from __future__ import annotations
@@ -18,7 +11,7 @@ from typing import Any, Dict, Optional
 
 
 class BudgetExceededError(RuntimeError):
-    """Raised when cumulative LLM token usage exceeds the configured budget (T8)."""
+    """Raised when cumulative LLM token usage exceeds the configured budget."""
 
 
 class CostTracker:

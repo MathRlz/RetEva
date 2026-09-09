@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from ..config.types import DatasetType
 from ..logging_config import get_logger
+from ..config.dataset_descriptors import get_descriptor, list_registered_datasets
 
 logger = get_logger(__name__)
 
@@ -23,11 +24,11 @@ class DatasetCapabilityProfile:
 
 # Capability metadata for the built-in datasets lives on their DatasetDescriptors
 # (the single source of truth) — resolve_dataset_profile derives a profile from there.
-# This registry only holds profiles added at runtime via register_dataset_profile.
+# This registry only holds profiles added directly at runtime, if any.
 _PROFILE_REGISTRY: Dict[str, DatasetCapabilityProfile] = {}
 
 
-_DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
+DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
     DatasetType.AUDIO_TRANSCRIPTION: DatasetCapabilityProfile(
         name="generic_audio_transcription",
         dataset_type=DatasetType.AUDIO_TRANSCRIPTION,
@@ -80,7 +81,6 @@ _DATASET_TYPE_DEFAULTS: Dict[DatasetType, DatasetCapabilityProfile] = {
 
 
 def _descriptor_to_profile(desc: Any) -> DatasetCapabilityProfile:
-    """Convert a DatasetDescriptor to a DatasetCapabilityProfile."""
     return DatasetCapabilityProfile(
         name=desc.id,
         dataset_type=desc.dataset_type,
@@ -103,20 +103,18 @@ def resolve_dataset_profile(
     """
     # Descriptor registry has priority (single source of truth for known datasets)
     try:
-        from .descriptor import get_descriptor
         desc = get_descriptor(dataset_name)
         if desc is not None:
             return _descriptor_to_profile(desc)
     except Exception as exc:
         logger.debug("descriptor lookup failed for %r: %s", dataset_name, exc)
 
-    # Local profile registry (populated via register_dataset_profile)
+    # Local profile registry (for profiles added directly at runtime)
     if dataset_name in _PROFILE_REGISTRY:
         return _PROFILE_REGISTRY[dataset_name]
 
-    # Type-based fallback
-    if dataset_type is not None and dataset_type in _DATASET_TYPE_DEFAULTS:
-        return _DATASET_TYPE_DEFAULTS[dataset_type]
+    if dataset_type is not None and dataset_type in DATASET_TYPE_DEFAULTS:
+        return DATASET_TYPE_DEFAULTS[dataset_type]
 
     # Generic fallback — preserves "generic:name" for unknown datasets
     return DatasetCapabilityProfile(
@@ -132,7 +130,6 @@ def resolve_dataset_profile(
 def list_known_dataset_names() -> List[str]:
     """Return known dataset names from both registries."""
     try:
-        from .descriptor import list_registered_datasets
         names = set(list_registered_datasets())
     except Exception:
         names = set()
@@ -142,7 +139,7 @@ def list_known_dataset_names() -> List[str]:
 
 def profile_snapshot(config) -> Dict[str, Any]:
     """The serialized dataset-profile dict both the run metadata and the graph
-    preview attach (was duplicated in evaluation_service + form_builder)."""
+    preview attach."""
     profile = resolve_dataset_profile(
         dataset_name=config.data.dataset_name,
         dataset_type=config.data.dataset_type,

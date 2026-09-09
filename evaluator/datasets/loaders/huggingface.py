@@ -93,15 +93,6 @@ class HuggingFaceDatasetLoader:
     Supports common speech recognition datasets and automatically
     maps HuggingFace dataset columns to the expected AudioSample format.
 
-    Example:
-        >>> loader = HuggingFaceDatasetLoader(
-        ...     dataset_name="mozilla-foundation/common_voice_11_0",
-        ...     subset="en",
-        ...     split="test",
-        ... )
-        >>> samples = loader.load()
-        >>> print(len(samples))
-
     Attributes:
         dataset_name: HuggingFace dataset identifier.
         subset: Dataset configuration/subset name (e.g., language code).
@@ -126,17 +117,11 @@ class HuggingFaceDatasetLoader:
     _samples: Optional[List[AudioSample]] = field(default=None, repr=False, init=False)
 
     def _get_column_mapping(self) -> Dict[str, Optional[str]]:
-        """Get column mapping for the dataset.
-
-        Returns:
-            Dictionary mapping standard names to dataset column names.
-        """
         if self.column_mapping is not None:
             mapping = DEFAULT_COLUMN_MAPPING.copy()
             mapping.update(self.column_mapping)
             return mapping
 
-        # Check known datasets
         for known_name, known_mapping in KNOWN_DATASET_MAPPINGS.items():
             if self.dataset_name.startswith(known_name) or known_name in self.dataset_name:
                 return known_mapping
@@ -144,7 +129,6 @@ class HuggingFaceDatasetLoader:
         return DEFAULT_COLUMN_MAPPING
 
     def _load_hf_dataset(self) -> Any:
-        """Load the HuggingFace dataset."""
         if self._dataset is not None:
             return self._dataset
 
@@ -156,7 +140,7 @@ class HuggingFaceDatasetLoader:
                 "Install it with: pip install datasets"
             ) from e
 
-        # Reproducibility (R1): support ``repo@revision`` to pin an exact HF dataset
+        # Reproducibility: support ``repo@revision`` to pin an exact HF dataset
         # snapshot (commit / tag / branch), so a rerun can't silently pick up an upstream
         # change. Plain ``repo`` keeps the default (latest) behaviour.
         path = self.dataset_name
@@ -210,37 +194,28 @@ class HuggingFaceDatasetLoader:
         """Map a HuggingFace dataset item to AudioSample.
 
         Args:
-            item: Dataset item dictionary.
             idx: Item index (used as fallback sample_id).
-
-        Returns:
-            AudioSample instance.
         """
         mapping = self._get_column_mapping()
 
-        # Extract audio
         audio_col = mapping.get("audio", "audio")
         audio_array, sampling_rate = self._extract_audio(item, audio_col)
 
-        # Extract transcription
         trans_col = mapping.get("transcription", "text")
         transcription = str(item.get(trans_col, ""))
 
-        # Extract sample ID
         id_col = mapping.get("sample_id")
         if id_col and id_col in item:
             sample_id = str(item[id_col])
         else:
             sample_id = f"{self.dataset_name}_{idx}"
 
-        # Extract language
         lang_col = mapping.get("language")
         if lang_col and lang_col in item:
             language = str(item[lang_col])
         else:
             language = self.subset if self.subset else self.default_language
 
-        # Collect remaining metadata
         metadata = {
             k: v for k, v in item.items()
             if k not in [audio_col, trans_col, id_col, lang_col]
@@ -257,11 +232,6 @@ class HuggingFaceDatasetLoader:
         )
 
     def load(self) -> List[AudioSample]:
-        """Load all samples from the HuggingFace dataset.
-
-        Returns:
-            List of AudioSample objects.
-        """
         if self._samples is not None:
             return self._samples
 
@@ -283,7 +253,6 @@ class HuggingFaceDatasetLoader:
         return self._samples
 
     def __len__(self) -> int:
-        """Return the number of samples."""
         if self._samples is not None:
             return len(self._samples)
 
@@ -299,18 +268,7 @@ class HuggingFaceDatasetLoader:
         return total
 
     def __iter__(self) -> Iterator[AudioSample]:
-        """Iterate over samples."""
         return iter(self.load())
 
     def __getitem__(self, idx: int) -> AudioSample:
-        """Get a sample by index."""
         return self.load()[idx]
-
-    @classmethod
-    def list_known_datasets(cls) -> List[str]:
-        """List known HuggingFace speech datasets with built-in mappings.
-
-        Returns:
-            List of dataset identifiers.
-        """
-        return list(KNOWN_DATASET_MAPPINGS.keys())

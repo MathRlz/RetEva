@@ -4,6 +4,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..types import AudioRetrievalDataset, register_eval_dataset
+from ...config.dataset_descriptors import resolve_split
+from ..loaders import factory
+from ._common import audio_query_dataset
 
 if TYPE_CHECKING:
     from ...config.data import DataConfig
@@ -24,11 +27,7 @@ class HuggingFaceAudioDataset(AudioRetrievalDataset):
 
     @classmethod
     def from_config(cls, data: "DataConfig") -> "QueryDataset":
-        from ..descriptor import resolve_split
-        from ..loaders.factory import create_dataset_loader
-        from ..runtime import AudioSamplesQueryDataset, _load_corpus_entries
-
-        loader = create_dataset_loader(
+        loader = factory.create_dataset_loader(
             source="huggingface",
             huggingface_dataset=data.huggingface_dataset,
             huggingface_subset=getattr(data, "huggingface_subset", None),
@@ -37,14 +36,4 @@ class HuggingFaceAudioDataset(AudioRetrievalDataset):
             max_samples=getattr(data, "max_samples", None),
             default_language=getattr(data, "default_language", "en"),
         )
-        samples = loader.load()
-        corpus_entries = (
-            _load_corpus_entries(data.corpus_path)
-            if getattr(data, "corpus_path", None)
-            else []
-        )
-        return AudioSamplesQueryDataset(
-            samples,
-            trace_limit=getattr(data, "trace_limit", 0),
-            corpus_entries=corpus_entries,
-        )
+        return audio_query_dataset(loader, data)

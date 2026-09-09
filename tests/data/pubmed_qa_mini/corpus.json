@@ -1,0 +1,8 @@
+[
+  {"doc_id": "d1", "title": "Aspirin for secondary prevention", "text": "Low-dose aspirin reduces the risk of recurrent myocardial infarction in patients with prior coronary events."},
+  {"doc_id": "d2", "title": "Metformin and renal function", "text": "Metformin can be continued in mild chronic kidney disease with dose adjustment and monitoring of eGFR."},
+  {"doc_id": "d3", "title": "Statin-associated muscle symptoms", "text": "Myalgia is the most common adverse effect reported by patients taking statins."},
+  {"doc_id": "d4", "title": "Vitamin D and falls", "text": "Vitamin D supplementation has a modest effect on fall prevention in older adults with deficiency."},
+  {"doc_id": "d5", "title": "Influenza vaccination timing", "text": "Annual influenza vaccination is recommended before the start of the flu season."},
+  {"doc_id": "d6", "title": "Hypertension lifestyle changes", "text": "Reducing sodium intake and regular exercise lower blood pressure in most patients."}
+]

@@ -10,9 +10,13 @@ from typing import Callable
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from evaluator import list_presets
-from evaluator.services import ModelServiceProvider
+from evaluator import EvaluationConfig, get_preset, list_presets
+from evaluator.pipeline import ModelServiceProvider
 from evaluator.webapi.form_builder import graph_preview
+from evaluator.webapi.form_builder import default_model_for, graph_advice
+from evaluator.config.validation import collect_problems
+from evaluator.config.graph_config import build_evaluation_config_kwargs
+from evaluator.webapi.form_config import build_validated_run_config
 
 
 def _graph_diagram_context(preview: dict) -> dict:
@@ -69,8 +73,6 @@ def _edit_nodes_json(name: str, preview: dict, config=None) -> str:
     nodes from branches) gets its own form card. Structural plumbing is dropped."""
     import json as _json
 
-    from evaluator.webapi.form_builder import default_model_for
-
     nodes = [
         {
             "id": n["id"], "type": n["type"], "label": n.get("label"),
@@ -88,7 +90,7 @@ def _edit_nodes_json(name: str, preview: dict, config=None) -> str:
             # happened to work for plain 1:1 ports.
             "input_ports": n.get("input_ports") or [],
             # the form's empty model option names the inherited model — the LOADED config's
-            # flat default here, not the dataclass default (audit: no bare "(default)")
+            # flat default here, not the dataclass default (avoids a bare "(default)")
             "default_model": default_model_for(n.get("model_field"), config),
         }
         for n in preview.get("nodes", []) if not n.get("structural")
@@ -118,9 +120,6 @@ def register_config_routes(
         """Simplified Config & Run: a chosen preset → its execution DAG preview (default-simplified,
         with 'View full DAG' + 'Open in builder') + a Run button. Reuses config→DAG (graph_preview)
         and DAG→simplified (the structural flag) — no separate simplified-from-config path."""
-        from evaluator import EvaluationConfig, get_preset
-        from evaluator.config.validation import collect_problems
-
         name = (await request.form()).get("name") or ""
         if not name:
             return HTMLResponse(
@@ -148,10 +147,6 @@ def register_config_routes(
     async def ui_config_from_yaml(request: Request) -> HTMLResponse:
         """Upload a YAML config file and render its pipeline preview + editable param forms,
         same as /ui/config-preview but sourced from uploaded content rather than a preset name."""
-        from evaluator import EvaluationConfig
-        from evaluator.config.graph_config import build_evaluation_config_kwargs
-        from evaluator.config.validation import collect_problems
-
         form = await request.form()
         raw_yaml = str(form.get("yaml") or "").strip()
         if not raw_yaml:
@@ -183,11 +178,8 @@ def register_config_routes(
         pipeline ``/api/jobs/from-graph``/``/ui/run-graph`` run — ``build_validated_run_config``
         (structural completion, dataset choice, topology, embedding-space check) — mirroring the
         builder's ``/ui/validate-builder`` fix: "Valid ✓" here means the graph will actually build
-        and run, not just that the edited fields alone are internally consistent, and now shows
-        the applicable-metrics chips too (previously absent — this endpoint never analyzed the
-        real graph at all)."""
-        from evaluator.webapi.form_builder import graph_advice
-        from evaluator.webapi.form_config import build_validated_run_config
+        and run, not just that the edited fields alone are internally consistent, and shows
+        the applicable-metrics chips too."""
 
         body = await request.json()
         spec = body.get("spec") or {}
@@ -218,13 +210,11 @@ def register_config_routes(
         same pipeline ``/api/jobs/from-graph``/``/ui/run-graph`` run — ``build_validated_run_config``
         (structural completion, dataset choice, topology, embedding-space check) — so "Valid ✓"
         here means the graph will actually build and run, not just that the drawn topology alone
-        is internally consistent. That was a real, previously-silent gap: a canvas node renamed to
-        an id a server-derived structural node also needs (e.g. "metrics") passed the OLD
-        topology-only check but broke at Export/Run, since structural completion never ran here.
+        is internally consistent. A canvas node renamed to an id a server-derived structural node
+        also needs (e.g. "metrics") can pass a topology-only check but still break at Export/Run,
+        since structural completion does not run there — this endpoint's full check catches it.
         Shares ``graph_advice`` (embedding warnings + applicable metrics + GT-missing) with the
         form-builder helpers."""
-        from evaluator.webapi.form_builder import graph_advice
-        from evaluator.webapi.form_config import build_validated_run_config
 
         spec = await request.json()  # the raw canvas spec {mode, nodes, edges, branches?}
         errors: list = []

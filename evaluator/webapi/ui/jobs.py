@@ -7,7 +7,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from evaluator import EvaluationConfig, get_preset
 from evaluator.webapi.jobs import JobManager
+from evaluator.webapi.form_config import build_validated_run_config
 
 
 def _seconds_since_progress(data: dict):
@@ -57,8 +59,6 @@ def register_jobs_routes(router: APIRouter, page, jobs: JobManager) -> None:
         preset name. Editing happens in the builder (Open in builder), not here."""
         import html
 
-        from evaluator import EvaluationConfig, get_preset
-
         name = (await request.form()).get("name") or ""
         try:
             config = EvaluationConfig.from_dict(get_preset(name))
@@ -75,8 +75,6 @@ def register_jobs_routes(router: APIRouter, page, jobs: JobManager) -> None:
         the edited canvas spec ({mode, nodes:[{id,type,params}]}); same translate+validate path as
         /api/jobs/from-graph, but returns the status fragment for htmx."""
         import html
-
-        from evaluator.webapi.form_config import build_validated_run_config
 
         body = await request.json()
         spec = body.get("spec") or {}

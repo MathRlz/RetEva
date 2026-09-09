@@ -53,7 +53,7 @@ def test_emitter_shortens_same_name_edges_and_keeps_renames():
 
 
 def test_emitted_edges_round_trip():
-    # The E3 contract: bind_explicit_edges(nodes, emit_edges(nodes)) == _wire_nodes(nodes).
+    # bind_explicit_edges(nodes, emit_edges(nodes)) == _wire_nodes(nodes).
     auto = _wire_nodes(_NODES)
     rebound = bind_explicit_edges(_NODES, emit_edges(_NODES))
     for a, b in zip(auto, rebound):

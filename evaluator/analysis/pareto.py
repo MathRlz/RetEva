@@ -1,4 +1,4 @@
-"""Multi-objective Pareto frontier over evaluation runs (Roadmap 4a).
+"""Multi-objective Pareto frontier over evaluation runs.
 
 The cross-run trade-off view a sweep wants: run A *dominates* run B when A is at-least-as-good
 on every objective and strictly better on at least one. The frontier is the non-dominated set —

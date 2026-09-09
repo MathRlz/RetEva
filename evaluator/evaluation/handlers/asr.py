@@ -1,7 +1,6 @@
 """ASR stage handler: produce query texts (or oracle bypass) for ASR-based modes.
 
-Registers the
-``asr`` handler at import time.
+Registers the ``asr`` handler at import time.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ from ...logging_config import get_logger
 from ..helpers import _build_relevant_from_item
 from ..executor.state import RunState
 from ..executor.node_pipeline import _node_pipeline
+from ..audio_refs import resolve_audio_dataset
 
 logger = get_logger(__name__)
 
@@ -68,8 +68,8 @@ def _run_asr_step(
 
     relevance: list = []
     # Query ids align the per-item ASR scores to keyed ItemSets so the metric registry can
-    # score WER/CER (L3a) — set whenever ASR runs (this path only runs for ASR nodes), so
-    # asr_only gets them too even though it has no retrieval/relevance.
+    # score WER/CER — set whenever ASR runs, so asr_only gets them too even though it has no
+    # retrieval/relevance.
     query_ids = [str(dataset[i].get("question_id", i)) for i in range(len(dataset))]
     if with_relevance:
         # Retrieval ran (asr_text_retrieval): keep relevance aligned with query order for IR.
@@ -81,7 +81,7 @@ def _run_asr_step(
 def _stage_asr(s: RunState) -> None:
     """ASR (or oracle bypass): produce query texts + relevance for ASR modes.
 
-    Per-branch divergence (R2): a node ``params.oracle: true`` makes *this* branch use the
+    Per-branch divergence: a node ``params.oracle: true`` makes *this* branch use the
     reference transcriptions (the oracle/ref branch) even when the run isn't globally oracle.
     """
     params = s.node_params
@@ -92,9 +92,8 @@ def _stage_asr(s: RunState) -> None:
         s.total,
         "Step 1: Oracle bypass" if oracle else "Step 1: ASR transcription",
     )
-    # Bus-first audio (P4): a republished query_audio ref set (augment_audio /
+    # Bus-first audio: a republished query_audio ref set (augment_audio /
     # union) wraps the dataset in a ref-decoding view; matching refs pass through.
-    from ..audio_refs import resolve_audio_dataset
 
     audio_dataset = resolve_audio_dataset(s, s.dataset)
     with _node_pipeline(s, "asr", params):
@@ -121,7 +120,7 @@ def _stage_asr(s: RunState) -> None:
         )
     # A checkpoint resume can leave a longer, batch-overlapping hypotheses list (the
     # legacy zip-truncation leniency); trim to the dataset's query ids so the keyed
-    # publish stays aligned (M1d-2 — was handled by the metrics-side trim before).
+    # publish stays aligned.
     if query_ids and len(hypotheses) > len(query_ids):
         logger.debug(
             "asr: trimming %d hypotheses to %d query ids (checkpoint overlap)",
@@ -129,12 +128,9 @@ def _stage_asr(s: RunState) -> None:
             len(query_ids),
         )
         hypotheses = hypotheses[: len(query_ids)]
-    # Bus-only handoff (M1d-2): everything downstream reads keyed ctx artifacts.
-    # Pure transform: asr publishes ONLY its hypothesis. It is never overwritten
-    # (correction/optimization emit distinct names), so query_text stays the un-rewritten
-    # ASR output WER/CER score against — no raw_query_text needed. Ground truth comes from
-    # dataset_source.
-    publish_keyed_or_plain(s, "query_text", hypotheses, query_ids)  # feeds embedding (R4d)
+    # Pure transform: asr publishes ONLY its hypothesis, under the immutable `query_text`
+    # name (correction/optimization emit distinct names). Ground truth comes from dataset_source.
+    publish_keyed_or_plain(s, "query_text", hypotheses, query_ids)  # feeds embedding
     s.cb(
         "step_1_asr",
         s.total,

@@ -3,22 +3,16 @@ from typing import List, Optional
 import numpy as np
 
 from ..storage.cache import CacheManager
+from ..storage.cache.helpers import CacheMixin
 from ..devices.memory import get_memory_manager, run_with_oom_backoff
 from ..logging_config import get_logger, TimingContext
 from ..models import TextEmbeddingModel
-from ..utils.cache_helpers import CacheMixin
 
 logger = get_logger(__name__)
 
 
 class TextEmbeddingPipeline(CacheMixin):
-    """
-    Pipeline for text embedding with caching.
-
-    Converts text input into dense vector representations using the
-    configured text embedding model. Supports caching of embeddings
-    for efficiency.
-    """
+    """Pipeline for text embedding with caching."""
 
     def __init__(
         self, model: TextEmbeddingModel, cache_manager: Optional[CacheManager] = None
@@ -29,19 +23,10 @@ class TextEmbeddingPipeline(CacheMixin):
 
     @property
     def model_name(self) -> str:
-        """Get the model name."""
         return self.model.name()
 
     def process(self, text: str) -> np.ndarray:
-        """
-        Process a single text and return its embedding.
-
-        Args:
-            text: Input text to embed
-
-        Returns:
-            np.ndarray: Text embedding vector
-        """
+        """Process a single text and return its embedding."""
         model_name = self.model.name()
         model_version = self.model_version
 
@@ -68,17 +53,7 @@ class TextEmbeddingPipeline(CacheMixin):
     def process_batch(
         self, texts: List[str], show_progress: bool = False, desc: str = "Embedding"
     ) -> np.ndarray:
-        """
-        Process a batch of texts and return their embeddings.
-
-        Args:
-            texts: List of texts to embed
-            show_progress: Whether to show progress bar
-            desc: Label shown in progress bar and timing log
-
-        Returns:
-            np.ndarray: Array of text embeddings with shape (len(texts), embedding_dim)
-        """
+        """Process a batch of texts and return their embeddings."""
         model_name = self.model.name()
         model_version = self.model_version
         memory_manager = get_memory_manager()
@@ -106,7 +81,7 @@ class TextEmbeddingPipeline(CacheMixin):
 
         if uncached_texts:
             with TimingContext(f"{desc} ({len(uncached_texts)} texts)", logger):
-                # OOM-resilient: an oversized batch halves-and-retries instead of crashing (T7).
+                # OOM-resilient: an oversized batch halves-and-retries instead of crashing.
                 batch_embeddings = run_with_oom_backoff(
                     lambda chunk: self.model.encode(
                         chunk, show_progress=show_progress, desc=desc
@@ -122,7 +97,6 @@ class TextEmbeddingPipeline(CacheMixin):
 
         result = np.array(embeddings)
 
-        # Clear GPU cache after batch processing
         memory_manager.clear_gpu_cache()
 
         return result

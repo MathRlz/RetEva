@@ -17,24 +17,10 @@ from ._common import load_results
 logger = get_logger(__name__)
 
 
-def paired_ttest(
-    scores_a: List[float], scores_b: List[float]
-) -> Tuple[float, float]:
-    """Perform paired t-test between two sets of scores.
-
-    Tests whether the mean difference between paired observations is
-    significantly different from zero. Assumes normally distributed differences.
-
-    Args:
-        scores_a: First set of scores (per-sample metrics from experiment A).
-        scores_b: Second set of scores (per-sample metrics from experiment B).
-
-    Returns:
-        Tuple of (t_statistic, p_value).
-
-    Raises:
-        ValueError: If inputs have different lengths or fewer than 2 samples.
-    """
+def _paired_arrays(
+    scores_a: List[float], scores_b: List[float], test_name: str
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Both score lists as arrays, rejecting the shapes a paired test cannot handle."""
     scores_a = np.asarray(scores_a)
     scores_b = np.asarray(scores_b)
 
@@ -43,7 +29,23 @@ def paired_ttest(
             f"Score arrays must have same length: {len(scores_a)} vs {len(scores_b)}"
         )
     if len(scores_a) < 2:
-        raise ValueError("Need at least 2 samples for paired t-test")
+        raise ValueError(f"Need at least 2 samples for {test_name}")
+    return scores_a, scores_b
+
+
+def paired_ttest(
+    scores_a: List[float], scores_b: List[float]
+) -> Tuple[float, float]:
+    """Tests whether the mean difference between paired observations is
+    significantly different from zero. Assumes normally distributed differences.
+
+    Returns:
+        Tuple of (t_statistic, p_value).
+
+    Raises:
+        ValueError: If inputs have different lengths or fewer than 2 samples.
+    """
+    scores_a, scores_b = _paired_arrays(scores_a, scores_b, "paired t-test")
 
     t_stat, p_value = stats.ttest_rel(scores_a, scores_b)
     return float(t_stat), float(p_value)
@@ -52,15 +54,9 @@ def paired_ttest(
 def wilcoxon_test(
     scores_a: List[float], scores_b: List[float]
 ) -> Tuple[float, float]:
-    """Perform Wilcoxon signed-rank test between two sets of scores.
-
-    Non-parametric alternative to paired t-test. Does not assume normal
+    """Non-parametric alternative to paired t-test. Does not assume normal
     distribution of differences. Tests whether the distribution of differences
     is symmetric around zero.
-
-    Args:
-        scores_a: First set of scores (per-sample metrics from experiment A).
-        scores_b: Second set of scores (per-sample metrics from experiment B).
 
     Returns:
         Tuple of (statistic, p_value).
@@ -68,15 +64,7 @@ def wilcoxon_test(
     Raises:
         ValueError: If inputs have different lengths or fewer than 2 samples.
     """
-    scores_a = np.asarray(scores_a)
-    scores_b = np.asarray(scores_b)
-
-    if len(scores_a) != len(scores_b):
-        raise ValueError(
-            f"Score arrays must have same length: {len(scores_a)} vs {len(scores_b)}"
-        )
-    if len(scores_a) < 2:
-        raise ValueError("Need at least 2 samples for Wilcoxon test")
+    scores_a, scores_b = _paired_arrays(scores_a, scores_b, "Wilcoxon test")
 
     # Handle case where all differences are zero
     differences = scores_a - scores_b
@@ -99,16 +87,11 @@ def bootstrap_confidence_interval(
     n_bootstrap: int = 1000,
     random_state: Optional[int] = None
 ) -> Tuple[float, float]:
-    """Compute bootstrap confidence interval for mean of scores.
-
-    Uses percentile bootstrap method to estimate confidence interval.
+    """Uses percentile bootstrap method to estimate confidence interval.
 
     Args:
-        scores: Sample scores to compute CI for.
-        alpha: Significance level (default 0.05 for 95% CI).
-        n_bootstrap: Number of bootstrap iterations.
-        random_state: Random seed for reproducibility. Uses a *local* Generator so a
-            call never perturbs the global NumPy RNG state.
+        random_state: Uses a *local* Generator so a call never perturbs the global
+            NumPy RNG state.
 
     Returns:
         Tuple of (lower_bound, upper_bound) for the confidence interval.
@@ -128,11 +111,9 @@ def bootstrap_confidence_interval(
     bootstrap_means = np.zeros(n_bootstrap)
 
     for i in range(n_bootstrap):
-        # Resample with replacement
         resample_indices = rng.integers(0, n_samples, size=n_samples)
         bootstrap_means[i] = np.mean(scores[resample_indices])
 
-    # Compute percentile confidence interval
     lower = np.percentile(bootstrap_means, (alpha / 2) * 100)
     upper = np.percentile(bootstrap_means, (1 - alpha / 2) * 100)
 
@@ -140,7 +121,7 @@ def bootstrap_confidence_interval(
 
 
 #: Below this many paired samples a significance test is under-powered — its p/q value is
-#: reported but flagged so a reader doesn't over-trust a comparison on a tiny sample (R3).
+#: reported but flagged so a reader doesn't over-trust a comparison on a tiny sample.
 MIN_POWERED_SAMPLES = 20
 
 
@@ -151,9 +132,7 @@ def compare_experiments(
     *,
     min_samples: int = MIN_POWERED_SAMPLES,
 ) -> Dict[str, Dict[str, Any]]:
-    """Compare two experiment results across multiple metrics.
-
-    For each metric, performs paired t-test and Wilcoxon test if per-sample
+    """For each metric, performs paired t-test and Wilcoxon test if per-sample
     scores are available, otherwise compares aggregate values.
 
     Args:
@@ -182,11 +161,9 @@ def compare_experiments(
     """
     comparison = {}
 
-    # Find common metrics if not specified
     if metric_names is None:
         metric_names = _find_common_numeric_metrics(results_a, results_b)
 
-    # Extract per-sample scores if available
     per_sample_a = _extract_per_sample_scores(results_a)
     per_sample_b = _extract_per_sample_scores(results_b)
 
@@ -207,7 +184,6 @@ def compare_experiments(
             "ci_b": None,
         }
 
-        # Get aggregate values
         val_a = results_a.get(metric)
         val_b = results_b.get(metric)
 
@@ -216,17 +192,15 @@ def compare_experiments(
             metric_result["mean_b"] = float(val_b)
             metric_result["diff"] = float(val_b) - float(val_a)
 
-        # Check for per-sample scores
         scores_a = per_sample_a.get(metric)
         scores_b = per_sample_b.get(metric)
 
         if scores_a is not None and scores_b is not None:
             if len(scores_a) == len(scores_b) and len(scores_a) >= 2:
-                # R3: record the paired-sample size + flag under-powered comparisons so a
+                # Record the paired-sample size + flag under-powered comparisons so a
                 # reader doesn't over-trust a "significant" delta computed on a handful of items.
                 metric_result["n_samples"] = len(scores_a)
                 metric_result["underpowered"] = len(scores_a) < min_samples
-                # Perform statistical tests
                 try:
                     t_stat, t_pval = paired_ttest(scores_a, scores_b)
                     metric_result["ttest"] = {"t_stat": t_stat, "p_value": t_pval}
@@ -241,9 +215,8 @@ def compare_experiments(
                 except Exception as exc:
                     logger.debug("Wilcoxon test failed for %s: %s", metric, exc)
 
-            # Compute confidence intervals
-            # Independent seeds for A vs B so the two CIs don't share resample indices
-            # (F21 — identical seeds defeat the point of separate bootstraps).
+            # Independent seeds for A vs B so the two CIs don't share resample indices —
+            # identical seeds defeat the point of separate bootstraps.
             if len(scores_a) >= 2:
                 try:
                     metric_result["ci_a"] = bootstrap_confidence_interval(
@@ -262,7 +235,7 @@ def compare_experiments(
 
         comparison[metric] = metric_result
 
-    # FDR control across the metric panel (M2): flagging each metric significant at raw α=0.05
+    # FDR control across the metric panel: flagging each metric significant at raw α=0.05
     # independently inflates the family-wise false-positive rate (~40% over 10+ metrics). Apply
     # Benjamini-Hochberg to the t-test and Wilcoxon p-values, expose the q-value, and add an
     # FDR-corrected significance flag. The raw p / significant_* flags are kept for reference.
@@ -284,7 +257,6 @@ def compare_experiments(
 def _find_common_numeric_metrics(
     results_a: Dict[str, Any], results_b: Dict[str, Any]
 ) -> List[str]:
-    """Find common numeric metrics between two result dictionaries."""
     skip_keys = {"asr", "embedder", "per_sample", "details", "config", "metadata"}
 
     metrics = []
@@ -302,25 +274,20 @@ def _find_common_numeric_metrics(
 def _extract_per_sample_scores(
     results: Dict[str, Any]
 ) -> Dict[str, List[float]]:
-    """Extract per-sample scores from results dictionary.
-
-    Looks for scores in common formats:
+    """Looks for scores in common formats:
     - results["per_sample"][metric] = [scores...]
     - results["details"][i][metric] = score
     """
     per_sample: Dict[str, List[float]] = {}
 
-    # Check for explicit per_sample key
     if "per_sample" in results and isinstance(results["per_sample"], dict):
         for metric, scores in results["per_sample"].items():
             if isinstance(scores, list):
                 per_sample[metric] = [float(s) for s in scores if s is not None]
 
-    # Check for details list
     elif "details" in results and isinstance(results["details"], list):
         details = results["details"]
         if details and isinstance(details[0], dict):
-            # Infer metrics from first item
             sample_keys = [
                 k for k, v in details[0].items()
                 if isinstance(v, (int, float))
@@ -341,16 +308,7 @@ def compare_result_files(
     path_b: Union[str, Path],
     metric_names: Optional[List[str]] = None
 ) -> Dict[str, Any]:
-    """Compare two result files and generate comparison report.
-
-    Args:
-        path_a: Path to first results file.
-        path_b: Path to second results file.
-        metric_names: Optional list of metrics to compare.
-
-    Returns:
-        Comparison report dictionary with experiment metadata and metrics.
-    """
+    """Compare two result files and generate comparison report."""
     results_a = load_results(path_a)
     results_b = load_results(path_b)
 
@@ -372,21 +330,13 @@ def compare_result_files(
 
 
 def format_comparison_report(comparison: Dict[str, Any]) -> str:
-    """Format comparison results as human-readable text report.
-
-    Args:
-        comparison: Comparison dictionary from compare_result_files.
-
-    Returns:
-        Formatted string report.
-    """
+    """Format comparison results as human-readable text report."""
     lines = []
     lines.append("=" * 70)
     lines.append("EXPERIMENT COMPARISON REPORT")
     lines.append("=" * 70)
     lines.append("")
 
-    # Experiment info
     exp_a = comparison.get("experiment_a", {})
     exp_b = comparison.get("experiment_b", {})
 
@@ -402,7 +352,6 @@ def format_comparison_report(comparison: Dict[str, Any]) -> str:
     lines.append(f"  Embedder: {exp_b.get('embedder', 'N/A')}")
     lines.append("")
 
-    # Metrics comparison
     lines.append("-" * 70)
     lines.append("METRIC COMPARISON")
     lines.append("-" * 70)
@@ -420,7 +369,6 @@ def format_comparison_report(comparison: Dict[str, Any]) -> str:
         if mean_a is not None and mean_b is not None:
             lines.append(f"   A: {mean_a:.4f}  |  B: {mean_b:.4f}  |  Δ: {diff:+.4f}")
 
-            # Confidence intervals
             ci_a = metric_data.get("ci_a")
             ci_b = metric_data.get("ci_b")
             if ci_a:
@@ -428,7 +376,6 @@ def format_comparison_report(comparison: Dict[str, Any]) -> str:
             if ci_b:
                 lines.append(f"   95% CI B: [{ci_b[0]:.4f}, {ci_b[1]:.4f}]")
 
-        # Statistical tests
         ttest = metric_data.get("ttest")
         wilcoxon = metric_data.get("wilcoxon")
 
@@ -467,7 +414,7 @@ def format_comparison_report(comparison: Dict[str, Any]) -> str:
 
 
 def benjamini_hochberg(p_values: List[float]) -> List[float]:
-    """Benjamini-Hochberg FDR-adjusted p-values (q-values), in input order (S4).
+    """Benjamini-Hochberg FDR-adjusted p-values (q-values), in input order.
 
     Controls the false-discovery rate across the whole family of cross-branch delta
     tests, so a panel of ΔRecall/ΔWER comparisons can't accumulate false positives.

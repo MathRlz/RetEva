@@ -49,25 +49,9 @@ def aggregate_timings(timings: List[float]) -> PerformanceStats:
 
 @dataclass
 class Timer:
-    """Context manager for measuring execution time.
-
-    Can be used as a context manager or manually via start()/stop().
-    Supports multiple measurements and automatic statistics computation.
-
-    Example:
-        # As context manager
-        timer = Timer("encoding")
-        with timer:
-            model.encode(texts)
-        print(f"Elapsed: {timer.elapsed:.4f}s")
-
-        # Multiple measurements
-        timer = Timer("batch_processing")
-        for batch in batches:
-            with timer:
-                process(batch)
-        print(timer.stats)
-    """
+    """Context manager for measuring execution time; can also be used manually
+    via start()/stop(). Supports multiple measurements and automatic
+    statistics computation."""
 
     name: str = "timer"
     timings: List[float] = field(default_factory=list)
@@ -75,7 +59,6 @@ class Timer:
     _elapsed: Optional[float] = field(default=None, repr=False)
 
     def start(self) -> "Timer":
-        """Start the timer."""
         self._start_time = time.perf_counter()
         return self
 
@@ -91,12 +74,10 @@ class Timer:
         return self._elapsed
 
     def __enter__(self) -> "Timer":
-        """Enter context manager and start timer."""
         self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit context manager and stop timer."""
         self.stop()
 
     @property
@@ -114,7 +95,6 @@ class Timer:
         return aggregate_timings(self.timings)
 
     def reset(self) -> None:
-        """Clear all recorded timings."""
         self.timings.clear()
         self._start_time = None
         self._elapsed = None
@@ -127,13 +107,7 @@ class Timer:
 
 @contextmanager
 def timed(name: str = "operation"):
-    """Simple context manager that yields a Timer object.
-
-    Example:
-        with timed("encoding") as t:
-            model.encode(texts)
-        print(f"{t.name}: {t.elapsed:.4f}s")
-    """
+    """Simple context manager that yields a Timer object."""
     timer = Timer(name)
     with timer:
         yield timer

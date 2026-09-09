@@ -1,4 +1,4 @@
-"""Roadmap 3a groundwork: streaming config + windowed-node partition + window plan + ItemSet.concat."""
+"""Streaming config + windowed-node partition + window plan + ItemSet.concat."""
 
 import numpy as np
 import pytest
@@ -12,10 +12,7 @@ from evaluator.evaluation.executor.streaming import (
     window_bounds,
 )
 from evaluator.evaluation.item_set import ItemSet
-from evaluator.pipeline.graph.modes import build_stage_graph
-
-
-# ── StreamingConfig ──────────────────────────────────────────────────
+from evaluator.pipeline.graph.wiring import build_graph_from_spec, emit_edges
 
 
 def test_streaming_config_default_off():
@@ -37,9 +34,6 @@ def test_streaming_config_round_trips_through_evaluation_config():
     assert cfg.streaming.window_size == 64 and cfg.streaming.enabled
 
 
-# ── window_bounds ────────────────────────────────────────────────────
-
-
 def test_window_bounds_partitions_the_range():
     assert window_bounds(10, 4) == [(0, 4), (4, 8), (8, 10)]
     assert window_bounds(8, 4) == [(0, 4), (4, 8)]
@@ -58,11 +52,21 @@ def test_window_bounds_cover_every_index_once():
     assert covered == list(range(23))         # contiguous, no gaps/overlaps
 
 
-# ── partition_nodes_for_streaming ────────────────────────────────────
+_ASR_TEXT_RERANK = [
+    "dataset_source", "corpus_embedding", "vector_db", "asr", "text_embedding", "retrieval",
+    "rerank", "transcription_metrics", "retrieval_metrics", "metrics", "finalize",
+]
+
+
+def _asr_text_rerank_graph():
+    return build_graph_from_spec(
+        _ASR_TEXT_RERANK, mode="custom", edges=emit_edges(_ASR_TEXT_RERANK)
+    )
+
 
 
 def test_partition_is_an_exact_three_way_split():
-    g = build_stage_graph("asr_text_retrieval", rerank_enabled=True)
+    g = _asr_text_rerank_graph()
     part = partition_nodes_for_streaming(g)
     # every node lands in exactly one role
     assert set(part.all_ids) == {n.id for n in g.nodes}
@@ -70,7 +74,7 @@ def test_partition_is_an_exact_three_way_split():
 
 
 def test_partition_places_prelude_windowed_finalize_nodes():
-    g = build_stage_graph("asr_text_retrieval", rerank_enabled=True)
+    g = _asr_text_rerank_graph()
     part = partition_nodes_for_streaming(g)
     # prelude = source + whole-corpus embed/index (run once, window-independent)
     assert {"dataset_source", "corpus_embedding", "vector_db"} <= set(part.prelude)
@@ -84,9 +88,6 @@ def test_partition_places_prelude_windowed_finalize_nodes():
 
 def test_source_and_corpus_kinds_are_disjoint():
     assert SOURCE_KINDS.isdisjoint(CORPUS_KINDS)
-
-
-# ── ItemSet.concat (the windowed accumulator) ───────────────────────
 
 
 def test_concat_preserves_order_for_list_values():

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from typing import List
+from .logging_config import runtime_logger
 
 
 def _versions() -> List[str]:
@@ -91,7 +92,6 @@ def runtime_summary() -> str:
 def log_runtime_summary(logger) -> None:
     """Best-effort log of :func:`runtime_summary` (never raises)."""
     try:
-        from .logging_config import runtime_logger
         runtime_logger.info("RUNTIME %s", runtime_summary())
     except Exception:
         pass

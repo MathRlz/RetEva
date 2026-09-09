@@ -14,7 +14,8 @@ from tests.graph_test_helpers import make_state
 from evaluator.config.vector_db import VectorDBConfig
 from evaluator.evaluation.executor.run import _result_depth
 from evaluator.evaluation.metric_registry import list_metrics
-from evaluator.metrics.ir import IR_CUTOFFS, RETRIEVAL_DEPTH, report_depth
+from evaluator.constants import IR_CUTOFFS, RETRIEVAL_DEPTH
+from evaluator.metrics.ir import report_depth
 
 
 def test_depth_is_deepest_cutoff():

@@ -1,4 +1,4 @@
-"""Phase 1 (graph-first): a node's per-instance params fully specify its model.
+"""A node's per-instance params fully specify its model.
 
 The per-node model build must overlay the node's params onto config.model and honor the FULL set
 (model_path / dim / pooling-via-params / embedding_space / quantization / size), not just
@@ -27,7 +27,7 @@ def _capture_effective_model(monkeypatch):
 
         text_emb = audio_emb = asr
 
-    monkeypatch.setattr(factory_mod, "_ModelBuilders", _FakeBuilders)
+    monkeypatch.setattr(factory_mod, "ModelBuilders", _FakeBuilders)
     # The pipeline wrappers just store (model, cache); a SimpleNamespace model is fine.
     return captured
 
@@ -63,7 +63,7 @@ def test_audio_node_params_fully_specify_the_model(monkeypatch):
 
 
 def test_node_pipeline_routes_through_the_shared_service_provider(monkeypatch):
-    # R4: a per-node override now builds via the run's service_provider (when present) instead
+    # a per-node override builds via the run's service_provider (when present) instead
     # of always forcing the standalone factory branch — so two nodes resolving to the SAME
     # model share one loaded instance via the provider's cache, instead of each paying for
     # its own load.
@@ -86,12 +86,12 @@ def test_text_node_params_overlay_only_set_fields(monkeypatch):
 
 
 def test_two_nodes_with_the_same_model_share_one_loaded_instance(monkeypatch):
-    # R4 end-to-end: no _ModelBuilders mocking here — a real ModelServiceProvider, only the
+    # no ModelBuilders mocking here — a real ModelServiceProvider, only the
     # underlying model factory faked (so no actual weights load). Two nodes resolving to the
     # SAME (type, name, device) reuse the one loaded model; a node with a different model gets
     # its own.
-    from evaluator.services.model_provider import ModelServiceProvider
-    import evaluator.services.model_provider as model_provider_mod
+    from evaluator.pipeline.model_provider import ModelServiceProvider
+    import evaluator.pipeline.model_provider as model_provider_mod
 
     built = []
 

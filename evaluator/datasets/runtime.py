@@ -11,6 +11,8 @@ from .core import (
     QueryDataset,
     load_audio_file as _load_audio_waveform,
 )
+from .core import load_json_or_jsonl, parse_corpus_row
+from ..config.dataset_descriptors import resolve_dataset_descriptor
 
 logger = get_logger(__name__)
 
@@ -73,7 +75,7 @@ class AudioSamplesQueryDataset(QueryDataset):
         # fallback in ``_build_relevant_from_item`` (mirrors the CLI's transcription
         # corpus in ``cli/commands.py``).
         #
-        # M5: deduplicating by text is CORRECT here, not under-counting — because the
+        # Deduplicating by text is CORRECT here, not under-counting — because the
         # relevance key is the transcription text (== doc_id), two samples that share a
         # transcription correctly point at the same single corpus doc (retrievable at rank 1
         # for both). We only log the collapse so a smaller-than-sample-count corpus is
@@ -97,9 +99,8 @@ class AudioSamplesQueryDataset(QueryDataset):
 
 
 def _load_corpus_entries(path: str) -> List[Dict[str, Any]]:
-    """Load a corpus file → row dicts with shared field-name fallbacks (B5/F19: reuses
+    """Load a corpus file → row dicts with shared field-name fallbacks (reuses
     ``core.load_json_or_jsonl`` for the JSON/JSONL + corpus/documents/items unwrap)."""
-    from .core import load_json_or_jsonl, parse_corpus_row
 
     corpus_path = Path(path)
     if not corpus_path.exists():
@@ -111,7 +112,7 @@ def _load_corpus_entries(path: str) -> List[Dict[str, Any]]:
 
     corpus: List[Dict[str, Any]] = []
     for row in rows:
-        fields = parse_corpus_row(row)  # shared field-name fallbacks
+        fields = parse_corpus_row(row)
         if fields is not None:  # rows missing doc_id/text are skipped
             corpus.append({**fields, "language": str(fields["language"])})
     return corpus
@@ -177,15 +178,12 @@ class LazyAudioQueryDataset(QueryDataset):
 def validate_dataset_runtime_config(config: Any, *, retrieval_required: bool = False):
     """Validate the dataset config via its descriptor (the single source of truth).
 
-    Returns the resolved :class:`~evaluator.datasets.descriptor.DatasetDescriptor`.
+    Returns the resolved :class:`~evaluator.config.dataset_descriptors.DatasetDescriptor`.
     ``retrieval_required`` rejects a dataset that can't back a retrieval corpus — mirrors
     ``DatasetDescriptor.derived_outputs``'s own retrieval-capability test (an audio dataset
     qualifies even with ``evaluation_mode="transcription"``: its own transcriptions make a
-    legitimate cross-modal retrieval corpus) — replaces the retired
-    DatasetRuntimeSpec.supports_corpus check (every retired spec declared corpus support, so
-    default-mode behavior is unchanged).
+    legitimate cross-modal retrieval corpus).
     """
-    from .descriptor import resolve_dataset_descriptor
 
     descriptor = resolve_dataset_descriptor(config.data)
     errors = descriptor.validate_data_config(config.data)
@@ -205,12 +203,11 @@ def validate_dataset_runtime_config(config: Any, *, retrieval_required: bool = F
 def load_runtime_dataset(config: Any) -> QueryDataset:
     """Load the dataset described by *config* via the descriptor registry.
 
-    Delegates to :func:`~evaluator.datasets.descriptor.resolve_dataset_descriptor`
+    Delegates to :func:`~evaluator.config.dataset_descriptors.resolve_dataset_descriptor`
     so that custom datasets registered via
     :func:`~evaluator.datasets.descriptor.register_dataset` are automatically
     supported without any changes here.
     """
-    from .descriptor import resolve_dataset_descriptor
 
     descriptor = resolve_dataset_descriptor(config.data)
     errors = descriptor.validate_data_config(config.data)
@@ -220,10 +217,10 @@ def load_runtime_dataset(config: Any) -> QueryDataset:
 
 
 def load_runtime_datasets(config: Any) -> "Dict[str, QueryDataset]":
-    """Load every entry of a multi-source ``data.datasets`` map → ``{id: QueryDataset}`` (B1).
+    """Load every entry of a multi-source ``data.datasets`` map → ``{id: QueryDataset}``.
 
     Each entry already holds ``DataConfig`` field names (``questions_path``/``corpus_path``/…, from
-    ``graph_config._DATASET_FIELDS``) plus an optional ``role``; a per-entry ``DataConfig`` is built
+    ``graph_config.DATASET_FIELDS``) plus an optional ``role``; a per-entry ``DataConfig`` is built
     by overlaying those fields onto ``config.data`` and loaded via :func:`load_runtime_dataset`.
     Returns ``{}`` in single-source mode (no ``datasets`` map) — the scalar ``config.data`` fields
     drive the single load as before, so single-source runs are unchanged."""
@@ -251,7 +248,7 @@ def _corpus_doc_ids(dataset: Any) -> set:
     except Exception as exc:
         # A raising get_corpus() (broken/malformed corpus) used to be swallowed silently,
         # which makes validate_dataset_join read an empty corpus and disable all IR metrics
-        # with no trace (H1). Keep the run alive but surface it loudly.
+        # with no trace. Keep the run alive but surface it loudly.
         logger.warning(
             "could not read corpus doc ids (%s): %s; IR-metric join check will treat the "
             "corpus as empty", type(exc).__name__, exc,
@@ -268,8 +265,8 @@ def _relevant_doc_ids(dataset: Any) -> set:
 
 
 def load_dataset_sources(config: Any):
-    """Load a multi-dataset runtime (B1): each `data.datasets[...]` source so per-node
-    dataset_source handlers can pick theirs, plus the cross-source join gate (B5 — disjoint
+    """Load a multi-dataset runtime: each `data.datasets[...]` source so per-node
+    dataset_source handlers can pick theirs, plus the cross-source join gate (disjoint
     questions↔corpus doc-id namespaces disable the IR metrics).
 
     Returns ``(dataset_sources, disable_ir_metrics, join_warning)``; the empty default in
@@ -302,7 +299,7 @@ def load_dataset_sources(config: Any):
 def validate_dataset_join(
     questions_dataset: Any, corpus_dataset: Any
 ) -> "Dict[str, Any]":
-    """Check the cross-dataset join contract (B5): do the questions' relevant `doc_id`s overlap
+    """Check the cross-dataset join contract: do the questions' relevant `doc_id`s overlap
     the corpus's `doc_id`s? IR metrics are only meaningful when they do — disjoint namespaces mean
     every relevant doc is absent from the corpus, so Recall/NDCG/… would be a misleading 0 rather
     than "not applicable". Returns ``{overlap, n_relevant, n_corpus, disjoint, warning}``; the
@@ -326,8 +323,8 @@ def validate_dataset_join(
     }
 
 
-class _QueryIdSubset(QueryDataset):
-    """A query-side slice of a dataset (Roadmap 2d, item replay): only the rows at
+class QueryIdSubset(QueryDataset):
+    """A query-side slice of a dataset: only the rows at
     ``indices`` are visible, but ``get_corpus`` passes through whole — the corpus is shared,
     so retrieval scores match a full run while the query set shrinks to the ids of interest."""
 
@@ -367,11 +364,11 @@ def _row_id(base: Any, idx: int) -> str:
     return str(row.get("question_id") or row.get("sample_id") or row.get("query_id") or "")
 
 
-def slice_by_query_ids(dataset: Any, query_ids: Any) -> "_QueryIdSubset":
+def slice_by_query_ids(dataset: Any, query_ids: Any) -> "QueryIdSubset":
     """Slice ``dataset`` to the rows whose query id is in ``query_ids`` (corpus untouched).
 
     Used by ``evaluator replay`` to re-run a single item through the full graph. Returns a
-    :class:`_QueryIdSubset` (possibly empty — the caller reports an unknown id)."""
+    :class:`QueryIdSubset` (possibly empty — the caller reports an unknown id)."""
     wanted = {str(q) for q in query_ids}
     indices = [i for i in range(len(dataset)) if _row_id(dataset, i) in wanted]
-    return _QueryIdSubset(dataset, indices)
+    return QueryIdSubset(dataset, indices)

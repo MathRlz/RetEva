@@ -1,17 +1,8 @@
-"""RAG-generation metrics for the ``answer_gen`` stage (task C4).
+"""RAG-generation metrics for the ``answer_gen`` stage.
 
-Retrieval metrics score *which docs* came back; these score *what the model said* with them — the
-other half of a medical RAG system's quality. Two heuristic, self-contained metrics plus three
-LLM-judged ones (RAGAS-style), each in ``[0, 1]`` (1 = best):
-
-- **drug_dosage_safety** (heuristic, the high-stakes medical one) — are the reference's drug doses
-  reproduced *exactly* in the answer? A ``mg``→``mcg`` slip or a changed number scores it down; this
-  is the answer-side analogue of CEER.
-- **context_recall** (heuristic) — how much of the reference answer's content is actually present in
-  the retrieved context (can the answer even be grounded?).
-- **faithfulness / answer_relevance / factual_correctness** (LLM-judged) — claim support in context,
-  on-topicness, and agreement with the reference. These take an injected ``client`` (anything with
-  ``.call(messages) -> str``) so they're testable without a live endpoint and reuse the judge stack.
+Retrieval metrics score *which docs* came back; these score *what the model said* with them.
+Two heuristic metrics plus three LLM-judged ones (RAGAS-style, injected ``client``), each in
+``[0, 1]`` (1 = best).
 """
 
 from __future__ import annotations
@@ -40,11 +31,9 @@ def _dose_pairs(text: str) -> set:
 
 
 def drug_dosage_safety(answer: str, reference: str) -> float:
-    """Fraction of the reference's drug doses reproduced exactly in the answer (1 = all safe).
-
-    A unit slip (``mg``→``mcg``) or a changed number drops the matching pair, so the score falls —
-    catching exactly the order-of-magnitude dosing errors that make a medical answer dangerous.
-    No doses in the reference → 1.0 (nothing to get wrong)."""
+    """Fraction of the reference's drug doses reproduced exactly in the answer (1 = all safe);
+    a unit slip (``mg``->``mcg``) or changed number drops the pair, catching order-of-magnitude
+    dosing errors. No doses in the reference -> 1.0 (nothing to get wrong)."""
     ref = _dose_pairs(reference)
     if not ref:
         return 1.0
@@ -53,18 +42,14 @@ def drug_dosage_safety(answer: str, reference: str) -> float:
 
 
 def context_recall(reference_answer: str, contexts: Sequence[str]) -> float:
-    """Fraction of the reference answer's content words present in the retrieved context.
-
-    Low recall means the answer *cannot* be faithfully grounded — the retrieval didn't bring back
-    what's needed — separating a generation failure from a retrieval one."""
+    """Fraction of the reference answer's content words present in the retrieved context; low
+    recall means the answer can't be grounded, separating a generation failure from a
+    retrieval one."""
     ref_words = {w.lower() for w in _WORD.findall(reference_answer or "")}
     if not ref_words:
         return 1.0
     ctx_words = {w.lower() for w in _WORD.findall(" ".join(contexts or []))}
     return len(ref_words & ctx_words) / len(ref_words)
-
-
-# ── LLM-judged (RAGAS-style); client injected so they're testable + endpoint-agnostic ──
 
 
 def _judged_score(client: Any, system: str, user: str) -> Optional[float]:
