@@ -70,11 +70,11 @@ def istotnosc(rerun, out):
     rows = list(csv.DictReader(open(f"{rerun}/stats/primary.csv")))
     eq = list(csv.DictReader(open(f"{rerun}/stats/text_vs_cascade.csv")))[0]
     nazwy = {
-        "P1": "Whisper+Jina  →  SONAR speech",
-        "P2": "Whisper+SONAR  →  SONAR speech\n(ta sama przestrzeń)",
-        "P3": "ADMEDVoice: APM  →  Whisper+Jina\n(prawdziwa mowa)",
+        "P1": "Whisper+Jina  →  SONAR speech\n(PubMedQA)",
+        "P2": "Whisper+SONAR  →  SONAR speech\n(PubMedQA)",
+        "P3": "APM  →  Whisper+Jina\n(ADMEDVoice)",
     }
-    pozycje = [(nazwy[r["pair"][:2]], r, True) for r in rows] + [("tekst  →  kaskada (Jina)\nrównoważność", eq, False)]
+    pozycje = [(nazwy[r["pair"][:2]], r, True) for r in rows] + [("tekst Jina  →  Whisper+Jina\n(PubMedQA)", eq, False)]
     fig, ax = plt.subplots(figsize=(11, 4.6))
     ys = [4, 3, 2, 0.6]
     for y, (nazwa, r, test) in zip(ys, pozycje):
