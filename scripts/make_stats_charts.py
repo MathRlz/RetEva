@@ -125,7 +125,8 @@ def sciezki(rerun, out):
             ax.plot([lo, hi], [yy, yy], color=kol, lw=2, solid_capstyle="round", zorder=2)
             ax.plot(m, yy, mk, color=kol, ms=10, mec="white", mew=2, zorder=3)
             lewo = hi > 0.9  # przy prawej krawędzi etykieta idzie za lewy koniec wąsa
-            ax.annotate(f"{m:.2f}", (lo if lewo else hi, yy), xytext=(-6 if lewo else 6, 0), textcoords="offset points",
+            etykieta = f"{m:.2f}" + (" (APM)" if nazwa == "Jina v4" and sc == "latentny" else "")
+            ax.annotate(etykieta, (lo if lewo else hi, yy), xytext=(-6 if lewo else 6, 0), textcoords="offset points",
                         ha="right" if lewo else "left", va="center", fontsize=10, color=INK)
     ax.set_yticks(range(len(przestrzenie)), [p[0] for p in reversed(przestrzenie)])
     ax.set_xlim(0, 1.04)
