@@ -176,15 +176,32 @@ python scripts/paired_stats.py --csv evaluation_results/stats/text_vs_cascade.cs
 ```
 ⚠ The `$(for …)` lines word-split on spaces in labels. That is why labels 2–3 have no spaces.
 
-**F. Copy back.** Copy `evaluation_results/stats/` plus the new result JSONs to local (rsync/scp).
+**F. Copy back (after EVERY finished run, not just at the end).** Done so far: `evaluation_results/rerun_2026-11-15/`.
+```bash
+D=evaluation_results/rerun_$(date +%F); H=student5@172.20.2.204:scripts/RetEva
+rsync -a --prune-empty-dirs --include='*/' --include='results_*.json' --include='results_*.yaml' \
+      --include='stats/***' --include='variants/***' --exclude='*' $H/evaluation_results/ $D/
+rsync -a $H/logs $H/rerun_*.log $H/env_rerun.sh $H/run_*.sh $D/
+```
+Old note: Copy `evaluation_results/stats/` plus the new result JSONs to local (rsync/scp).
 Charts (1g) can run on the server too, because the local env has no matplotlib until the venv is fixed.
 
-### State (2026-11-15)
-Drafts of 1a–1d were written before the plan-first decision. They are uncommitted and **not run**:
-`aggregate.py` (+item_scores), `significance.py` (+mcnemar_exact, +holm), `scripts/paired_stats.py`, `tests/test_paired_stats.py`.
-Review or `git checkout`/delete before continuing.
-⚠ Test env broken: system Python is now 3.14, packages were installed for 3.13, so pytest, scipy and jiwer are missing.
-Needs a venv with the project deps (`pip install -e .[dev]`, torch included) before 1d can run.
+### State (2026-11-15, 17:45) — steps 1a–1f DONE
+- Scripts in repo: `scripts/rerun/` (env_rerun.sh, run_pubmed.sh, run_admed.sh, run_stats.sh, check_means.py) and
+  `scripts/make_stats_charts.py` (slide charts → `evaluation_results/rerun_2026-11-15/charts/`).
+- Code committed + pushed (8875cbf); tests green on server (py3.12 conda `ai-env`).
+- All re-runs finished on the server (EN 1000 TTS, ADMED, PL/PLEN 100, text baseline). Results + logs + stats copied to
+  `evaluation_results/rerun_2026-11-15/` (tables: `stats/summary_en.md`, `stats/summary_pl.md`; CSVs alongside).
+- Reproduction vs August: xtts + m4t voices **exact**; piper drifts 0.002–0.04 (voice model re-downloaded) → headline uses xtts.
+- Results (Recall@1, xtts, Holm m=3):
+  - P1 Whisper+Jina 0.989 vs SONAR speech 0.524: Δ −0.465 [−0.495, −0.434], b/c 465/0, p<0.001
+  - P2 Whisper+SONAR 0.551 vs SONAR speech 0.524: Δ −0.027 [−0.048, −0.006], b/c 69/42, Holm p 0.026 (m4t/piper: −0.06, p<0.001)
+  - P3 ADMED APM 0.885 vs Whisper+Jina 0.898: Δ +0.013 [−0.006, 0.031], b/c 99/120, p 0.18 → not significant
+  - typed vs cascade (Jina): Δ +0.001 [−0.002, 0.005], 3 discordant → equivalent. SONAR speech vs typed SONAR: −0.066, p<0.001
+  - ADMED SONAR speech 0.900 vs Whisper+Jina 0.898: Δ −0.002 [−0.020, 0.017] → equal on real speech
+  - PL-100: P1 Δ −0.31 (pl) / −0.22 (plen), p<0.001; P2 Δ −0.02 / −0.05, n.s.; CIs ±9 pts ("indicative only")
+- Left: 1g slide charts, 1h article text. Abstract: "(p < 0.001, McNemar)" after 0.524 is confirmed.
+- Local test env still broken (py3.14); tests run on the server.
 
 ## 4. APM-SeamlessM4T at chance (Recall@1 0.000 on ADMEDVoice)
 Ch.4 says stable (cosine 0.951 test), Ch.5 says collapsed → inference bug suspected.
@@ -195,6 +212,13 @@ Ch.4 says stable (cosine 0.951 test), Ch.5 says collapsed → inference bug susp
 - [ ] Fix or drop variant from paper; update Ch.4/Ch.5 wording to agree.
 
 ## 5. EAM on Polish queries (0.21 → 0.01)
+**Likely cause found 2026-11-15: wrong checkpoint, not language code.** August runs all used the same path
+`model_ema/eam_alignment.pt`, but the file changed between Aug 29 and Aug 30. Re-run with `model_base_final`
+(which reproduces Aug 29 EN exactly: text EAM 0.069, latent xtts 0.060) gives PL-100 latent EAM R@1 0.34/0.28/0.25
+(pl, xtts/m4t/piper) and 0.32/0.29/0.31 (plen), vs August 0.01 and the PL text branch 0.32.
+The Aug 30 file was probably ADMED-trained: ADMED EAM was 0.821 then, but 0.001 with `model_base_final` now.
+- [ ] Find the Aug 30 (ADMED-trained) EAM checkpoint, or retrain; until then ADMED EAM 0.821 is not reproducible.
+- [ ] Article/thesis: report EAM per checkpoint (general vs ADMED-trained), not as "fails on Polish".
 - [ ] Grep language code passed to SONAR/SeamlessM4T speech encoder for `language: "pl"` queries
       (`evaluator/models/`, `test_eam_alignment.py`). Suspect `eng` hardcoded.
 - [ ] Re-run PL-100 EAM after fix; compare with text branch (0.32).
@@ -203,8 +227,35 @@ Ch.4 says stable (cosine 0.951 test), Ch.5 says collapsed → inference bug susp
 - [ ] Compare ADMEDVoice ids in `../data_med_pl_dataset` split used by
       `whisper_adapter_natural_anonym_synth_cv_fl` vs eval set. Re-split or state + exclude row.
 
-## 7. Presentation
-- [ ] New slide: main comparison table + 95% CI whiskers + p-values (Holm). Non-negotiable.
+## 7. Presentation  (`Magisterka obrona.pptx`, 14 slides, Polish; charts are PNG images)
+
+Charts come from one script (server, matplotlib), reading the stats CSVs + per-query result JSONs.
+Whiskers = 95% bootstrap CI on every marker. Global rules:
+- One color meaning across all slides: **query path** (text green, cascade blue, latent orange). Today chart 1 uses green = text while chart 2 uses green = Jina, which conflicts.
+- Labels horizontal; label only the numbers you talk about. No "najlepszy": name the exact config.
+- Title = conclusion, e.g. "Kaskada nic nie traci; ścieżka latentna zależy od przestrzeni".
+
+- [ ] **New slide 11a "Czy różnice są istotne?"** (MUST, bdb condition). Forest plot of ΔR@1 (B−A) with 95% CI, line at 0.
+      Rows: P1 Whisper+Jina→SONAR speech, P2 Whisper+SONAR→SONAR speech (cleanest test: same space), P3 ADMED APM→Whisper+Jina;
+      below a separator: typed→cascade (equivalence, no p). Table to the right: Δ [CI], Holm p.
+      Footer: "bootstrap parowany 10 000 prób · test McNemara (dokładny) na trafieniach R@1 · korekta Holma, m = 3".
+      Headline sentence written after the numbers are in. b/c counts go in the speaker notes.
+      Speaker note (~20 s): pairing → only discordant questions count → McNemar → bootstrap → Holm for 3 comparisons.
+- [ ] **Backup slide**: full table (R@1, MRR both sides + CIs, b/c, raw + Holm p), plus the same plot for the other voices and PL-100.
+- [ ] **Slide 10, chart 1 (R@1/5/10 per model, `image1.png`)** → dot plot, one row per embedding space, one marker per path:
+      ```
+      Jina v4   ▲────────────────────────●■   tekst 0.99 · kaskada 0.99 · APM 0.06
+      SONAR     ──────────────▲─■─●            0.59 · 0.55 · 0.52
+      LaBSE     ───────────────■●              0.63 · 0.61 · —
+      ```
+      Shows the thesis in one glance: Jina's cascade is lossless and its latent path collapses; in SONAR all three paths are close.
+      R@5/R@10 → backup table, or R@10 as a faint tick. Drops 24 bars, 24 rotated labels and the "odcień słupka" legend.
+- [ ] **Slide 10, chart 2 (synthesizer effect, `image3.png`)** → dot plot: row = ASR × embedder, 3 colored dots = TTS voice (XTTS/M4T/Piper).
+      Tight dots = voice doesn't matter; spread shows voice effect, compared against the CI (±3 pts at n=1000).
+      Annotate the outlier M4T TTS → M4T ASR (Jina 0.84 vs ≥0.95 elsewhere): the same model hearing its own synthetic speech.
+      Replaces the cryptic `m4t-m4t` labels.
+- [ ] **Slide 11 (PL-100, `image5/6.png`)**: add whiskers (wide, ±8–10 pts) + corner label "n = 100, orientacyjnie".
+      APM (SeamlessM4T) 0.00 bars: remove the series, or label "błąd potoku – w trakcie wyjaśniania" (see §4). Removing it is cleaner.
 - [ ] Editorial notes from supervisor (separate list, end of her message).
 
 ## 8. Article (outside repo, tracked here for completeness)
