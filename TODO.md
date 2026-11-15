@@ -200,6 +200,16 @@ Charts (1g) can run on the server too, because the local env has no matplotlib u
   - typed vs cascade (Jina): Δ +0.001 [−0.002, 0.005], 3 discordant → equivalent. SONAR speech vs typed SONAR: −0.066, p<0.001
   - ADMED SONAR speech 0.900 vs Whisper+Jina 0.898: Δ −0.002 [−0.020, 0.017] → equal on real speech
   - PL-100: P1 Δ −0.31 (pl) / −0.22 (plen), p<0.001; P2 Δ −0.02 / −0.05, n.s.; CIs ±9 pts ("indicative only")
+- Extra analyses (`scripts/extra_stats.py` → `rerun_2026-11-15/stats/extra.md`):
+  - RQ3 / WER (ADMEDVoice): latent beats cascade only for WER > 40% (APM +0.072 [+0.020, +0.125], p 0.013;
+    SONAR +0.102, p 0.002); crossover around WER 20–40%; trend slope +0.18/+0.20 per unit WER, p<0.001.
+    PubMedQA (TTS) has too few high-WER questions (73 > 20%) to show it.
+  - ADMED test set = **9 speakers, one (AMV157) has 47% of questions**. Speaker-cluster bootstrap widens P3 CI
+    to [−0.048, +0.140]. Must be stated in the article (generalisation to speakers is weak).
+  - TOST ±2 pp.: typed→cascade equivalent only for Jina (p<0.001); LaBSE (−1.6 pp.) and SONAR (−3.9 pp.) are not.
+  - Cochran Q: TTS voice matters only with SeamlessM4T as ASR (Q 121–166, p<0.001), plus a small effect for SONAR·wav2vec2 (p 0.009).
+- Noise re-runs (overnight, 2026-11-15 18:25): 36 configs, 4 queue workers on GPUs 0–3 (`scripts/rerun/run_queue.sh`,
+  queue `evaluation_results/queue_noise/`, logs `rerun_noise_g*.log`, tmux session `noise`).
 - Left: 1g slide charts, 1h article text. Abstract: "(p < 0.001, McNemar)" after 0.524 is confirmed.
 - Local test env still broken (py3.14); tests run on the server.
 
