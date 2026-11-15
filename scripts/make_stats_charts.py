@@ -194,10 +194,11 @@ def jezyki(en_dir, pl_dir, out, n=100):
                   "asr": newest(pl_dir, "pubmed_qa_tts_asr_embed_cmp_plen_pubmed_qa"),
                   "audio": newest(pl_dir, "pubmed_qa_tts_audioemb_cmp_plen_pubmed_qa")},
     }
-    # tekst SONAR = ten sam zielony co tekst Jina + kreskowanie (jaśniejszy zielony nie przeszedł CVD vs pomarańcz)
+    # tekst SONAR = morski (aqua) z palety: pełny słupek, zostaje w rodzinie „zielony = tekst”;
+    # przechodzi walidację CVD (jaśniejszy zielony nie przechodził vs pomarańcz), kontrast <3:1 → wartości nad słupkami
     serie = [("tekst, Jina", "text", "finalize_jina", "#008300", None),
              ("kaskada Whisper + Jina", "asr", "finalize_xtts_whisper_jina", "#2a78d6", None),
-             ("tekst, SONAR", "text", "finalize_sonar", "#008300", "///"),
+             ("tekst, SONAR", "text", "finalize_sonar", "#1baf7a", None),
              ("latentny SONAR", "audio", "finalize_xtts_sonar", "#eb6834", None)]
     fig, ax = plt.subplots(figsize=(11, 4.8))
     w = 0.2
