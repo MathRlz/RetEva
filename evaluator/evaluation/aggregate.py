@@ -4,6 +4,7 @@ CIs) per branch, plus **paired** deltas by id, which is why every branch must sh
 
 from __future__ import annotations
 
+import numbers
 from typing import Any, Dict, Mapping, Optional
 
 from ..constants import ROLLUP_REDUCERS
@@ -215,6 +216,15 @@ def build_report(
         }
 
     report: Dict[str, Any] = {"branches": branches}
+    # Per-query scores (post-rollup, keyed by query id) so cross-run paired tests
+    # (scripts/paired_stats.py) can join two result files offline.
+    report["item_scores"] = {
+        branch_id: {
+            name: {i: float(v) for i, v in scores if isinstance(v, numbers.Real)}
+            for name, scores in metrics.items()
+        }
+        for branch_id, metrics in per_branch_metrics.items()
+    }
 
     if baseline is not None and baseline in per_branch_metrics:
         base_metrics = per_branch_metrics[baseline]

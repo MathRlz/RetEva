@@ -431,3 +431,30 @@ def benjamini_hochberg(p_values: List[float]) -> List[float]:
         prev = min(prev, val)
         q[i] = min(prev, 1.0)
     return q
+
+
+def mcnemar_exact(hits_a: List[bool], hits_b: List[bool]) -> Tuple[int, int, float]:
+    """Exact (binomial) McNemar test on paired binary outcomes, e.g. per-query Recall@1 hits
+    of two systems over the same queries. Returns ``(b, c, p)``: ``b`` = A hit / B miss,
+    ``c`` = A miss / B hit, ``p`` two-sided. Only discordant pairs carry information;
+    exact rather than chi² because ``b + c`` can be small."""
+    from scipy.stats import binomtest
+
+    if len(hits_a) != len(hits_b):
+        raise ValueError(f"unpaired inputs: {len(hits_a)} vs {len(hits_b)}")
+    b = sum(1 for x, y in zip(hits_a, hits_b) if x and not y)
+    c = sum(1 for x, y in zip(hits_a, hits_b) if y and not x)
+    p = 1.0 if b + c == 0 else float(binomtest(b, b + c, 0.5).pvalue)
+    return b, c, p
+
+
+def holm(p_values: List[float]) -> List[float]:
+    """Holm step-down adjusted p-values (family-wise error control), in input order."""
+    m = len(p_values)
+    order = sorted(range(m), key=lambda i: p_values[i])
+    adj = [0.0] * m
+    running = 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (m - rank) * p_values[i]))
+        adj[i] = running
+    return adj
