@@ -214,6 +214,13 @@ Charts (1g) can run on the server too, because the local env has no matplotlib u
 - Local test env still broken (py3.14); tests run on the server.
 
 ## 4. APM-SeamlessM4T at chance (Recall@1 0.000 on ADMEDVoice)
+**CAUSE FOUND 2026-11-15: wrong checkpoint variant, not a training collapse.** Evaluation used
+`apm_m4t_jina_admed_voice_attention_whitening.pt` (trained on whitened Jina targets; no whitening stats in the
+file, same 814 keys as `_attention_none`), while the corpus is indexed with raw Jina → mismatched space → chance.
+With `apm_m4t_jina_admed_voice_attention_none.pt`: ADMEDVoice R@1 **0.911** [0.897, 0.925] — best latent model,
+vs Whisper+Jina 0.898: +0.013 [−0.004, 0.030], b/c 91/112, p 0.16 (n.s.). PubMedQA 1000 (`_attention_none`): R@1 XTTS **0.253**, Piper 0.193, M4T voice 0.084 (vs APM-Whisper 0.06, EAM 0.06,
+SONAR 0.52) → ~4× the old best own adapter, still half of SONAR; again weak when M4T hears its own TTS.
+- [ ] Thesis Ch.5 / article: replace "training collapsed" with the corrected numbers; Ch.4 "stable" was right.
 Ch.4 says stable (cosine 0.951 test), Ch.5 says collapsed → inference bug suspected.
 - [ ] Check checkpoint actually loaded (path, variant: mean/attention × none/ABTT/whitening).
 - [ ] Check pooling + post-processing at inference match training (ABTT/whitening stats reused, not refit).
@@ -233,9 +240,20 @@ The Aug 30 file was probably ADMED-trained: ADMED EAM was 0.821 then, but 0.001 
       (`evaluator/models/`, `test_eam_alignment.py`). Suspect `eng` hardcoded.
 - [ ] Re-run PL-100 EAM after fix; compare with text branch (0.32).
 
-## 6. Leakage: Whisper-LoRA test split vs adapter training data
-- [ ] Compare ADMEDVoice ids in `../data_med_pl_dataset` split used by
-      `whisper_adapter_natural_anonym_synth_cv_fl` vs eval set. Re-split or state + exclude row.
+## 6. Leakage: Whisper-LoRA test split vs adapter training data  — CHECKED 2026-11-15
+ADMEDVoice paper (Czyżewski et al. 2025, Sci Data 12:1436, Table 4 + "Technical Validation"): split **by speaker**,
+natural voices train 7404 / val 529 / test 2645 recordings; Whisper-medium LoRA, ≤30 s, 10k steps, batch 64, LR 1e-5, A100.
+Which speakers are in which split is **not published** and the corpus CSV has no split column → exact check impossible.
+- Natural voices: 28 speakers total. Our test = 9 speakers (random 30 %, own seed). Their test ≈ 28 % of recordings
+  (~8 speakers) → at least some of our 9 test speakers were almost surely in the LoRA training set. Overlap ≈ certain.
+- Our LoRA WER 4.9 % vs paper's 9.5 % on their test: consistent with leakage.
+- **Phrase overlap:** 93 % of our test phrases are also spoken by non-test speakers (2518 unique phrases, each read
+  many times). So APM/EAM (trained on our train split) have seen the same sentences from other speakers. Thesis claim
+  "mierzy rzeczywistą generalizację na nowe wypowiedzi" (eksperymenty.tex, ADMED section) is too strong: new speakers,
+  mostly known sentences. Must be stated in article + limitations slide.
+- [x] Decision (2026-11-15): keep the LoRA row **with a caveat**: leakage is likely, because our split and the ADMEDVoice
+  authors' split are two independent random draws over the same 28 speakers. No claims rest on the LoRA row.
+- [ ] Optional: ask ADMEDVoice authors for their speaker split.
 
 ## 7. Presentation  (`Magisterka obrona.pptx`, 14 slides, Polish; charts are PNG images)
 
@@ -266,7 +284,36 @@ Whiskers = 95% bootstrap CI on every marker. Global rules:
       Replaces the cryptic `m4t-m4t` labels.
 - [ ] **Slide 11 (PL-100, `image5/6.png`)**: add whiskers (wide, ±8–10 pts) + corner label "n = 100, orientacyjnie".
       APM (SeamlessM4T) 0.00 bars: remove the series, or label "błąd potoku – w trakcie wyjaśniania" (see §4). Removing it is cleaner.
-- [ ] Editorial notes from supervisor (separate list, end of her message).
+- [ ] **Editorial notes from supervisor (2026-11-15), slide by slide:**
+  - [ ] E1 Final layout + colour theme (not the plain draft). Pick one template; chart colours already fixed (path = colour).
+  - [ ] E2 Slide 1: add supervisor (promotor) and her name.
+  - [ ] E3 Slide 2: "Spis treści" → "Plan prezentacji"; add item "Zestawienie wyników analizy statystycznej".
+  - [ ] E4 Implementation parameters slide: RetEva (graph, nodes, per-query results, seeds), models + sizes,
+        hardware (A5000, server GPUs), training settings (LR, batch, epochs, τ) — same gap as article §3 [TODO].
+        Do NOT add the ADMEDVoice LoRA hyperparameters (user decision 2026-11-15).
+  - [ ] E5 Slides 8, 9 (latent-space analysis): tables and charts unreadable → fewer numbers, larger fonts, 1 message per slide.
+  - [ ] E6 Slide 10: extra legend under the figures → covered by new `sciezki.png` / `syntezatory.png` (legend on top, direct labels).
+  - [ ] E7 Slide 11: colour legend in the middle → `jezyki.png` (legend above plot); slide 11's 2nd chart (APM/EAM/SONAR) still to redo.
+  - [ ] E8 Statistical results slide → `istotnosc.png` + Holm table (slide 11a). MUST.
+  - [ ] E9 Limitations slide BEFORE conclusions: synthetic speech, ADMED = 9 speakers (47 % one speaker), self-retrieval,
+        100-q language set (±9 pp.), MT-translated PL corpus, LoRA split likely overlaps (two independent speaker draws),
+        EAM checkpoint uncertainty, APM-M4T checkpoint mix-up (fixed).
+        **ADMEDVoice phrase overlap:** 93 % of our test phrases are also spoken by speakers outside the test set;
+        only 2518 unique phrases in the natural corpus, so the test means new speakers, mostly known sentences.
+  - [ ] E10 Conclusions: "oparte o transkrypcję" → "wykorzystujące transkrypcję"; add numbers
+        (0.989 vs 0.988 equivalent; 0.989 vs 0.524, 465/0, p<0.001; same space −2.7 pp., p=0.026; ADMED n.s. p=0.18;
+        latent wins at WER > 0.4: +7–10 pp.).
+  - [ ] E11 Future-work slide: real read-aloud queries, bigger PL corpus, tempo augmentation for adapters,
+        fix APM-M4T, larger training set / SONAR-space adapters.
+  - [ ] E12 Article slide: title + "w przygotowaniu do Speech Communication" + fragment of the English abstract.
+  - [ ] E13 Closing slide "Dziękujemy za uwagę" (exists: slide 14).
+
+**Substantive points (article + slides) — status 2026-11-15:**
+  - [x] Significance tests → done (§1, `stats/`, thesis chapter updated, uncommitted).
+  - [ ] APM-SeamlessM4T at chance → §4, not started.
+  - [~] EAM fails on Polish → likely checkpoint swap, not language code (§5); needs decision + Aug-30 checkpoint.
+  - [ ] Real read-aloud queries → §8, not started (slowest).
+  - [ ] LoRA split overlap → §6; numbers table vs text; training settings → §8.
 
 ## 8. Article (outside repo, tracked here for completeness)
 - [ ] Fill Section 3 `[TODO]`: LR, batch size, epochs, τ schedule, loss weights, data2vec λ, ADMEDVoice split sizes.

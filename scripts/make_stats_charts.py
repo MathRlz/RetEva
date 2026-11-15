@@ -70,8 +70,8 @@ def istotnosc(rerun, out):
     rows = list(csv.DictReader(open(f"{rerun}/stats/primary.csv")))
     eq = list(csv.DictReader(open(f"{rerun}/stats/text_vs_cascade.csv")))[0]
     nazwy = {
-        "P1": "Whisper+Jina  →  SONAR mowa",
-        "P2": "Whisper+SONAR  →  SONAR mowa\n(ta sama przestrzeń)",
+        "P1": "Whisper+Jina  →  SONAR speech",
+        "P2": "Whisper+SONAR  →  SONAR speech\n(ta sama przestrzeń)",
         "P3": "ADMEDVoice: APM  →  Whisper+Jina\n(prawdziwa mowa)",
     }
     pozycje = [(nazwy[r["pair"][:2]], r, True) for r in rows] + [("tekst  →  kaskada (Jina)\nrównoważność", eq, False)]
