@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # noise_stats / extra_stats
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -223,6 +225,49 @@ def jezyki(en_dir, pl_dir, out, n=100):
     plt.close(fig)
 
 
+# ---------- 5. odporność na zakłócenia (prowizorycznie: tylko warunek "noisy") ----------
+def szum(rerun, out, cond="noisy"):
+    from noise_stats import newest_valid
+    pa, pl = newest_valid(rerun, "pubmed_qa_tts_asr_embed_cmp_pubmed_qa"), newest_valid(rerun, "pubmed_qa_tts_audioemb_cmp_pubmed_qa")
+    na, nl = newest_valid(rerun, f"pubmed_qa_tts_asr_embed_{cond}_cmp_pubmed_qa"), newest_valid(rerun, f"pubmed_qa_tts_audioemb_{cond}_cmp_pubmed_qa")
+    aa, al = newest_valid(rerun, "admed_asr_embed_cmp_admed_voice"), newest_valid(rerun, "admed_audioemb_cmp_admed_voice")
+    naa, nal = newest_valid(rerun, f"admed_asr_embed_{cond}_cmp_admed_voice"), newest_valid(rerun, f"admed_audioemb_{cond}_cmp_admed_voice")
+    wiersze = [  # (etykieta, ścieżka, (czysty), (zakłócony))
+        ("Whisper + Jina\n(PubMedQA)", "kaskada", (pa, "finalize_xtts_whisper_jina"), (na, "finalize_xtts_whisper_jina")),
+        ("Whisper + SONAR\n(PubMedQA)", "kaskada", (pa, "finalize_xtts_whisper_sonar"), (na, "finalize_xtts_whisper_sonar")),
+        ("SONAR speech\n(PubMedQA)", "latentny", (pl, "finalize_xtts_sonar"), (nl, "finalize_xtts_sonar")),
+        ("Whisper + SONAR\n(ADMEDVoice)", "kaskada", (aa, "finalize_whisper_sonar"), (naa, "finalize_whisper_sonar")),
+        ("APM-Whisper\n(ADMEDVoice)", "latentny", (al, "finalize_apm_whisper"), (nal, "finalize_apm_whisper")),
+        ("SONAR speech\n(ADMEDVoice)", "latentny", (al, "finalize_sonar"), (nal, "finalize_sonar")),
+    ]
+    wiersze = [w for w in wiersze if all(v is not None and k in v for v, k in (w[2], w[3]))]
+    fig, ax = plt.subplots(figsize=(11, 0.75 * len(wiersze) + 1.4))
+    for i, (nazwa, sc, czy, zak) in enumerate(wiersze):
+        y = len(wiersze) - 1 - i
+        kol = SCIEZKA[sc][0]
+        (mc, (lc, hc)), (mz, (lz, hz)) = r1(*czy), r1(*zak)
+        ax.axhline(y, color=SIATKA, lw=0.8, zorder=0)
+        ax.annotate("", (mz, y), (mc, y), arrowprops=dict(arrowstyle="-|>", color=kol, lw=1.8, shrinkA=7, shrinkB=7))
+        for m, lo, hi, mk, fc in ((mc, lc, hc, "o", kol), (mz, lz, hz, "D", "white")):
+            ax.plot([lo, hi], [y + 0.18, y + 0.18], color=kol, lw=1.4, alpha=0.7)
+            ax.plot(m, y, mk, color=kol, mfc=fc, mew=2, ms=10, zorder=3)
+        ax.text(1.02, y, f"zachowane {mz / mc:.0%}", transform=ax.get_yaxis_transform(), va="center",
+                fontsize=11, color=INK, weight="bold" if mz / mc < 0.8 else "normal")
+    ax.set_yticks(range(len(wiersze)), [w[0] for w in reversed(wiersze)])
+    ax.set_xlim(0.25, 1.02)
+    ax.set_ylim(-0.6, len(wiersze) - 0.4)
+    ax.set_xlabel("Recall@1 (95% CI nad znacznikiem; szum biały 15 dB + zmiana tempa)")
+    ax.grid(axis="x", color=SIATKA, lw=0.8)
+    ax.tick_params(axis="y", length=0)
+    ax.plot([], [], "o", color=INK2, ms=9, label="sygnał czysty")
+    ax.plot([], [], "D", color=INK2, mfc="white", mew=2, ms=9, label="sygnał zakłócony")
+    ax.plot([], [], "s", color=SCIEZKA["kaskada"][0], ms=9, label="kaskada")
+    ax.plot([], [], "s", color=SCIEZKA["latentny"][0], ms=9, label="latentny")
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=4, frameon=False, fontsize=11)
+    fig.savefig(f"{out}/szum.png")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 5:
         raise SystemExit(__doc__)
@@ -232,4 +277,5 @@ if __name__ == "__main__":
     sciezki(rerun, out)
     syntezatory(rerun, out)
     jezyki(en100, pl100, out)
+    szum(rerun, out)
     print("zapisano:", sorted(p.name for p in Path(out).glob("*.png")))
