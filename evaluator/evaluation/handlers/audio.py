@@ -118,9 +118,13 @@ def _stage_augment_audio(s: RunState) -> None:
 
     seed = getattr(getattr(s.config, "audio_synthesis", None), "seed", None)
     base_seed = int(seed) if seed is not None else DEFAULT_SEED
+    # Experiment name in the path: two runs with the same augment node id but different
+    # conditions (e.g. noisy vs speedonly) would otherwise read/overwrite each other's clips
+    # when they run concurrently.
     out_dir = os.path.join(
         getattr(s.config, "output_dir", "evaluation_results"),
         "augmented_audio",
+        getattr(s.config, "experiment_name", None) or "run",
         node_id,
     )
     os.makedirs(out_dir, exist_ok=True)
