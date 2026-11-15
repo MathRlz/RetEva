@@ -146,7 +146,7 @@ graph:
       dim: 2048
       embedding_space: jina_v4_space
       params: {pooling: attention}
-      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt"
+      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_none.pt"
       device: "cuda:0"
   - id: retrieval_xtts_apm_m4t
     type: retrieval
@@ -183,7 +183,7 @@ graph:
       dim: 2048
       embedding_space: jina_v4_space
       params: {pooling: attention}
-      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt"
+      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_none.pt"
       device: "cuda:0"
   - id: retrieval_m4t_apm_m4t
     type: retrieval
@@ -220,7 +220,7 @@ graph:
       dim: 2048
       embedding_space: jina_v4_space
       params: {pooling: attention}
-      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_whitening.pt"
+      model_path: "${APM_CHECKPOINT_DIR}/apm_m4t_jina_admed_voice_attention_none.pt"
       device: "cuda:0"
   - id: retrieval_piper_apm_m4t
     type: retrieval
